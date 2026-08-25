@@ -39,6 +39,7 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
   };
 
   const [text, setText] = useState<string>(() => formatVal(value));
+  const [isFocused, setIsFocused] = useState<boolean>(false);
   const isFocusedRef = useRef<boolean>(false);
 
   // Synchronize when value changes externally while not actively typing in this input
@@ -76,11 +77,13 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
 
   const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
     isFocusedRef.current = true;
+    setIsFocused(true);
     onFocus?.(e);
   };
 
   const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
     isFocusedRef.current = false;
+    setIsFocused(false);
     const raw = e.target.value.trim().replace(',', '.');
 
     if (
@@ -127,7 +130,7 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
       onFocus={handleFocus}
       onBlur={handleBlur}
       onKeyDown={handleKeyDown}
-      placeholder={placeholder}
+      placeholder={isFocused ? '' : placeholder}
       className={className}
       style={style}
       disabled={disabled}

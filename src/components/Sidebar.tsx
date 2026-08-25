@@ -61,9 +61,14 @@ interface SidebarProps {
   probe: { elId: number | null; t: number };
   setProbe: React.Dispatch<React.SetStateAction<{ elId: number | null; t: number }>>;
   onInvalidateResults: () => void;
+  onNodeCoordinateSet?: (coord: { x: number; y: number; z: number }) => void;
+  onNodePlaced?: (id: number) => void;
+  onElemDrawn?: (id: number) => void;
   defaultSectionId: number;
   defaultMaterialId: number;
   isVertical?: boolean;
+  panelHeight?: number | null;
+  onPanelHandleStart?: (e: React.MouseEvent | React.TouchEvent) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -113,37 +118,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   probe,
   setProbe,
   onInvalidateResults,
+  onNodeCoordinateSet,
+  onNodePlaced,
+  onElemDrawn,
   defaultSectionId,
   defaultMaterialId,
+  panelHeight,
+  onPanelHandleStart,
 }) => {
-  // Panel height resize for vertical / mobile mode
-  const [panelHeight, setPanelHeight] = useState<number | null>(null);
-
-  const handlePanelHandleStart = (e: React.MouseEvent | React.TouchEvent) => {
-    e.preventDefault();
-    const startY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    const sidebarEl = document.getElementById('sidebar');
-    const startH = sidebarEl ? sidebarEl.getBoundingClientRect().height : window.innerHeight * 0.44;
-
-    const handleMove = (ev: MouseEvent | TouchEvent) => {
-      const currentY = 'touches' in ev ? ev.touches[0].clientY : (ev as MouseEvent).clientY;
-      const dy = startY - currentY;
-      const newH = Math.max(80, Math.min(window.innerHeight * 0.85, startH + dy));
-      setPanelHeight(newH);
-    };
-
-    const handleEnd = () => {
-      window.removeEventListener('mousemove', handleMove);
-      window.removeEventListener('mouseup', handleEnd);
-      window.removeEventListener('touchmove', handleMove);
-      window.removeEventListener('touchend', handleEnd);
-    };
-
-    window.addEventListener('mousemove', handleMove);
-    window.addEventListener('mouseup', handleEnd);
-    window.addEventListener('touchmove', handleMove, { passive: false });
-    window.addEventListener('touchend', handleEnd);
-  };
   const [addBarCoordsCollapsed, setAddBarCoordsCollapsed] = useState(false);
   const [nodesGroupCollapsed, setNodesGroupCollapsed] = useState(false);
   const [elementsGroupCollapsed, setElementsGroupCollapsed] = useState(false);
@@ -246,7 +228,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Node editing handlers
   const updateNodeCoord = (axis: 'x' | 'y' | 'z', v: number) => {
     setNodes((prev) =>
-      prev.map((n) => (selectedNodeIds.includes(n.id) ? { ...n, [axis]: v } : n))
+      prev.map((n) => {
+        if (!selectedNodeIds.includes(n.id)) return n;
+        const updated = { ...n, [axis]: v };
+        if (onNodeCoordinateSet && selectedNodeIds.length === 1) {
+          onNodeCoordinateSet(updated);
+        }
+        return updated;
+      })
     );
     onInvalidateResults();
   };
@@ -622,32 +611,61 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ]);
     }
 
+    if (onNodeCoordinateSet) {
+      onNodeCoordinateSet({ x: targetX, y: targetY, z: targetZ });
+    }
+    if (onNodePlaced) {
+      onNodePlaced(targetNodeId);
+    }
+
     if (barStartNodeId == null) {
       setBarStartNodeId(targetNodeId);
       setAddBarValX(0);
       setAddBarValY(0);
       setAddBarValZ(0);
-    } else if (barStartNodeId !== targetNodeId) {
-      const nextElemId = elements.length > 0 ? Math.max(...elements.map((e) => e.id)) + 1 : 1;
-      const newElem: Element3D = {
-        id: nextElemId,
-        n1: barStartNodeId,
-        n2: targetNodeId,
-        sectionId: defaultSectionId,
-        materialId: defaultMaterialId,
-        rollAngle: 0,
-        hinges: {},
-        q: null,
-        thermal: null,
-      };
-      setElements((prev) => [...prev, newElem]);
-      setSelectedElemIds([nextElemId]);
-      setSelectedNodeIds([]);
-      setBarStartNodeId(targetNodeId);
-      setAddBarValX(0);
-      setAddBarValY(0);
-      setAddBarValZ(0);
-      onInvalidateResults();
+    } else {
+      const startNode = nodes.find((n) => n.id === barStartNodeId);
+      const dist3D = startNode
+        ? Math.hypot(targetX - startNode.x, targetY - startNode.y, targetZ - startNode.z)
+        : 0;
+      const isZeroLength = barStartNodeId === targetNodeId || dist3D < 1e-4;
+
+      const isDuplicate = elements.some(
+        (e) =>
+          (e.n1 === barStartNodeId && e.n2 === targetNodeId) ||
+          (e.n1 === targetNodeId && e.n2 === barStartNodeId)
+      );
+
+      if (isZeroLength || isDuplicate) {
+        setBarStartNodeId(targetNodeId);
+        setAddBarValX(0);
+        setAddBarValY(0);
+        setAddBarValZ(0);
+      } else {
+        const nextElemId = elements.length > 0 ? Math.max(...elements.map((e) => e.id)) + 1 : 1;
+        const newElem: Element3D = {
+          id: nextElemId,
+          n1: barStartNodeId,
+          n2: targetNodeId,
+          sectionId: defaultSectionId,
+          materialId: defaultMaterialId,
+          rollAngle: 0,
+          hinges: {},
+          q: null,
+          thermal: null,
+        };
+        setElements((prev) => [...prev, newElem]);
+        setSelectedElemIds([nextElemId]);
+        setSelectedNodeIds([]);
+        setBarStartNodeId(targetNodeId);
+        setAddBarValX(0);
+        setAddBarValY(0);
+        setAddBarValZ(0);
+        if (onElemDrawn) {
+          onElemDrawn(nextElemId);
+        }
+        onInvalidateResults();
+      }
     }
   };
 
@@ -912,13 +930,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const singleElem = selectedElements.length === 1 ? selectedElements[0] : null;
 
   return (
-    <div id="sidebar" style={panelHeight ? { height: `${panelHeight}px` } : undefined}>
+    <div
+      id="sidebar"
+      style={panelHeight ? ({ '--panel-height': `${panelHeight}px` } as React.CSSProperties) : undefined}
+    >
       {/* Draggable handle for mobile layout */}
       <div
         id="panelHandle"
         aria-hidden="true"
-        onMouseDown={handlePanelHandleStart}
-        onTouchStart={handlePanelHandleStart}
+        onMouseDown={onPanelHandleStart}
+        onTouchStart={onPanelHandleStart}
       >
         <div className="panel-grip"></div>
       </div>
@@ -1266,9 +1287,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         {([
-                          { trans: 'ux', rot: 'rx', transLabel: 'Ux (X)', rotLabel: 'Rx (X)', transUnit: 'mm', rotUnit: '°', transSpringUnit: 'kN/m', rotSpringUnit: 'kNm/rad' },
-                          { trans: 'uy', rot: 'ry', transLabel: 'Uy (Y)', rotLabel: 'Ry (Y)', transUnit: 'mm', rotUnit: '°', transSpringUnit: 'kN/m', rotSpringUnit: 'kNm/rad' },
-                          { trans: 'uz', rot: 'rz', transLabel: 'Uz (Z)', rotLabel: 'Rz (Z)', transUnit: 'mm', rotUnit: '°', transSpringUnit: 'kN/m', rotSpringUnit: 'kNm/rad' }
+                          { trans: 'ux', rot: 'rx', transLabel: 'Ux', rotLabel: 'Rx', transUnit: 'mm', rotUnit: '°', transSpringUnit: 'kN/m', rotSpringUnit: 'kNm/rad' },
+                          { trans: 'uy', rot: 'ry', transLabel: 'Uy', rotLabel: 'Ry', transUnit: 'mm', rotUnit: '°', transSpringUnit: 'kN/m', rotSpringUnit: 'kNm/rad' },
+                          { trans: 'uz', rot: 'rz', transLabel: 'Uz', rotLabel: 'Rz', transUnit: 'mm', rotUnit: '°', transSpringUnit: 'kN/m', rotSpringUnit: 'kNm/rad' }
                         ] as const).map(({ trans, rot, transLabel, rotLabel, transUnit, rotUnit, transSpringUnit, rotSpringUnit }, idx) => {
                           const transTypes = selectedNodes.map((n) => n.support?.[trans]?.type || 'free');
                           const transAllSame = transTypes.every((t) => t === transTypes[0]);
@@ -1313,7 +1334,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               {/* 1. Selector Row */}
                               <div className="row-pair" style={{ marginBottom: showExtraRow ? '4px' : '0' }}>
                                 <div className="half" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
-                                  <label style={{ fontSize: '11.5px', fontWeight: 600, display: 'flex', alignItems: 'center', color: 'var(--text)', gap: '4px', margin: 0 }}>
+                                  <label style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '10px' }}>
                                     <span
                                       style={{
                                         display: 'inline-block',
@@ -1341,7 +1362,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 </div>
 
                                 <div className="half" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
-                                  <label style={{ fontSize: '11.5px', fontWeight: 600, display: 'flex', alignItems: 'center', color: 'var(--text)', gap: '4px', margin: 0 }}>
+                                  <label style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '10px' }}>
                                     <span
                                       style={{
                                         display: 'inline-block',
@@ -1375,41 +1396,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                   <div className="half">
                                     {transType === 'fixed' && (
                                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', width: '100%' }}>
-                                        <span style={{ fontSize: '9px', color: 'var(--text-dim)', whiteSpace: 'nowrap', width: '22px' }}>Wym:</span>
-                                        <div style={{ display: 'flex', alignItems: 'center', flex: 1, border: '1px solid var(--input-border)', borderRadius: '5px', background: 'var(--input-bg)', padding: '0 4px', height: '26px' }}>
+                                        <span style={{ fontSize: '9px', color: 'var(--text-dim)', whiteSpace: 'nowrap', width: '24px' }}>Wym:</span>
+                                        <div className="inp-unit" style={{ flex: 1 }}>
                                           <SmartNumberInput
                                             step="1"
                                             value={transDelta}
                                             placeholder="0"
                                             onChange={(v) => updateSupportDir(trans, 'delta', v)}
-                                            style={{ width: '100%', border: 'none', background: 'transparent', height: '100%', outline: 'none', padding: 0, fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text)' }}
                                           />
-                                          <span style={{ fontSize: '9px', color: '#8b98a7', marginLeft: '2px', flexShrink: 0 }}>{transUnit}</span>
+                                          <span className="unit">{transUnit}</span>
                                         </div>
                                       </div>
                                     )}
                                     {transType === 'spring' && (
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', width: '100%' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', flex: 1, border: '1px solid var(--input-border)', borderRadius: '5px', background: 'var(--input-bg)', padding: '0 4px', height: '26px' }} title={`Sztywność sprężyny (${transSpringUnit})`}>
-                                          <SmartNumberInput
-                                            step="50"
-                                            value={transK}
-                                            placeholder="k"
-                                            onChange={(v) => updateSupportDir(trans, 'k', v)}
-                                            style={{ width: '100%', border: 'none', background: 'transparent', height: '100%', outline: 'none', padding: 0, fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text)' }}
-                                          />
-                                          <span style={{ fontSize: '9px', color: '#8b98a7', marginLeft: '2px', flexShrink: 0 }}>k</span>
-                                        </div>
-                                        <div style={{ display: 'flex', alignItems: 'center', flex: 1, border: '1px solid var(--input-border)', borderRadius: '5px', background: 'var(--input-bg)', padding: '0 4px', height: '26px' }} title="Wymuszenie / osiadanie">
-                                          <SmartNumberInput
-                                            step="1"
-                                            value={transDelta}
-                                            placeholder="Δ"
-                                            onChange={(v) => updateSupportDir(trans, 'delta', v)}
-                                            style={{ width: '100%', border: 'none', background: 'transparent', height: '100%', outline: 'none', padding: 0, fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text)' }}
-                                          />
-                                          <span style={{ fontSize: '9px', color: '#8b98a7', marginLeft: '2px', flexShrink: 0 }}>{transUnit}</span>
-                                        </div>
+                                      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto', gap: '4px', width: '100%', alignItems: 'center' }}>
+                                        <SmartNumberInput
+                                          step="50"
+                                          value={transK}
+                                          placeholder="k"
+                                          onChange={(v) => updateSupportDir(trans, 'k', v)}
+                                        />
+                                        <span className="unit" style={{ fontSize: '9px' }} title={`Sztywność sprężyny (${transSpringUnit})`}>{transSpringUnit}</span>
+                                        <SmartNumberInput
+                                          step="1"
+                                          value={transDelta}
+                                          placeholder="Δ"
+                                          onChange={(v) => updateSupportDir(trans, 'delta', v)}
+                                        />
+                                        <span className="unit" title="Wymuszenie / osiadanie">{transUnit}</span>
                                       </div>
                                     )}
                                     {transType !== 'fixed' && transType !== 'spring' && (
@@ -1420,41 +1434,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                   <div className="half">
                                     {rotType === 'fixed' && (
                                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', width: '100%' }}>
-                                        <span style={{ fontSize: '9px', color: 'var(--text-dim)', whiteSpace: 'nowrap', width: '22px' }}>Wym:</span>
-                                        <div style={{ display: 'flex', alignItems: 'center', flex: 1, border: '1px solid var(--input-border)', borderRadius: '5px', background: 'var(--input-bg)', padding: '0 4px', height: '26px' }}>
+                                        <span style={{ fontSize: '9px', color: 'var(--text-dim)', whiteSpace: 'nowrap', width: '24px' }}>Wym:</span>
+                                        <div className="inp-unit" style={{ flex: 1 }}>
                                           <SmartNumberInput
                                             step="0.5"
                                             value={rotDelta}
                                             placeholder="0"
                                             onChange={(v) => updateSupportDir(rot, 'delta', v)}
-                                            style={{ width: '100%', border: 'none', background: 'transparent', height: '100%', outline: 'none', padding: 0, fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text)' }}
                                           />
-                                          <span style={{ fontSize: '9px', color: '#8b98a7', marginLeft: '2px', flexShrink: 0 }}>{rotUnit}</span>
+                                          <span className="unit">{rotUnit}</span>
                                         </div>
                                       </div>
                                     )}
                                     {rotType === 'spring' && (
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', width: '100%' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', flex: 1, border: '1px solid var(--input-border)', borderRadius: '5px', background: 'var(--input-bg)', padding: '0 4px', height: '26px' }} title={`Sztywność sprężyny obrotowej (${rotSpringUnit})`}>
-                                          <SmartNumberInput
-                                            step="50"
-                                            value={rotK}
-                                            placeholder="k"
-                                            onChange={(v) => updateSupportDir(rot, 'k', v)}
-                                            style={{ width: '100%', border: 'none', background: 'transparent', height: '100%', outline: 'none', padding: 0, fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text)' }}
-                                          />
-                                          <span style={{ fontSize: '9px', color: '#8b98a7', marginLeft: '2px', flexShrink: 0 }}>k</span>
-                                        </div>
-                                        <div style={{ display: 'flex', alignItems: 'center', flex: 1, border: '1px solid var(--input-border)', borderRadius: '5px', background: 'var(--input-bg)', padding: '0 4px', height: '26px' }} title="Wymuszenie obrotu">
-                                          <SmartNumberInput
-                                            step="0.5"
-                                            value={rotDelta}
-                                            placeholder="Δ"
-                                            onChange={(v) => updateSupportDir(rot, 'delta', v)}
-                                            style={{ width: '100%', border: 'none', background: 'transparent', height: '100%', outline: 'none', padding: 0, fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text)' }}
-                                          />
-                                          <span style={{ fontSize: '9px', color: '#8b98a7', marginLeft: '2px', flexShrink: 0 }}>{rotUnit}</span>
-                                        </div>
+                                      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto', gap: '4px', width: '100%', alignItems: 'center' }}>
+                                        <SmartNumberInput
+                                          step="50"
+                                          value={rotK}
+                                          placeholder="k"
+                                          onChange={(v) => updateSupportDir(rot, 'k', v)}
+                                        />
+                                        <span className="unit" style={{ fontSize: '8.5px' }} title={`Sztywność sprężyny obrotowej (${rotSpringUnit})`}>{rotSpringUnit}</span>
+                                        <SmartNumberInput
+                                          step="0.5"
+                                          value={rotDelta}
+                                          placeholder="Δ"
+                                          onChange={(v) => updateSupportDir(rot, 'delta', v)}
+                                        />
+                                        <span className="unit" title="Wymuszenie obrotu">{rotUnit}</span>
                                       </div>
                                     )}
                                     {rotType !== 'fixed' && rotType !== 'spring' && (
@@ -1479,12 +1486,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           <h3>Siły skupione 3D</h3>
                           <div className="row-triple">
                             <div className="third">
-                              <label>Fx</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#ef4444', flexShrink: 0 }} />
+                                Fx
+                              </label>
                               <div className="inp-unit">
                                 <SmartNumberInput
                                   step="1"
                                   value={curFx}
-                                  placeholder="różne"
+                                  placeholder={selectedNodes.length > 1 && curFx === undefined ? 'różne' : undefined}
                                   onFocus={onInvalidateResults}
                                   onChange={(v) => updateNodeForce('Fx', v)}
                                 />
@@ -1492,12 +1502,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               </div>
                             </div>
                             <div className="third">
-                              <label>Fy</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#22c55e', flexShrink: 0 }} />
+                                Fy
+                              </label>
                               <div className="inp-unit">
                                 <SmartNumberInput
                                   step="1"
                                   value={curFy}
-                                  placeholder="różne"
+                                  placeholder={selectedNodes.length > 1 && curFy === undefined ? 'różne' : undefined}
                                   onFocus={onInvalidateResults}
                                   onChange={(v) => updateNodeForce('Fy', v)}
                                 />
@@ -1505,12 +1518,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               </div>
                             </div>
                             <div className="third">
-                              <label>Fz</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', flexShrink: 0 }} />
+                                Fz
+                              </label>
                               <div className="inp-unit">
                                 <SmartNumberInput
                                   step="1"
                                   value={curFz}
-                                  placeholder="różne"
+                                  placeholder={selectedNodes.length > 1 && curFz === undefined ? 'różne' : undefined}
                                   onFocus={onInvalidateResults}
                                   onChange={(v) => updateNodeForce('Fz', v)}
                                 />
@@ -1532,12 +1548,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           <h3>Momenty skupione 3D</h3>
                           <div className="row-triple">
                             <div className="third">
-                              <label>Mx</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#ef4444', flexShrink: 0 }} />
+                                Mx
+                              </label>
                               <div className="inp-unit">
                                 <SmartNumberInput
                                   step="1"
                                   value={curMx}
-                                  placeholder="różne"
+                                  placeholder={selectedNodes.length > 1 && curMx === undefined ? 'różne' : undefined}
                                   onFocus={onInvalidateResults}
                                   onChange={(v) => updateNodeMoment('Mx', v)}
                                 />
@@ -1545,12 +1564,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               </div>
                             </div>
                             <div className="third">
-                              <label>My</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#22c55e', flexShrink: 0 }} />
+                                My
+                              </label>
                               <div className="inp-unit">
                                 <SmartNumberInput
                                   step="1"
                                   value={curMy}
-                                  placeholder="różne"
+                                  placeholder={selectedNodes.length > 1 && curMy === undefined ? 'różne' : undefined}
                                   onFocus={onInvalidateResults}
                                   onChange={(v) => updateNodeMoment('My', v)}
                                 />
@@ -1558,12 +1580,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               </div>
                             </div>
                             <div className="third">
-                              <label>Mz</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', flexShrink: 0 }} />
+                                Mz
+                              </label>
                               <div className="inp-unit">
                                 <SmartNumberInput
                                   step="1"
                                   value={curMz}
-                                  placeholder="różne"
+                                  placeholder={selectedNodes.length > 1 && curMz === undefined ? 'różne' : undefined}
                                   onFocus={onInvalidateResults}
                                   onChange={(v) => updateNodeMoment('Mz', v)}
                                 />
@@ -1585,36 +1610,45 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           <h3>Masa skupiona w węźle</h3>
                           <div className="row-triple">
                             <div className="third">
-                              <label>mx</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#ef4444', flexShrink: 0 }} />
+                                mx
+                              </label>
                               <div className="inp-unit">
                                 <SmartNumberInput
                                   step="10"
                                   value={curMxMass}
-                                  placeholder="różne"
+                                  placeholder={selectedNodes.length > 1 && curMxMass === undefined ? 'różne' : undefined}
                                   onChange={(v) => updateNodeMass('mx', v)}
                                 />
                                 <span className="unit">kg</span>
                               </div>
                             </div>
                             <div className="third">
-                              <label>my</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#22c55e', flexShrink: 0 }} />
+                                my
+                              </label>
                               <div className="inp-unit">
                                 <SmartNumberInput
                                   step="10"
                                   value={curMyMass}
-                                  placeholder="różne"
+                                  placeholder={selectedNodes.length > 1 && curMyMass === undefined ? 'różne' : undefined}
                                   onChange={(v) => updateNodeMass('my', v)}
                                 />
                                 <span className="unit">kg</span>
                               </div>
                             </div>
                             <div className="third">
-                              <label>mz</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', flexShrink: 0 }} />
+                                mz
+                              </label>
                               <div className="inp-unit">
                                 <SmartNumberInput
                                   step="10"
                                   value={curMzMass}
-                                  placeholder="różne"
+                                  placeholder={selectedNodes.length > 1 && curMzMass === undefined ? 'różne' : undefined}
                                   onChange={(v) => updateNodeMass('mz', v)}
                                 />
                                 <span className="unit">kg</span>
@@ -1870,19 +1904,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           </div>
                           <div className="row">
                             <label>Obrót osi β</label>
-                            <SmartNumberInput
-                              step="15"
-                              value={commonRollAngle}
-                              placeholder="różne"
-                              onFocus={onInvalidateResults}
-                              onChange={(v) => {
-                                setElements((prev) =>
-                                  prev.map((el) => (selectedElemIds.includes(el.id) ? { ...el, rollAngle: v } : el))
-                                );
-                                onInvalidateResults();
-                              }}
-                            />
-                            <span className="unit">°</span>
+                            <div className="inp-unit">
+                              <SmartNumberInput
+                                step="15"
+                                value={commonRollAngle}
+                                placeholder={selectedElements.length > 1 && commonRollAngle === undefined ? 'różne' : undefined}
+                                onFocus={onInvalidateResults}
+                                onChange={(v) => {
+                                  setElements((prev) =>
+                                    prev.map((el) => (selectedElemIds.includes(el.id) ? { ...el, rollAngle: v } : el))
+                                  );
+                                  onInvalidateResults();
+                                }}
+                              />
+                              <span className="unit">°</span>
+                            </div>
                           </div>
                         </div>
                       );
@@ -1991,12 +2027,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         return (
                           <div className="row-triple">
                             <div className="third">
-                              <label>{isLoc ? 'qx (oś)' : 'qX'}</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#ef4444', flexShrink: 0 }} />
+                                {isLoc ? 'qx (oś)' : 'qX'}
+                              </label>
                               <div className="inp-unit">
                                 <SmartNumberInput
                                   step="1"
                                   value={curQx}
-                                  placeholder="różne"
+                                  placeholder={selectedElements.length > 1 && curQx === undefined ? 'różne' : undefined}
                                   onFocus={onInvalidateResults}
                                   onChange={(v) => updateQ('x', v)}
                                 />
@@ -2004,12 +2043,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               </div>
                             </div>
                             <div className="third">
-                              <label>{isLoc ? 'qy (y)' : 'qY'}</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#22c55e', flexShrink: 0 }} />
+                                {isLoc ? 'qy (y)' : 'qY'}
+                              </label>
                               <div className="inp-unit">
                                 <SmartNumberInput
                                   step="1"
                                   value={curQy}
-                                  placeholder="różne"
+                                  placeholder={selectedElements.length > 1 && curQy === undefined ? 'różne' : undefined}
                                   onFocus={onInvalidateResults}
                                   onChange={(v) => updateQ('y', v)}
                                 />
@@ -2017,12 +2059,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               </div>
                             </div>
                             <div className="third">
-                              <label>{isLoc ? 'qz (z)' : 'qZ'}</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', flexShrink: 0 }} />
+                                {isLoc ? 'qz (z)' : 'qZ'}
+                              </label>
                               <div className="inp-unit">
                                 <SmartNumberInput
                                   step="1"
                                   value={curQz}
-                                  placeholder="różne"
+                                  placeholder={selectedElements.length > 1 && curQz === undefined ? 'różne' : undefined}
                                   onFocus={onInvalidateResults}
                                   onChange={(v) => updateQ('z', v)}
                                 />
@@ -2036,13 +2081,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                     {/* PRZEGUBY / ZWOLNIENIA NA KOŃCACH PRĘTA (6 SWOBÓD / DOFs) */}
                     {(() => {
-                      const dofList: Array<{ keyStart: keyof MemberHinges3D; keyEnd: keyof MemberHinges3D; label: string; desc: string }> = [
-                        { keyStart: 'start_ux', keyEnd: 'end_ux', label: 'Ux', desc: 'Przesuw podłużny (x)' },
-                        { keyStart: 'start_uy', keyEnd: 'end_uy', label: 'Uy', desc: 'Przesuw poprzeczny (y)' },
-                        { keyStart: 'start_uz', keyEnd: 'end_uz', label: 'Uz', desc: 'Przesuw poprzeczny (z)' },
-                        { keyStart: 'start_rx', keyEnd: 'end_rx', label: 'Rx', desc: 'Skręcanie (Mx)' },
-                        { keyStart: 'start_ry', keyEnd: 'end_ry', label: 'Ry', desc: 'Zginanie (My)' },
-                        { keyStart: 'start_rz', keyEnd: 'end_rz', label: 'Rz', desc: 'Zginanie (Mz)' },
+                      const transDofList: Array<{ keyStart: keyof MemberHinges3D; keyEnd: keyof MemberHinges3D; label: string; color: string; desc: string }> = [
+                        { keyStart: 'start_ux', keyEnd: 'end_ux', label: 'Ux', color: '#ef4444', desc: 'Przesuw podłużny (x)' },
+                        { keyStart: 'start_uy', keyEnd: 'end_uy', label: 'Uy', color: '#22c55e', desc: 'Przesuw poprzeczny (y)' },
+                        { keyStart: 'start_uz', keyEnd: 'end_uz', label: 'Uz', color: '#3b82f6', desc: 'Przesuw poprzeczny (z)' },
+                      ];
+
+                      const rotDofList: Array<{ keyStart: keyof MemberHinges3D; keyEnd: keyof MemberHinges3D; label: string; color: string; desc: string }> = [
+                        { keyStart: 'start_rx', keyEnd: 'end_rx', label: 'Rx', color: '#ef4444', desc: 'Skręcanie (Mx)' },
+                        { keyStart: 'start_ry', keyEnd: 'end_ry', label: 'Ry', color: '#22c55e', desc: 'Zginanie (My)' },
+                        { keyStart: 'start_rz', keyEnd: 'end_rz', label: 'Rz', color: '#3b82f6', desc: 'Zginanie (Mz)' },
                       ];
 
                       const updateHingeKey = (key: keyof MemberHinges3D, active: boolean) => {
@@ -2142,34 +2190,85 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               <div style={{ fontWeight: 600, fontSize: '11px', marginBottom: '6px', color: 'var(--text)' }}>
                                 Początek {singleElem ? `(W${singleElem.n1})` : ''}
                               </div>
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
-                                {dofList.map((dof) => {
-                                  const val = commonVal(selectedElements, (e) => !!e.hinges?.[dof.keyStart]);
-                                  return (
-                                    <label
-                                      key={dof.keyStart}
-                                      title={dof.desc}
-                                      style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '4px',
-                                        fontSize: '11px',
-                                        cursor: 'pointer',
-                                        userSelect: 'none',
-                                      }}
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        ref={(el) => {
-                                          if (el) el.indeterminate = val === undefined;
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  {transDofList.map((dof) => {
+                                    const val = commonVal(selectedElements, (e) => !!e.hinges?.[dof.keyStart]);
+                                    return (
+                                      <label
+                                        key={dof.keyStart}
+                                        title={dof.desc}
+                                        style={{
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          fontSize: '11px',
+                                          cursor: 'pointer',
+                                          userSelect: 'none',
                                         }}
-                                        checked={val === true}
-                                        onChange={(e) => updateHingeKey(dof.keyStart, e.target.checked)}
-                                      />
-                                      <span style={{ fontWeight: 500 }}>{dof.label}</span>
-                                    </label>
-                                  );
-                                })}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          ref={(el) => {
+                                            if (el) el.indeterminate = val === undefined;
+                                          }}
+                                          checked={val === true}
+                                          onChange={(e) => updateHingeKey(dof.keyStart, e.target.checked)}
+                                        />
+                                        <span
+                                          style={{
+                                            display: 'inline-block',
+                                            width: '6px',
+                                            height: '6px',
+                                            borderRadius: '50%',
+                                            backgroundColor: dof.color,
+                                            flexShrink: 0,
+                                          }}
+                                        />
+                                        <span style={{ fontWeight: 500 }}>{dof.label}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  {rotDofList.map((dof) => {
+                                    const val = commonVal(selectedElements, (e) => !!e.hinges?.[dof.keyStart]);
+                                    return (
+                                      <label
+                                        key={dof.keyStart}
+                                        title={dof.desc}
+                                        style={{
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          fontSize: '11px',
+                                          cursor: 'pointer',
+                                          userSelect: 'none',
+                                        }}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          ref={(el) => {
+                                            if (el) el.indeterminate = val === undefined;
+                                          }}
+                                          checked={val === true}
+                                          onChange={(e) => updateHingeKey(dof.keyStart, e.target.checked)}
+                                        />
+                                        <span
+                                          style={{
+                                            display: 'inline-block',
+                                            width: '6px',
+                                            height: '6px',
+                                            borderRadius: '50%',
+                                            backgroundColor: dof.color,
+                                            flexShrink: 0,
+                                          }}
+                                        />
+                                        <span style={{ fontWeight: 500 }}>{dof.label}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
                               </div>
                             </div>
 
@@ -2178,34 +2277,85 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               <div style={{ fontWeight: 600, fontSize: '11px', marginBottom: '6px', color: 'var(--text)' }}>
                                 Koniec {singleElem ? `(W${singleElem.n2})` : ''}
                               </div>
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
-                                {dofList.map((dof) => {
-                                  const val = commonVal(selectedElements, (e) => !!e.hinges?.[dof.keyEnd]);
-                                  return (
-                                    <label
-                                      key={dof.keyEnd}
-                                      title={dof.desc}
-                                      style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '4px',
-                                        fontSize: '11px',
-                                        cursor: 'pointer',
-                                        userSelect: 'none',
-                                      }}
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        ref={(el) => {
-                                          if (el) el.indeterminate = val === undefined;
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  {transDofList.map((dof) => {
+                                    const val = commonVal(selectedElements, (e) => !!e.hinges?.[dof.keyEnd]);
+                                    return (
+                                      <label
+                                        key={dof.keyEnd}
+                                        title={dof.desc}
+                                        style={{
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          fontSize: '11px',
+                                          cursor: 'pointer',
+                                          userSelect: 'none',
                                         }}
-                                        checked={val === true}
-                                        onChange={(e) => updateHingeKey(dof.keyEnd, e.target.checked)}
-                                      />
-                                      <span style={{ fontWeight: 500 }}>{dof.label}</span>
-                                    </label>
-                                  );
-                                })}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          ref={(el) => {
+                                            if (el) el.indeterminate = val === undefined;
+                                          }}
+                                          checked={val === true}
+                                          onChange={(e) => updateHingeKey(dof.keyEnd, e.target.checked)}
+                                        />
+                                        <span
+                                          style={{
+                                            display: 'inline-block',
+                                            width: '6px',
+                                            height: '6px',
+                                            borderRadius: '50%',
+                                            backgroundColor: dof.color,
+                                            flexShrink: 0,
+                                          }}
+                                        />
+                                        <span style={{ fontWeight: 500 }}>{dof.label}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  {rotDofList.map((dof) => {
+                                    const val = commonVal(selectedElements, (e) => !!e.hinges?.[dof.keyEnd]);
+                                    return (
+                                      <label
+                                        key={dof.keyEnd}
+                                        title={dof.desc}
+                                        style={{
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          fontSize: '11px',
+                                          cursor: 'pointer',
+                                          userSelect: 'none',
+                                        }}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          ref={(el) => {
+                                            if (el) el.indeterminate = val === undefined;
+                                          }}
+                                          checked={val === true}
+                                          onChange={(e) => updateHingeKey(dof.keyEnd, e.target.checked)}
+                                        />
+                                        <span
+                                          style={{
+                                            display: 'inline-block',
+                                            width: '6px',
+                                            height: '6px',
+                                            borderRadius: '50%',
+                                            backgroundColor: dof.color,
+                                            flexShrink: 0,
+                                          }}
+                                        />
+                                        <span style={{ fontWeight: 500 }}>{dof.label}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -2337,7 +2487,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                   style={{
                                     cursor: 'pointer',
                                     fontWeight: (solved.currentMode || 0) === idx ? 'bold' : 'normal',
-                                    background: (solved.currentMode || 0) === idx ? 'rgba(79, 70, 229, 0.15)' : 'transparent',
+                                    background: (solved.currentMode || 0) === idx ? 'var(--accent-soft)' : 'transparent',
                                   }}
                                   onClick={() => {
                                     setSolved?.({ ...solved, currentMode: idx });
@@ -2385,7 +2535,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                   style={{
                                     cursor: 'pointer',
                                     fontWeight: (solved.currentMode || 0) === idx ? 'bold' : 'normal',
-                                    background: (solved.currentMode || 0) === idx ? 'rgba(79, 70, 229, 0.15)' : 'transparent',
+                                    background: (solved.currentMode || 0) === idx ? 'var(--accent-soft)' : 'transparent',
                                   }}
                                   onClick={() => {
                                     setSolved?.({ ...solved, currentMode: idx });
@@ -3562,9 +3712,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       const drawDimZ = b > 0;
 
                       return (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '8px 0', background: 'rgba(255, 255, 255, 0.02)', padding: '10px', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '8px 0', background: 'var(--surface-2)', padding: '10px', borderRadius: '6px', border: '1px solid var(--surface-border)' }}>
                           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                            <svg width="100" height="100" style={{ background: 'var(--canvas-bg)', borderRadius: '4px', border: '1px solid var(--input-border)', flexShrink: 0 }}>
+                            <svg width="100" height="100" style={{ background: 'var(--bg-canvas)', borderRadius: '4px', border: '1px solid var(--input-border)', flexShrink: 0 }}>
                               {/* Grid / Principal axes */}
                               <line x1="10" y1="50" x2="90" y2="50" stroke="var(--text-dim)" strokeWidth="0.75" strokeDasharray="3,3" opacity="0.6" />
                               <line x1="50" y1="10" x2="50" y2="90" stroke="var(--text-dim)" strokeWidth="0.75" strokeDasharray="3,3" opacity="0.6" />
@@ -3699,14 +3849,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 }
                                 
                                 return pathDAdjusted ? (
-                                  <path d={pathDAdjusted} fill="rgba(99, 102, 241, 0.18)" stroke="var(--accent)" strokeWidth="1.25" fillRule="evenodd" />
+                                  <path d={pathDAdjusted} fill="var(--accent-soft)" stroke="var(--accent)" strokeWidth="1.25" fillRule="evenodd" />
                                 ) : (
                                   <rect 
                                     x={centerAdjusted - cBotZ * scaleAdjusted} 
                                     y={centerAdjusted - cTopY * scaleAdjusted} 
                                     width={(cBotZ + cTopZ) * scaleAdjusted} 
                                     height={(cTopY + cBotY) * scaleAdjusted} 
-                                    fill="rgba(255,255,255,0.02)" 
+                                    fill="var(--surface-2)" 
                                     stroke="var(--text-dim)" 
                                     strokeWidth="0.75" 
                                     strokeDasharray="3,3" 
@@ -3715,11 +3865,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               })()}
 
                               {/* Centroid Red Dot */}
-                              <circle cx="50" cy="50" r="2.5" fill="#ef4444" stroke="var(--canvas-bg)" strokeWidth="0.75" />
+                              <circle cx="50" cy="50" r="2.5" fill="#ef4444" stroke="var(--bg-canvas)" strokeWidth="0.75" />
                             </svg>
 
                             <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '10.5px', color: 'var(--text-dim)' }}>
-                              <div style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '2px', fontWeight: 'bold', color: 'var(--text)', display: 'flex', justifyContent: 'space-between' }}>
+                              <div style={{ borderBottom: '1px solid var(--surface-border-soft)', paddingBottom: '2px', fontWeight: 'bold', color: 'var(--text)', display: 'flex', justifyContent: 'space-between' }}>
                                 <span>Gabaryty:</span>
                                 <span>{b.toFixed(1)}×{h.toFixed(1)} cm</span>
                               </div>

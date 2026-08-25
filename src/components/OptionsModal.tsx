@@ -1,17 +1,18 @@
 import React from 'react';
+import logoImg from '../logo3d64.png';
 
 export const APP_ACCENTS: Record<
   string,
-  { name: string; hex: string }
+  { name: string; hex: string; darkHex: string; lightHex: string; rgb: [number, number, number] }
 > = {
-  blue: { name: 'Niebieski', hex: '#2563eb' },
-  indigo: { name: 'Indygo', hex: '#4f46e5' },
-  violet: { name: 'Fioletowy', hex: '#7c3aed' },
-  teal: { name: 'Morski', hex: '#0d9488' },
-  emerald: { name: 'Szmaragdowy', hex: '#059669' },
-  amber: { name: 'Bursztynowy', hex: '#d97706' },
-  rose: { name: 'Różany', hex: '#e11d48' },
-  slate: { name: 'Grafitowy', hex: '#475569' },
+  blue: { name: 'Niebieski', hex: '#2563eb', darkHex: '#1d4ed8', lightHex: '#60a5fa', rgb: [37, 99, 235] },
+  indigo: { name: 'Indygo', hex: '#4f46e5', darkHex: '#4338ca', lightHex: '#818cf8', rgb: [79, 70, 229] },
+  violet: { name: 'Fioletowy', hex: '#7c3aed', darkHex: '#6d28d9', lightHex: '#a78bfa', rgb: [124, 58, 237] },
+  teal: { name: 'Morski', hex: '#0d9488', darkHex: '#0f766e', lightHex: '#2dd4bf', rgb: [13, 148, 136] },
+  emerald: { name: 'Szmaragdowy', hex: '#059669', darkHex: '#047857', lightHex: '#34d399', rgb: [5, 150, 105] },
+  amber: { name: 'Bursztynowy', hex: '#d97706', darkHex: '#b45309', lightHex: '#fbbf24', rgb: [217, 119, 6] },
+  rose: { name: 'Różany', hex: '#e11d48', darkHex: '#be123c', lightHex: '#fb7185', rgb: [225, 29, 72] },
+  slate: { name: 'Grafitowy', hex: '#475569', darkHex: '#334155', lightHex: '#94a3b8', rgb: [71, 85, 105] },
 };
 
 interface OptionsModalProps {
@@ -274,7 +275,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: '6px',
+                  gap: '8px',
                   width: '100%',
                   padding: '8px 12px',
                   fontSize: '12.5px',
@@ -285,21 +286,12 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                   onOpenAbout();
                 }}
               >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <circle cx="12" cy="12" r="10" />
-                  <line x1="12" y1="16" x2="12" y2="12" />
-                  <line x1="12" y1="8" x2="12.01" y2="8" />
-                </svg>
-                O programie
+                <img
+                  src={logoImg}
+                  alt="Materia 3D"
+                  style={{ width: '18px', height: '18px', objectFit: 'contain' }}
+                />
+                O programie Materia 3D
               </button>
             </div>
           )}

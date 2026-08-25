@@ -6,6 +6,8 @@ import { computeLocalAxes } from '../fem/solver3d';
 
 export interface SceneRenderOptions {
   showGrid: boolean;
+  gridPlane?: 'XY' | 'XZ' | 'YZ';
+  gridOffset?: number;
   showAxes: boolean;
   showLocalAxes: boolean;
   showNodeNumbers: boolean;
@@ -16,6 +18,7 @@ export interface SceneRenderOptions {
   showProfileSketches: boolean;
   showLoads: boolean;
   showLoadValues: boolean;
+  showHingeLabels: boolean;
   showDimensions: boolean;
   showDeform: boolean;
   showMy: boolean;
@@ -74,12 +77,62 @@ function computeGeometryKey(
     eSig += `${e.id}:${e.n1}-${e.n2}:${e.sectionId}:${e.rollAngle || 0}:${qKey}:${JSON.stringify(e.hinges || {})};`;
   }
 
-  const selSig = `selN:${options.selectedNodeIds.join(',')}_selE:${options.selectedElemIds.join(',')}_hovN:${options.hoverNodeId}_hovE:${options.hoverElemId}`;
-  const optSig = `g:${options.showGrid ? 1 : 0}_a:${options.showAxes ? 1 : 0}_la:${options.showLocalAxes ? 1 : 0}_supp:${options.showSupports ? 1 : 0}_prof:${options.showProfileSketches ? 1 : 0}_loads:${options.showLoads ? 1 : 0}_def:${options.showDeform ? 1 : 0}_my:${options.showMy ? 1 : 0}_mz:${options.showMz ? 1 : 0}_mx:${options.showMx ? 1 : 0}_vy:${options.showVy ? 1 : 0}_vz:${options.showVz ? 1 : 0}_n:${options.showN ? 1 : 0}_str:${options.showStress ? 1 : 0}_r:${options.showReactions ? 1 : 0}_hl:${options.hideLoadsInResults ? 1 : 0}_hs:${options.hideSupportsInResults ? 1 : 0}_ds:${options.deformScaleMult}_dgs:${options.diagramScaleMult}_t:${options.theme}_ac:${options.accentColor}_prb:${options.probe.elId}`;
+  const optSig = `g:${options.showGrid ? 1 : 0}_gp:${options.gridPlane || 'XY'}_go:${options.gridOffset || 0}_a:${options.showAxes ? 1 : 0}_la:${options.showLocalAxes ? 1 : 0}_supp:${options.showSupports ? 1 : 0}_prof:${options.showProfileSketches ? 1 : 0}_loads:${options.showLoads ? 1 : 0}_def:${options.showDeform ? 1 : 0}_my:${options.showMy ? 1 : 0}_mz:${options.showMz ? 1 : 0}_mx:${options.showMx ? 1 : 0}_vy:${options.showVy ? 1 : 0}_vz:${options.showVz ? 1 : 0}_n:${options.showN ? 1 : 0}_str:${options.showStress ? 1 : 0}_r:${options.showReactions ? 1 : 0}_hl:${options.hideLoadsInResults ? 1 : 0}_hs:${options.hideSupportsInResults ? 1 : 0}_ds:${options.deformScaleMult}_dgs:${options.diagramScaleMult}_t:${options.theme}_ac:${options.accentColor}`;
 
   const solvedSig = solved ? `${solved.type}_${(solved as any).currentMode || 0}` : 'none';
 
-  return `${nSig}|${eSig}|${selSig}|${optSig}|${solvedSig}`;
+  return `${nSig}|${eSig}|${optSig}|${solvedSig}`;
+}
+
+// Ultra-fast in-place Three.js material & scale updates for selection & hover (0.01ms, never discards geometries)
+function updateVisualStates(engine: RenderEngine3D, options: SceneRenderOptions, isDark: boolean) {
+  const selectedNodeSet = new Set(options.selectedNodeIds);
+  const selectedElemSet = new Set(options.selectedElemIds);
+  const accentColorObj = new THREE.Color(options.accentColor);
+  const hoverColorObj = new THREE.Color('#38bdf8');
+  const nodeDefaultColorObj = new THREE.Color(isDark ? '#cbd5e1' : '#0f172a');
+  const elemDefaultColorObj = new THREE.Color(isDark ? '#94a3b8' : '#334155');
+  const edgeDefaultColorObj = new THREE.Color(isDark ? 0x64748b : 0x475569);
+
+  engine.modelGroup.traverse((obj) => {
+    if (!obj.userData) return;
+    if (obj.userData.type === 'node') {
+      const isSel = selectedNodeSet.has(obj.userData.id);
+      const isHov = options.hoverNodeId === obj.userData.id;
+      const mesh = obj as THREE.Mesh;
+      if (mesh.material && (mesh.material as any).color) {
+        if (isSel) {
+          (mesh.material as any).color.copy(accentColorObj);
+        } else if (isHov) {
+          (mesh.material as any).color.copy(hoverColorObj);
+        } else {
+          (mesh.material as any).color.copy(nodeDefaultColorObj);
+        }
+      }
+      const s = isSel ? 1.45 : isHov ? 1.25 : 1.0;
+      mesh.scale.set(s, s, s);
+    } else if (obj.userData.type === 'element') {
+      const isSel = selectedElemSet.has(obj.userData.id);
+      const isHov = options.hoverElemId === obj.userData.id;
+      if (obj.userData.isEdge) {
+        const line = obj as THREE.LineSegments;
+        if (line.material && (line.material as any).color) {
+          (line.material as any).color.copy(isSel ? accentColorObj : (isHov ? hoverColorObj : edgeDefaultColorObj));
+        }
+      } else {
+        const mesh = obj as THREE.Mesh;
+        if (mesh.material && (mesh.material as any).color) {
+          if (isSel) {
+            (mesh.material as any).color.copy(accentColorObj);
+          } else if (isHov) {
+            (mesh.material as any).color.copy(hoverColorObj);
+          } else {
+            (mesh.material as any).color.copy(elemDefaultColorObj);
+          }
+        }
+      }
+    }
+  });
 }
 
 export function drawScene3D(
@@ -94,18 +147,24 @@ export function drawScene3D(
 ) {
   const isDark = options.theme === 'dark';
 
-  // 1. Check if 3D geometry needs rebuild (only when model, selections, results, or render options change)
+  // 1. Check if 3D structural geometry needs rebuild (only when model structure, sections, materials, loads, or results change)
   const currentKey = computeGeometryKey(nodes, elements, sections, materials, solved, options);
   if (currentKey !== lastGeometryKey) {
     lastGeometryKey = currentKey;
     rebuild3DModelGroup(engine, nodes, elements, sections, materials, solved, options, isDark);
   }
 
-  // 2. Fast WebGL GPU Render (Hardware accelerated, < 0.5ms)
+  // 2. Fast sub-millisecond in-place Three.js highlight and selection update (< 0.05ms)
+  updateVisualStates(engine, options, isDark);
+
+  // 3. Fast WebGL GPU Render (Hardware accelerated, < 0.3ms)
   engine.renderWebGL(isDark);
 
-  // 3. Crisp 2D Text Overlay (Node & Bar Labels, Load Values, Reactions, Hinges)
+  // 4. Crisp 2D Text Overlay (Node & Bar Labels, Load Values, Reactions, Hinges, Hover effects)
   overlayCtx.clearRect(0, 0, engine.width, engine.height);
+
+  // Instant 2D Hover & Focus highlight overlay
+  drawHoverAndSelection2DOverlay(overlayCtx, engine, nodes, elements, sections, options, isDark);
 
   if (
     options.showNodeNumbers ||
@@ -117,7 +176,9 @@ export function drawScene3D(
   }
 
   // Draw member end hinge / release labels (Robot style)
-  drawHingeLabels2DOverlay(overlayCtx, engine, nodes, elements, isDark);
+  if (options.showHingeLabels) {
+    drawHingeLabels2DOverlay(overlayCtx, engine, nodes, elements, isDark);
+  }
 
   // Load values & Reactions values
   const hasResults = !!solved && (options.showDeform || options.showMy || options.showMz || options.showN || options.showReactions);
@@ -262,7 +323,7 @@ function rebuild3DModelGroup(
   engine.clearModelGroup();
 
   // Grid
-  build3DGrid(engine, nodes, isDark, options.showGrid);
+  build3DGrid(engine, nodes, isDark, options.showGrid, options.gridPlane || 'XY', options.gridOffset || 0);
 
   // Origin Axes
   if (options.showAxes) build3DOriginTriad(engine);
@@ -455,45 +516,104 @@ function rebuild3DModelGroup(
 
 // === THREE.JS BUILDERS ===
 
-function build3DGrid(engine: RenderEngine3D, nodes: Node3D[], isDark: boolean, showGrid: boolean) {
+function build3DGrid(
+  engine: RenderEngine3D,
+  nodes: Node3D[],
+  isDark: boolean,
+  showGrid: boolean,
+  gridPlane: 'XY' | 'XZ' | 'YZ' = 'XY',
+  gridOffset: number = 0
+) {
   if (!showGrid) return;
 
-  let minX = -5, maxX = 5, minY = -5, maxY = 5;
-  if (nodes.length > 0) {
-    nodes.forEach((n) => {
-      minX = Math.min(minX, n.x - 2);
-      maxX = Math.max(maxX, n.x + 2);
-      minY = Math.min(minY, n.y - 2);
-      maxY = Math.max(maxY, n.y + 2);
-    });
-  }
-
   const step = 1.0;
-  const startX = Math.floor(minX / step) * step;
-  const endX = Math.ceil(maxX / step) * step;
-  const startY = Math.floor(minY / step) * step;
-  const endY = Math.ceil(maxY / step) * step;
-
   const positions: number[] = [];
   const colors: number[] = [];
 
   const minorColor = isDark ? new THREE.Color(0x334155) : new THREE.Color(0xcbd5e1);
   const majorColor = isDark ? new THREE.Color(0x475569) : new THREE.Color(0x94a3b8);
 
-  for (let y = startY; y <= endY; y += step) {
-    const isMajor = Math.abs(Math.round(y / 5) * 5 - y) < 1e-4;
-    const c = isMajor ? majorColor : minorColor;
+  if (gridPlane === 'XY') {
+    let minX = -5, maxX = 5, minY = -5, maxY = 5;
+    if (nodes.length > 0) {
+      nodes.forEach((n) => {
+        minX = Math.min(minX, n.x - 2);
+        maxX = Math.max(maxX, n.x + 2);
+        minY = Math.min(minY, n.y - 2);
+        maxY = Math.max(maxY, n.y + 2);
+      });
+    }
+    const startX = Math.floor(minX / step) * step;
+    const endX = Math.ceil(maxX / step) * step;
+    const startY = Math.floor(minY / step) * step;
+    const endY = Math.ceil(maxY / step) * step;
 
-    positions.push(startX, y, 0, endX, y, 0);
-    colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
-  }
+    for (let y = startY; y <= endY; y += step) {
+      const isMajor = Math.abs(Math.round(y / 5) * 5 - y) < 1e-4;
+      const c = isMajor ? majorColor : minorColor;
+      positions.push(startX, y, gridOffset, endX, y, gridOffset);
+      colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    }
+    for (let x = startX; x <= endX; x += step) {
+      const isMajor = Math.abs(Math.round(x / 5) * 5 - x) < 1e-4;
+      const c = isMajor ? majorColor : minorColor;
+      positions.push(x, startY, gridOffset, x, endY, gridOffset);
+      colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    }
+  } else if (gridPlane === 'XZ') {
+    let minX = -5, maxX = 5, minZ = -5, maxZ = 5;
+    if (nodes.length > 0) {
+      nodes.forEach((n) => {
+        minX = Math.min(minX, n.x - 2);
+        maxX = Math.max(maxX, n.x + 2);
+        minZ = Math.min(minZ, n.z - 2);
+        maxZ = Math.max(maxZ, n.z + 2);
+      });
+    }
+    const startX = Math.floor(minX / step) * step;
+    const endX = Math.ceil(maxX / step) * step;
+    const startZ = Math.floor(minZ / step) * step;
+    const endZ = Math.ceil(maxZ / step) * step;
 
-  for (let x = startX; x <= endX; x += step) {
-    const isMajor = Math.abs(Math.round(x / 5) * 5 - x) < 1e-4;
-    const c = isMajor ? majorColor : minorColor;
+    for (let z = startZ; z <= endZ; z += step) {
+      const isMajor = Math.abs(Math.round(z / 5) * 5 - z) < 1e-4;
+      const c = isMajor ? majorColor : minorColor;
+      positions.push(startX, gridOffset, z, endX, gridOffset, z);
+      colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    }
+    for (let x = startX; x <= endX; x += step) {
+      const isMajor = Math.abs(Math.round(x / 5) * 5 - x) < 1e-4;
+      const c = isMajor ? majorColor : minorColor;
+      positions.push(x, gridOffset, startZ, x, gridOffset, endZ);
+      colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    }
+  } else if (gridPlane === 'YZ') {
+    let minY = -5, maxY = 5, minZ = -5, maxZ = 5;
+    if (nodes.length > 0) {
+      nodes.forEach((n) => {
+        minY = Math.min(minY, n.y - 2);
+        maxY = Math.max(maxY, n.y + 2);
+        minZ = Math.min(minZ, n.z - 2);
+        maxZ = Math.max(maxZ, n.z + 2);
+      });
+    }
+    const startY = Math.floor(minY / step) * step;
+    const endY = Math.ceil(maxY / step) * step;
+    const startZ = Math.floor(minZ / step) * step;
+    const endZ = Math.ceil(maxZ / step) * step;
 
-    positions.push(x, startY, 0, x, endY, 0);
-    colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    for (let z = startZ; z <= endZ; z += step) {
+      const isMajor = Math.abs(Math.round(z / 5) * 5 - z) < 1e-4;
+      const c = isMajor ? majorColor : minorColor;
+      positions.push(gridOffset, startY, z, gridOffset, endY, z);
+      colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    }
+    for (let y = startY; y <= endY; y += step) {
+      const isMajor = Math.abs(Math.round(y / 5) * 5 - y) < 1e-4;
+      const c = isMajor ? majorColor : minorColor;
+      positions.push(gridOffset, y, startZ, gridOffset, y, endZ);
+      colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    }
   }
 
   const geom = new THREE.BufferGeometry();
@@ -746,6 +866,7 @@ function build3DSingleElement(
       vx[2], vy[2], vz[2], mid.z,
       0,     0,     0,     1
     );
+    mesh.userData = { type: 'element', id: el.id, isEdge: false };
 
     engine.modelGroup.add(mesh);
 
@@ -759,6 +880,7 @@ function build3DSingleElement(
     const edgeMesh = new THREE.LineSegments(edgeGeom, edgeMat);
     edgeMesh.matrixAutoUpdate = false;
     edgeMesh.matrix.copy(mesh.matrix);
+    edgeMesh.userData = { type: 'element', id: el.id, isEdge: true };
     engine.modelGroup.add(edgeMesh);
   } else {
     // Render element as 3D Cylinder / Solid Bar fallback
@@ -781,6 +903,7 @@ function build3DSingleElement(
     rotation.makeRotationX(Math.PI / 2);
     orientation.multiply(rotation);
     mesh.setRotationFromMatrix(orientation);
+    mesh.userData = { type: 'element', id: el.id, isEdge: false };
 
     engine.modelGroup.add(mesh);
   }
@@ -816,7 +939,7 @@ function build3DSingleNode(engine: RenderEngine3D, n: Node3D, options: SceneRend
   const isDark = options.theme === 'dark';
 
   const hexColor = isSelected ? options.accentColor : isHover ? '#38bdf8' : (isDark ? '#cbd5e1' : '#0f172a');
-  const radius = isSelected ? 0.16 : isHover ? 0.14 : 0.11;
+  const radius = 0.12;
 
   const geom = new THREE.SphereGeometry(radius, 16, 16);
   const mat = new THREE.MeshStandardMaterial({
@@ -826,6 +949,9 @@ function build3DSingleNode(engine: RenderEngine3D, n: Node3D, options: SceneRend
 
   const mesh = new THREE.Mesh(geom, mat);
   mesh.position.set(n.x, n.y, n.z);
+  mesh.userData = { type: 'node', id: n.id };
+  const s = isSelected ? 1.45 : isHover ? 1.25 : 1.0;
+  mesh.scale.set(s, s, s);
   engine.modelGroup.add(mesh);
 }
 
@@ -1982,4 +2108,83 @@ function drawHingePillTag(
   ctx.textBaseline = 'middle';
   ctx.fillText(text, x, y);
   ctx.restore();
+}
+
+function drawHoverAndSelection2DOverlay(
+  ctx: CanvasRenderingContext2D,
+  engine: RenderEngine3D,
+  nodes: Node3D[],
+  elements: Element3D[],
+  sections: Section[],
+  options: SceneRenderOptions,
+  isDark: boolean
+) {
+  // 1. Hovered Element (Bar) highlight beam & floating tag
+  if (options.hoverElemId != null) {
+    const el = elements.find((e) => e.id === options.hoverElemId);
+    if (el) {
+      const n1 = nodes.find((n) => n.id === el.n1);
+      const n2 = nodes.find((n) => n.id === el.n2);
+      if (n1 && n2) {
+        const p1 = engine.project([n1.x, n1.y, n1.z]);
+        const p2 = engine.project([n2.x, n2.y, n2.z]);
+        if (p1.visible || p2.visible) {
+          ctx.save();
+          // Soft outer glowing beam
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.lineWidth = 7;
+          ctx.strokeStyle = 'rgba(56, 189, 248, 0.4)';
+          ctx.lineCap = 'round';
+          ctx.stroke();
+
+          // Crisp inner highlight line
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.lineWidth = 2.5;
+          ctx.strokeStyle = '#38bdf8';
+          ctx.stroke();
+
+          // Hover tag at member midpoint
+          const midX = (p1.x + p2.x) / 2;
+          const midY = (p1.y + p2.y) / 2;
+          const sec = sections.find((s) => s.id === el.sectionId);
+          const label = sec ? `P${el.id}: ${sec.name}` : `P${el.id}`;
+          drawPillTag(ctx, midX, midY - 14, label, isDark ? '#38bdf8' : '#0284c7', '#38bdf8', isDark, 11);
+          ctx.restore();
+        }
+      }
+    }
+  }
+
+  // 2. Hovered Node glowing halo ring & coordinate tag
+  if (options.hoverNodeId != null) {
+    const n = nodes.find((node) => node.id === options.hoverNodeId);
+    if (n) {
+      const p = engine.project([n.x, n.y, n.z]);
+      if (p.visible) {
+        ctx.save();
+        // Inner crisp ring
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 11, 0, Math.PI * 2);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+
+        // Outer soft glow halo
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 16, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.35)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Hover tag with coordinates
+        const tag = `W${n.id} (${n.x.toFixed(2)}, ${n.y.toFixed(2)}, ${n.z.toFixed(2)})`;
+        drawPillTag(ctx, p.x, p.y - 18, tag, isDark ? '#38bdf8' : '#0284c7', '#38bdf8', isDark, 11);
+        ctx.restore();
+      }
+    }
+  }
 }

@@ -209,6 +209,13 @@ export const ICONS = {
       <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
     </svg>
   ),
+  zoom: (
+    <svg viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="7" />
+      <path d="M21 21l-4.35-4.35" />
+      <path d="M11 8v6M8 11h6" />
+    </svg>
+  ),
 };
 
 interface ToolbarProps {
@@ -224,12 +231,11 @@ interface ToolbarProps {
   onSaveModel: () => void;
   onLoadModel: () => void;
   onOpenOptions: () => void;
+  onOpenAbout?: () => void;
   snapEnabled: boolean;
   setSnapEnabled: (v: boolean) => void;
   allowNewNodesInBarMode: boolean;
   setAllowNewNodesInBarMode: (v: boolean) => void;
-  boxSelectEnabled: boolean;
-  setBoxSelectEnabled: (v: boolean) => void;
   sections: Section[];
   materials: Material[];
   defaultSectionId: number;
@@ -252,12 +258,11 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onSaveModel,
   onLoadModel,
   onOpenOptions,
+  onOpenAbout,
   snapEnabled,
   setSnapEnabled,
   allowNewNodesInBarMode,
   setAllowNewNodesInBarMode,
-  boxSelectEnabled,
-  setBoxSelectEnabled,
   sections,
   materials,
   defaultSectionId,
@@ -268,8 +273,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 }) => {
   const showSnapToggle = mode === 'addBar' || mode === 'select';
   const showNewNodesToggle = mode === 'addBar';
-  const showBoxSelectToggle = mode === 'select';
-  const hasToggles = showSnapToggle || showNewNodesToggle || showBoxSelectToggle;
+  const hasToggles = showSnapToggle || showNewNodesToggle;
 
   return (
     <div id="toolbar">
@@ -366,7 +370,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </select>
         </div>
 
-        {/* Grupa 4: Przełączniki (Przyciągaj, Ramka, Auto-węzeł) */}
+        {/* Grupa 4: Przełączniki (Przyciągaj, Auto-węzeł) */}
         {hasToggles && (
           <div className="tb-group" style={{ borderRight: 'none' }}>
             {showSnapToggle && (
@@ -378,17 +382,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               >
                 {ICONS.grid}
                 <span>Przyciągaj</span>
-              </button>
-            )}
-            {showBoxSelectToggle && (
-              <button
-                className={`tb-btn ${boxSelectEnabled ? 'active' : ''}`}
-                id="boxSelectToggleBtn"
-                onClick={() => setBoxSelectEnabled(!boxSelectEnabled)}
-                title="Zaznaczanie ramką — gdy włączone, przeciągnięcie po pustym miejscu rysuje ramkę zaznaczenia zamiast przewijać widok"
-              >
-                {ICONS.boxselect}
-                <span>Ramka</span>
               </button>
             )}
             {showNewNodesToggle && (

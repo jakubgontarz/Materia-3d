@@ -16,6 +16,12 @@ import { Toolbar, ICONS } from './components/Toolbar';
 import { Sidebar } from './components/Sidebar';
 import { OptionsModal, APP_ACCENTS } from './components/OptionsModal';
 import { AboutModal } from './components/AboutModal';
+import { SelectByModal } from './components/SelectByModal';
+import {
+  getCanvasCursor,
+  getEffectiveSelectionMode,
+  SelectionModeType,
+} from './render/cursors';
 
 const TOGGLE_ICONS = {
   nodeNumbers: (
@@ -68,6 +74,14 @@ const TOGGLE_ICONS = {
       <path d="M2 9l2-3 2 3" />
     </svg>
   ),
+  hingeLabels: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="14" r="3" />
+      <line x1="2" y1="14" x2="3" y2="14" />
+      <line x1="9" y1="14" x2="22" y2="14" />
+      <text x="11" y="9" fontSize="9" fontWeight="800" fill="currentColor" stroke="none" fontFamily="sans-serif">Ry</text>
+    </svg>
+  ),
   loads: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 3v13" />
@@ -92,6 +106,287 @@ interface HistoryState {
   analysisSettings: AnalysisSettings;
 }
 
+function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number
+) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function drawSegmentDimensionPoints(
+  ctx: CanvasRenderingContext2D,
+  pa: { x: number; y: number },
+  pb: { x: number; y: number },
+  lengthMeters: number,
+  color = '#7c3aed'
+) {
+  if (!pa || !pb) return;
+  const dx = pb.x - pa.x;
+  const dy = pb.y - pa.y;
+  const segLen = Math.hypot(dx, dy) || 1;
+  if (segLen < 12) return;
+
+  const ux = dx / segLen;
+  const uy = dy / segLen;
+  const nx = -uy;
+  const ny = ux;
+
+  const offset = 24;
+  const oa = { x: pa.x + nx * offset, y: pa.y + ny * offset };
+  const ob = { x: pb.x + nx * offset, y: pb.y + ny * offset };
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+
+  // Extension lines from points to dimension line
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 3]);
+  ctx.beginPath();
+  ctx.moveTo(pa.x, pa.y);
+  ctx.lineTo(oa.x, oa.y);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(pb.x, pb.y);
+  ctx.lineTo(ob.x, ob.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Main dimension line
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(oa.x, oa.y);
+  ctx.lineTo(ob.x, ob.y);
+  ctx.stroke();
+
+  // 45° diagonal ticks at endpoints
+  const tick = 4;
+  const tx = (ux - nx) * tick;
+  const ty = (uy - ny) * tick;
+  ctx.beginPath();
+  ctx.moveTo(oa.x - tx, oa.y - ty);
+  ctx.lineTo(oa.x + tx, oa.y + ty);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(ob.x - tx, ob.y - ty);
+  ctx.lineTo(ob.x + tx, ob.y + ty);
+  ctx.stroke();
+
+  // Length badge
+  const midx = (oa.x + ob.x) / 2;
+  const midy = (oa.y + ob.y) / 2;
+  const label = `${lengthMeters.toFixed(2)} m`;
+  ctx.font = '11px monospace, "SF Mono", Consolas';
+  const w = ctx.measureText(label).width;
+  const padH = 5;
+  const h = 16;
+
+  ctx.fillStyle = color;
+  roundRect(ctx, midx - w / 2 - padH, midy - h / 2, w + 2 * padH, h, 4);
+  ctx.fill();
+
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, midx, midy);
+  ctx.restore();
+}
+
+function drawNodeCoordTip(
+  ctx: CanvasRenderingContext2D,
+  p: { x: number; y: number },
+  label: string,
+  color = '#7c3aed'
+) {
+  ctx.save();
+  ctx.font = '11.5px monospace, "SF Mono", Consolas';
+  const w = ctx.measureText(label).width;
+  const padH = 6;
+  const h = 18;
+  const gap = 24;
+  const cx = p.x;
+  const cy = p.y - gap - h;
+  const bx = cx - w / 2 - padH;
+  const by = cy;
+
+  ctx.fillStyle = color;
+  roundRect(ctx, bx, by, w + 2 * padH, h, 4);
+  ctx.fill();
+
+  // Pointer tip pointing down to node
+  ctx.beginPath();
+  ctx.moveTo(cx - 5, by + h);
+  ctx.lineTo(cx, p.y - 7);
+  ctx.lineTo(cx + 5, by + h);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, cx, by + h / 2);
+  ctx.restore();
+}
+
+function drawTransientOverlays(
+  ctx: CanvasRenderingContext2D,
+  engine: RenderEngine3D,
+  nodes: Node3D[],
+  elements: Element3D[],
+  mode: 'select' | 'addBar',
+  barStartNodeId: number | null,
+  lastPlacedNodeId: number | null,
+  lastDrawnElemId: number | null,
+  mousePos: { px: number; py: number } | null,
+  gridPlane: 'XY' | 'XZ' | 'YZ',
+  gridOffset: number,
+  snapEnabled: boolean,
+  snapSize: number,
+  hoverNodeId: number | null,
+  accentColor: string,
+  isTouch: boolean
+) {
+  // 1. Draw dimension line for last drawn element if exists
+  if (lastDrawnElemId != null) {
+    const el = elements.find((e) => e.id === lastDrawnElemId);
+    if (el) {
+      const n1 = nodes.find((n) => n.id === el.n1);
+      const n2 = nodes.find((n) => n.id === el.n2);
+      if (n1 && n2) {
+        const pa = engine.project([n1.x, n1.y, n1.z]);
+        const pb = engine.project([n2.x, n2.y, n2.z]);
+        const len = Math.hypot(n2.x - n1.x, n2.y - n1.y, n2.z - n1.z);
+        drawSegmentDimensionPoints(ctx, pa, pb, len, accentColor || '#2563eb');
+      }
+    }
+  }
+
+  // 2. Draw node coordinate tip for last placed node if exists
+  if (lastPlacedNodeId != null) {
+    const n = nodes.find((node) => node.id === lastPlacedNodeId);
+    if (n) {
+      const p = engine.project([n.x, n.y, n.z]);
+      const label = `W${n.id} (${n.x.toFixed(2)}, ${n.y.toFixed(2)}, ${n.z.toFixed(2)}) m`;
+      drawNodeCoordTip(ctx, p, label, '#16a34a');
+    }
+  }
+
+  // 3. Mode 'addBar' preview: guide line, dimension line, and target node tip (mouse only, disabled on touch)
+  if (mode === 'addBar' && !isTouch) {
+    if (barStartNodeId != null) {
+      const n1 = nodes.find((n) => n.id === barStartNodeId);
+      if (n1) {
+        const pa = engine.project([n1.x, n1.y, n1.z]);
+        let targetPt: [number, number, number] = [n1.x, n1.y, n1.z];
+        let targetNodeId: number | null = null;
+
+        if (hoverNodeId != null) {
+          const hn = nodes.find((n) => n.id === hoverNodeId);
+          if (hn) {
+            targetPt = [hn.x, hn.y, hn.z];
+            targetNodeId = hn.id;
+          }
+        } else if (mousePos) {
+          const pt = engine.unprojectToPlane(mousePos.px, mousePos.py, gridPlane, gridOffset);
+          let x = pt[0];
+          let y = pt[1];
+          let z = pt[2];
+          if (snapEnabled) {
+            if (gridPlane === 'XY') {
+              x = Math.round(x / snapSize) * snapSize;
+              y = Math.round(y / snapSize) * snapSize;
+              z = gridOffset;
+            } else if (gridPlane === 'XZ') {
+              x = Math.round(x / snapSize) * snapSize;
+              y = gridOffset;
+              z = Math.round(z / snapSize) * snapSize;
+            } else if (gridPlane === 'YZ') {
+              x = gridOffset;
+              y = Math.round(y / snapSize) * snapSize;
+              z = Math.round(z / snapSize) * snapSize;
+            }
+          }
+          targetPt = [x, y, z];
+        }
+
+        const pb = engine.project(targetPt);
+        const dist3D = Math.hypot(targetPt[0] - n1.x, targetPt[1] - n1.y, targetPt[2] - n1.z);
+        const pixDist = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+
+        if (pixDist >= 6 && dist3D >= 0.001) {
+          // A) Dashed guide line (prowadnica)
+          ctx.save();
+          ctx.strokeStyle = '#ea580c';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 4]);
+          ctx.beginPath();
+          ctx.moveTo(pa.x, pa.y);
+          ctx.lineTo(pb.x, pb.y);
+          ctx.stroke();
+          ctx.restore();
+
+          // B) Dimension line with length badge
+          drawSegmentDimensionPoints(ctx, pa, pb, dist3D, '#ea580c');
+
+          // C) Target coordinate tip
+          const tipLabel = targetNodeId != null
+            ? `W${targetNodeId} (${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`
+            : `(${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`;
+
+          drawNodeCoordTip(ctx, pb, tipLabel, '#7c3aed');
+        }
+      }
+    } else if (mousePos) {
+      // barStartNodeId is null, show coordinate tip for current cursor position in addBar mode
+      let targetPt: [number, number, number] = [0, 0, 0];
+      let targetNodeId: number | null = null;
+      if (hoverNodeId != null) {
+        const hn = nodes.find((n) => n.id === hoverNodeId);
+        if (hn) {
+          targetPt = [hn.x, hn.y, hn.z];
+          targetNodeId = hn.id;
+        }
+      } else {
+        const pt = engine.unprojectToPlane(mousePos.px, mousePos.py, gridPlane, gridOffset);
+        let x = pt[0];
+        let y = pt[1];
+        let z = pt[2];
+        if (snapEnabled) {
+          if (gridPlane === 'XY') {
+            x = Math.round(x / snapSize) * snapSize;
+            y = Math.round(y / snapSize) * snapSize;
+            z = gridOffset;
+          } else if (gridPlane === 'XZ') {
+            x = Math.round(x / snapSize) * snapSize;
+            y = gridOffset;
+            z = Math.round(z / snapSize) * snapSize;
+          } else if (gridPlane === 'YZ') {
+            x = gridOffset;
+            y = Math.round(y / snapSize) * snapSize;
+            z = Math.round(z / snapSize) * snapSize;
+          }
+        }
+        targetPt = [x, y, z];
+      }
+      const pb = engine.project(targetPt);
+      const tipLabel = targetNodeId != null
+        ? `W${targetNodeId} (${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`
+        : `(${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`;
+      drawNodeCoordTip(ctx, pb, tipLabel, '#2563eb');
+    }
+  }
+}
+
 export default function App() {
   // Initial 3D structure: 3D Portal Frame
   const initialData = generate3DPortalFrame(6.0, 6.0, 4.0, 1, 1, 1, 1);
@@ -106,19 +401,24 @@ export default function App() {
 
   // Interaction Mode & 3D Navigation Mode
   const [mode, setMode] = useState<'select' | 'addBar'>('select');
-  const [navMode, setNavMode] = useState<'select' | 'orbit' | 'pan'>('orbit');
+  const [navMode, setNavMode] = useState<'orbit' | 'boxSelect' | 'pan' | 'zoom'>('orbit');
 
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const [selectedElemIds, setSelectedElemIds] = useState<number[]>([]);
-  const [mobileSelMode, setMobileSelMode] = useState<'replace' | 'add' | 'subtract' | 'toggle'>('replace');
-  const [hoverNodeId, setHoverNodeId] = useState<number | null>(null);
-  const [hoverElemId, setHoverElemId] = useState<number | null>(null);
+  const [mobileSelMode, setMobileSelMode] = useState<SelectionModeType>('replace');
+  const [keyModifiers, setKeyModifiers] = useState<{ ctrl: boolean; shift: boolean }>({ ctrl: false, shift: false });
+  const keyModifiersRef = useRef<{ ctrl: boolean; shift: boolean }>({ ctrl: false, shift: false });
+  const effectiveSelMode = getEffectiveSelectionMode(keyModifiers.ctrl, keyModifiers.shift, mobileSelMode);
   const [barStartNodeId, setBarStartNodeId] = useState<number | null>(null);
+  const [lastPlacedNodeId, setLastPlacedNodeId] = useState<number | null>(null);
+  const [lastDrawnElemId, setLastDrawnElemId] = useState<number | null>(null);
+  const mousePosRef = useRef<{ px: number; py: number } | null>(null);
+  const isTouchRef = useRef<boolean>(false);
 
-  // ViewCube hover state
-  const [hoverViewCube, setHoverViewCube] = useState<ViewCubeHit | null>(null);
+  // Fast direct hover refs (avoids 60fps React re-renders on mousemove for 120 FPS buttery smooth performance)
   const hoverViewCubeRef = useRef<ViewCubeHit | null>(null);
   const hoverNodeIdRef = useRef<number | null>(null);
+  const hoverElemIdRef = useRef<number | null>(null);
 
   // Status & Hint
   const [statusHint, setStatusHint] = useState<string>('Tryb: Zaznacz');
@@ -155,11 +455,20 @@ export default function App() {
   const [showProfileSketches, setShowProfileSketches] = useState<boolean>(true);
   const [showLoads, setShowLoads] = useState<boolean>(true);
   const [showLoadValues, setShowLoadValues] = useState<boolean>(true);
+  const [showHingeLabels, setShowHingeLabels] = useState<boolean>(true);
   const [showDimensions, setShowDimensions] = useState<boolean>(false);
+  const [gridPlane, setGridPlane] = useState<'XY' | 'XZ' | 'YZ'>('XY');
+  const [gridOffset, setGridOffset] = useState<number>(0);
+
+  const handleNodeCoordinateSet = useCallback((coord: { x: number; y: number; z: number }) => {
+    if (gridPlane === 'XY') setGridOffset(coord.z);
+    else if (gridPlane === 'XZ') setGridOffset(coord.y);
+    else if (gridPlane === 'YZ') setGridOffset(coord.x);
+  }, [gridPlane]);
   const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
   const [allowNewNodesInBarMode, setAllowNewNodesInBarMode] = useState<boolean>(true);
-  const [boxSelectEnabled, setBoxSelectEnabled] = useState<boolean>(false);
   const [snapSize, setSnapSize] = useState<number>(0.5);
+  const [showCanvasUI, setShowCanvasUI] = useState<boolean>(true);
 
   const [includeSelfWeight, setIncludeSelfWeight] = useState<boolean>(false);
 
@@ -197,6 +506,7 @@ export default function App() {
   // Modals
   const [optionsOpen, setOptionsOpen] = useState<boolean>(false);
   const [aboutOpen, setAboutOpen] = useState<boolean>(false);
+  const [selectByOpen, setSelectByOpen] = useState<boolean>(false);
 
   // Undo / Redo Stack
   const [history, setHistory] = useState<HistoryState[]>([]);
@@ -210,23 +520,25 @@ export default function App() {
   // Mouse Interaction Drag State
   const dragRef = useRef<{
     isDragging: boolean;
-    button: number;
+    dragType: 'orbit' | 'pan' | 'zoom';
     startX: number;
     startY: number;
     startAzimuth: number;
     startElevation: number;
     startPanX: number;
     startPanY: number;
+    startScale: number;
     hasMoved: boolean;
   }>({
     isDragging: false,
-    button: 0,
+    dragType: 'orbit',
     startX: 0,
     startY: 0,
     startAzimuth: 0,
     startElevation: 0,
     startPanX: 0,
     startPanY: 0,
+    startScale: 60,
     hasMoved: false,
   });
 
@@ -237,6 +549,7 @@ export default function App() {
     startDist: number;
     startScale: number;
     isPinching: boolean;
+    dragType: 'orbit' | 'pan' | 'zoom';
     startAzimuth: number;
     startElevation: number;
     startPanX: number;
@@ -247,6 +560,7 @@ export default function App() {
     startDist: 0,
     startScale: 60,
     isPinching: false,
+    dragType: 'orbit',
     startAzimuth: 0,
     startElevation: 0,
     startPanX: 0,
@@ -258,8 +572,16 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme);
     const def = APP_ACCENTS[accent] || APP_ACCENTS.blue;
     const root = document.documentElement;
+    const [r, g, b] = def.rgb;
+    const isDark = theme === 'dark';
+
     root.style.setProperty('--accent', def.hex);
-    root.style.setProperty('--accent-dark', def.hex);
+    root.style.setProperty('--accent-dark', def.darkHex);
+    root.style.setProperty('--accent-light', def.lightHex);
+    root.style.setProperty('--accent-soft', isDark ? `rgba(${r}, ${g}, ${b}, 0.22)` : `rgba(${r}, ${g}, ${b}, 0.12)`);
+    root.style.setProperty('--accent-tag-bg', isDark ? `rgba(${r}, ${g}, ${b}, 0.22)` : `rgba(${r}, ${g}, ${b}, 0.12)`);
+    root.style.setProperty('--accent-tag-fg', isDark ? def.lightHex : def.darkHex);
+    root.style.setProperty('--accent-tag-border', isDark ? `rgba(${r}, ${g}, ${b}, 0.40)` : `rgba(${r}, ${g}, ${b}, 0.30)`);
   }, [theme, accent]);
 
   // Push state to undo/redo history
@@ -418,6 +740,7 @@ export default function App() {
       showProfileSketches,
       showLoads,
       showLoadValues,
+      showHingeLabels,
       showDimensions,
       showDeform,
       showMy,
@@ -434,18 +757,22 @@ export default function App() {
       diagramScaleMult,
       selectedNodeIds,
       selectedElemIds,
-      hoverNodeId,
-      hoverElemId,
+      hoverNodeId: hoverNodeIdRef.current,
+      hoverElemId: hoverElemIdRef.current,
       probe,
       theme,
       accentColor: accentDef.hex,
+      gridPlane,
+      gridOffset,
     };
 
     // 1. Draw 3D Three.js WebGL Scene & 2D Text/Overlay Labels
     drawScene3D(overlayCtx, engine, nodes, elements, sections, materials, solved, renderOpts);
 
     // 2. Draw Interactive 3D ViewCube in Top-Right
-    engine.drawViewCube(overlayCtx, hoverViewCube);
+    if (showCanvasUI) {
+      engine.drawViewCube(overlayCtx, hoverViewCubeRef.current);
+    }
 
     // 3. Draw 2D Box Selection Overlay if active
     if (boxSelectStateRef.current.isDragging && boxSelectStateRef.current.hasMoved) {
@@ -465,6 +792,27 @@ export default function App() {
       overlayCtx.strokeRect(x0, y0, x1 - x0, y1 - y0);
       overlayCtx.restore();
     }
+
+    // 4. Draw Transient Drawing Overlays (Guide line, dimension line, node coordinate tip)
+    const isTouch = isTouchRef.current || (typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches);
+    drawTransientOverlays(
+      overlayCtx,
+      engine,
+      nodes,
+      elements,
+      mode,
+      barStartNodeId,
+      lastPlacedNodeId,
+      lastDrawnElemId,
+      mousePosRef.current,
+      gridPlane,
+      gridOffset,
+      snapEnabled,
+      snapSize,
+      hoverNodeIdRef.current,
+      accentDef.hex,
+      isTouch
+    );
   }, [
     nodes,
     elements,
@@ -473,9 +821,12 @@ export default function App() {
     solved,
     selectedNodeIds,
     selectedElemIds,
-    hoverNodeId,
-    hoverElemId,
-    hoverViewCube,
+    mode,
+    barStartNodeId,
+    lastPlacedNodeId,
+    lastDrawnElemId,
+    snapEnabled,
+    snapSize,
     theme,
     accent,
     showGrid,
@@ -489,6 +840,7 @@ export default function App() {
     showProfileSketches,
     showLoads,
     showLoadValues,
+    showHingeLabels,
     showDimensions,
     showDeform,
     showMy,
@@ -504,6 +856,9 @@ export default function App() {
     deformScaleMult,
     diagramScaleMult,
     probe,
+    showCanvasUI,
+    gridPlane,
+    gridOffset,
   ]);
 
   useEffect(() => {
@@ -521,6 +876,43 @@ export default function App() {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [redraw]);
+
+  // Panel height resize for vertical / mobile mode
+  const [panelHeight, setPanelHeight] = useState<number | null>(null);
+
+  const handlePanelResizeStart = (e: React.MouseEvent | React.TouchEvent) => {
+    const sidebarEl = document.getElementById('sidebar');
+    const mainEl = document.getElementById('main');
+    if (!sidebarEl) return;
+    const isVerticalLayout = mainEl
+      ? window.getComputedStyle(mainEl).flexDirection === 'column'
+      : window.innerWidth <= 860;
+    if (!isVerticalLayout) return;
+
+    if (e.cancelable) e.preventDefault();
+    const startY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const startH = sidebarEl.getBoundingClientRect().height;
+
+    const handleMove = (ev: MouseEvent | TouchEvent) => {
+      const currentY = 'touches' in ev ? ev.touches[0].clientY : (ev as MouseEvent).clientY;
+      const dy = startY - currentY;
+      // Min height: 20px (height of the handle, collapsing everything under it)
+      const newH = Math.max(20, Math.min(window.innerHeight * 0.88, startH + dy));
+      setPanelHeight(newH);
+    };
+
+    const handleEnd = () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleEnd);
+      window.removeEventListener('touchmove', handleMove);
+      window.removeEventListener('touchend', handleEnd);
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleEnd);
+    window.addEventListener('touchmove', handleMove, { passive: false });
+    window.addEventListener('touchend', handleEnd);
+  };
 
   // ResizeObserver for canvas wrapper
   useEffect(() => {
@@ -684,7 +1076,45 @@ export default function App() {
     );
   };
 
-  // --- Mouse / Touch Handlers ---
+  // --- Mouse / Touch Handlers & Cursor Management ---
+  const updateCanvasCursor = useCallback(
+    (modifiers?: { ctrl?: boolean; shift?: boolean }) => {
+      const canvas = overlayCanvasRef.current;
+      if (!canvas) return;
+
+      const ctrl = modifiers?.ctrl !== undefined ? modifiers.ctrl : keyModifiersRef.current.ctrl;
+      const shift = modifiers?.shift !== undefined ? modifiers.shift : keyModifiersRef.current.shift;
+      const selMode = getEffectiveSelectionMode(ctrl, shift, mobileSelMode);
+
+      const isHoverInteractive =
+        hoverViewCubeRef.current != null ||
+        hoverNodeIdRef.current != null ||
+        hoverElemIdRef.current != null;
+
+      const isDraggingBox = boxSelectStateRef.current.isDragging;
+      const isDraggingNav = dragRef.current.isDragging;
+
+      const newCursor = getCanvasCursor({
+        mode,
+        navMode,
+        isHoverInteractive,
+        selMode,
+        isDraggingBox,
+        isDraggingNav,
+      });
+
+      if (canvas.style.cursor !== newCursor) {
+        canvas.style.cursor = newCursor;
+      }
+    },
+    [mobileSelMode, mode, navMode]
+  );
+
+  // Sync cursor whenever selection modes, tools, or navigation states change
+  useEffect(() => {
+    updateCanvasCursor();
+  }, [updateCanvasCursor]);
+
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = overlayCanvasRef.current;
     if (!canvas) return;
@@ -695,56 +1125,170 @@ export default function App() {
     const engine = engineRef.current;
 
     // 1. Check if clicking on ViewCube on canvas
-    const cubeHit = engine.hitTestViewCube(px, py);
+    const cubeHit = showCanvasUI ? engine.hitTestViewCube(px, py) : null;
     if (cubeHit) {
-      const angles = engine.getViewAngles(cubeHit);
-      engine.animateCameraTo(angles.az, angles.el, 320, () => {
-        redraw();
-      });
+      if (cubeHit === 'FIT') {
+        handleFitView();
+      } else {
+        const angles = engine.getViewAngles(cubeHit);
+        engine.animateCameraTo(
+          angles.az,
+          angles.el,
+          300,
+          () => {
+            redraw();
+          },
+          () => {
+            if (cubeHit === 'FRONT' || cubeHit === 'BACK') {
+              setGridPlane('XZ');
+              setStatusHint('Zmieniono płaszczyznę siatki na XZ (y=0).');
+            } else if (cubeHit === 'LEFT' || cubeHit === 'RIGHT') {
+              setGridPlane('YZ');
+              setStatusHint('Zmieniono płaszczyznę siatki na YZ (x=0).');
+            } else if (cubeHit === 'TOP' || cubeHit === 'BOTTOM') {
+              setGridPlane('XY');
+              setStatusHint('Zmieniono płaszczyznę siatki na XY (z=0).');
+            }
+          }
+        );
+      }
       return;
     }
 
     // Stop any ongoing camera animation if user initiates manual drag
     engine.stopCameraAnimation();
 
-    // 2. Check if Box Selection mode is active (Left click in select mode when boxSelectEnabled is ON)
-    if (e.button === 0 && mode === 'select' && boxSelectEnabled) {
-      boxSelectStateRef.current = {
+    const ctrl = e.ctrlKey || e.metaKey;
+    const shift = e.shiftKey;
+    if (ctrl !== keyModifiersRef.current.ctrl || shift !== keyModifiersRef.current.shift) {
+      keyModifiersRef.current = { ctrl, shift };
+      setKeyModifiers({ ctrl, shift });
+    }
+
+    // Standard mouse behaviors:
+    // Middle button (e.button === 1) = ALWAYS Pan
+    // Right button (e.button === 2) = ALWAYS Orbit
+    if (e.button === 1) {
+      dragRef.current = {
         isDragging: true,
+        dragType: 'pan',
         startX: px,
         startY: py,
-        curX: px,
-        curY: py,
+        startAzimuth: engine.camera.azimuth,
+        startElevation: engine.camera.elevation,
+        startPanX: engine.camera.panX,
+        startPanY: engine.camera.panY,
+        startScale: engine.camera.scale,
         hasMoved: false,
       };
+      updateCanvasCursor({ ctrl, shift });
       return;
     }
 
-    // 3. Determine Pan vs Orbit
-    const isPan = navMode === 'pan' || e.button === 1 || (e.button === 0 && e.shiftKey);
-    const isOrbit = navMode === 'orbit' || e.button === 2 || (e.button === 0 && !e.shiftKey);
+    if (e.button === 2) {
+      dragRef.current = {
+        isDragging: true,
+        dragType: 'orbit',
+        startX: px,
+        startY: py,
+        startAzimuth: engine.camera.azimuth,
+        startElevation: engine.camera.elevation,
+        startPanX: engine.camera.panX,
+        startPanY: engine.camera.panY,
+        startScale: engine.camera.scale,
+        hasMoved: false,
+      };
+      updateCanvasCursor({ ctrl, shift });
+      return;
+    }
 
-    dragRef.current = {
-      isDragging: true,
-      button: isPan ? 1 : 0,
-      startX: px,
-      startY: py,
-      startAzimuth: engine.camera.azimuth,
-      startElevation: engine.camera.elevation,
-      startPanX: engine.camera.panX,
-      startPanY: engine.camera.panY,
-      hasMoved: false,
-    };
+    // Left click (e.button === 0):
+    if (e.button === 0) {
+      // 2. Check if Box Selection mode is active (Left click in select mode when navMode === 'boxSelect')
+      if (mode === 'select' && navMode === 'boxSelect') {
+        boxSelectStateRef.current = {
+          isDragging: true,
+          startX: px,
+          startY: py,
+          curX: px,
+          curY: py,
+          hasMoved: false,
+        };
+        updateCanvasCursor({ ctrl, shift });
+        return;
+      }
+
+      // 3. Zoom mode (Lupa): Left click drag vertically zooms in/out
+      if (navMode === 'zoom') {
+        dragRef.current = {
+          isDragging: true,
+          dragType: 'zoom',
+          startX: px,
+          startY: py,
+          startAzimuth: engine.camera.azimuth,
+          startElevation: engine.camera.elevation,
+          startPanX: engine.camera.panX,
+          startPanY: engine.camera.panY,
+          startScale: engine.camera.scale,
+          hasMoved: false,
+        };
+        updateCanvasCursor({ ctrl, shift });
+        return;
+      }
+
+      // 4. Pan mode (Łapka)
+      if (navMode === 'pan') {
+        dragRef.current = {
+          isDragging: true,
+          dragType: 'pan',
+          startX: px,
+          startY: py,
+          startAzimuth: engine.camera.azimuth,
+          startElevation: engine.camera.elevation,
+          startPanX: engine.camera.panX,
+          startPanY: engine.camera.panY,
+          startScale: engine.camera.scale,
+          hasMoved: false,
+        };
+        updateCanvasCursor({ ctrl, shift });
+        return;
+      }
+
+      // 5. Default Orbit mode: left click rotates 3D scene (or clicks items on mouseUp if not dragged)
+      dragRef.current = {
+        isDragging: true,
+        dragType: 'orbit',
+        startX: px,
+        startY: py,
+        startAzimuth: engine.camera.azimuth,
+        startElevation: engine.camera.elevation,
+        startPanX: engine.camera.panX,
+        startPanY: engine.camera.panY,
+        startScale: engine.camera.scale,
+        hasMoved: false,
+      };
+      updateCanvasCursor({ ctrl, shift });
+    }
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    isTouchRef.current = false;
     const canvas = overlayCanvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
 
+    mousePosRef.current = { px, py };
+
     const engine = engineRef.current;
+
+    const ctrl = e.ctrlKey || e.metaKey;
+    const shift = e.shiftKey;
+    if (ctrl !== keyModifiersRef.current.ctrl || shift !== keyModifiersRef.current.shift) {
+      keyModifiersRef.current = { ctrl, shift };
+      setKeyModifiers({ ctrl, shift });
+    }
 
     if (boxSelectStateRef.current.isDragging) {
       const dx = px - boxSelectStateRef.current.startX;
@@ -755,6 +1299,7 @@ export default function App() {
       if (Math.hypot(dx, dy) > 4) {
         boxSelectStateRef.current.hasMoved = true;
       }
+      updateCanvasCursor({ ctrl, shift });
       redraw();
       return;
     }
@@ -767,35 +1312,43 @@ export default function App() {
         dragRef.current.hasMoved = true;
       }
 
-      if (dragRef.current.button === 0) {
-        // Orbit rotation around target (360° free rotation)
-        engine.camera.azimuth = (dragRef.current.startAzimuth - dx * 0.5) % 360;
-        engine.camera.elevation = Math.max(-89.9, Math.min(89.9, dragRef.current.startElevation + dy * 0.5));
-      } else {
+      if (dragRef.current.dragType === 'zoom') {
+        // Drag up: zoom in (scale increases), Drag down: zoom out (scale decreases)
+        const zoomFactor = Math.exp(-dy * 0.01);
+        const startScale = dragRef.current.startScale;
+        const newScale = Math.max(2, Math.min(1000, startScale * zoomFactor));
+        const centerX = dragRef.current.startX;
+        const centerY = dragRef.current.startY;
+
+        engine.camera.panX = centerX - ((centerX - dragRef.current.startPanX) / startScale) * newScale;
+        engine.camera.panY = centerY - ((centerY - dragRef.current.startPanY) / startScale) * newScale;
+        engine.camera.scale = newScale;
+      } else if (dragRef.current.dragType === 'pan') {
         // Pan
         engine.camera.panX = dragRef.current.startPanX + dx;
         engine.camera.panY = dragRef.current.startPanY + dy;
+      } else {
+        // Orbit rotation around target (360° free rotation)
+        engine.camera.azimuth = (dragRef.current.startAzimuth - dx * 0.5) % 360;
+        engine.camera.elevation = Math.max(-89.9, Math.min(89.9, dragRef.current.startElevation + dy * 0.5));
       }
+      updateCanvasCursor({ ctrl, shift });
       redraw();
       return;
     }
 
     // ViewCube Hover Detection
-    const cubeHit = engine.hitTestViewCube(px, py);
-    if (cubeHit !== hoverViewCubeRef.current) {
-      hoverViewCubeRef.current = cubeHit;
-      setHoverViewCube(cubeHit);
-    }
+    const cubeHit = showCanvasUI ? engine.hitTestViewCube(px, py) : null;
 
-    // Unproject to ground plane for status coords (Direct DOM update for 120 FPS performance without React rerender)
-    const groundPt = engine.unprojectToZPlane(px, py, 0);
+    // Unproject to current active grid plane for status coords
+    const groundPt = engine.unprojectToPlane(px, py, gridPlane, gridOffset);
     if (coordsSpanRef.current) {
       coordsSpanRef.current.textContent = `x=${groundPt[0].toFixed(2)} m, y=${groundPt[1].toFixed(2)} m, z=${groundPt[2].toFixed(2)} m`;
     }
 
     // Hit testing on nodes
     let foundNodeId: number | null = null;
-    let minNodeDist = 12;
+    let minNodeDist = 14;
 
     nodes.forEach((n) => {
       const p = engine.project([n.x, n.y, n.z]);
@@ -806,9 +1359,58 @@ export default function App() {
       }
     });
 
-    if (foundNodeId !== hoverNodeIdRef.current) {
-      hoverNodeIdRef.current = foundNodeId;
-      setHoverNodeId(foundNodeId);
+    // Hit testing on elements (bars) when no node is hovered
+    let foundElemId: number | null = null;
+    if (foundNodeId == null) {
+      let minElemDist = 10;
+      elements.forEach((el) => {
+        const n1 = nodes.find((n) => n.id === el.n1);
+        const n2 = nodes.find((n) => n.id === el.n2);
+        if (!n1 || !n2) return;
+        const p1 = engine.project([n1.x, n1.y, n1.z]);
+        const p2 = engine.project([n2.x, n2.y, n2.z]);
+
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const lenSq = dx * dx + dy * dy;
+        let t = lenSq > 0 ? ((px - p1.x) * dx + (py - p1.y) * dy) / lenSq : 0;
+        t = Math.max(0, Math.min(1, t));
+        const cx = p1.x + t * dx;
+        const cy = p1.y + t * dy;
+        const d = Math.hypot(px - cx, py - cy);
+        if (d < minElemDist) {
+          minElemDist = d;
+          foundElemId = el.id;
+        }
+      });
+    }
+
+    // Direct hover refs update
+    const hoverChanged =
+      cubeHit !== hoverViewCubeRef.current ||
+      foundNodeId !== hoverNodeIdRef.current ||
+      foundElemId !== hoverElemIdRef.current;
+
+    hoverViewCubeRef.current = cubeHit;
+    hoverNodeIdRef.current = foundNodeId;
+    hoverElemIdRef.current = foundElemId;
+
+    // Dynamic smart cursor update
+    updateCanvasCursor({ ctrl, shift });
+
+    // Redraw immediately during drawing mode for live preview or when hover state changes
+    if (mode === 'addBar' || hoverChanged) {
+      redraw();
+    }
+  };
+
+  const handleMouseLeave = () => {
+    mousePosRef.current = null;
+    hoverViewCubeRef.current = null;
+    hoverNodeIdRef.current = null;
+    hoverElemIdRef.current = null;
+    if (mode === 'addBar') {
+      redraw();
     }
   };
 
@@ -818,10 +1420,15 @@ export default function App() {
     selMode: 'replace' | 'add' | 'subtract' | 'toggle' = 'replace'
   ) => {
     const engine = engineRef.current;
+
+    // Ignore clicks on ViewCube (do not trigger selection changes or UI toggle)
+    if (showCanvasUI && engine.hitTestViewCube(px, py) != null) {
+      return;
+    }
   
     // Check node hit
     let clickedNodeId: number | null = null;
-    let minNodeDist = 12;
+    let minNodeDist = 14;
     nodes.forEach((n) => {
       const p = engine.project([n.x, n.y, n.z]);
       const d = Math.hypot(p.x - px, p.y - py);
@@ -830,31 +1437,170 @@ export default function App() {
         clickedNodeId = n.id;
       }
     });
+
+    if (clickedNodeId != null) {
+      const clickedNode = nodes.find((n) => n.id === clickedNodeId);
+      if (clickedNode) {
+        const offset = gridPlane === 'XY' ? clickedNode.z : gridPlane === 'XZ' ? clickedNode.y : clickedNode.x;
+        setGridOffset(offset);
+        engine.setRotationCenter([clickedNode.x, clickedNode.y, clickedNode.z]);
+      }
+    }
   
     if (mode === 'addBar') {
       if (clickedNodeId != null) {
         if (barStartNodeId == null) {
           setBarStartNodeId(clickedNodeId);
+          setLastPlacedNodeId(clickedNodeId);
           setStatusHint(`Wybrano węzeł startowy W${clickedNodeId}. Wybierz punkt końcowy.`);
-        } else if (barStartNodeId !== clickedNodeId) {
-          const nextElemId = elements.length > 0 ? Math.max(...elements.map((e) => e.id)) + 1 : 1;
-          const newElem: Element3D = {
-            id: nextElemId,
-            n1: barStartNodeId,
-            n2: clickedNodeId,
-            sectionId: defaultSectionId,
-            materialId: defaultMaterialId,
-            rollAngle: 0,
-            hinges: {},
-            q: null,
-            thermal: null,
-          };
-          setElements((prev) => [...prev, newElem]);
-          setSelectedElemIds([nextElemId]);
-          setSelectedNodeIds([]);
-          setBarStartNodeId(clickedNodeId);
-          setStatusHint(`Połączono prętem P${nextElemId} (W${barStartNodeId} → W${clickedNodeId}).`);
-          handleInvalidateResults();
+        } else {
+          const startNode = nodes.find((n) => n.id === barStartNodeId);
+          const endNode = nodes.find((n) => n.id === clickedNodeId);
+          const dist3D = startNode && endNode
+            ? Math.hypot(endNode.x - startNode.x, endNode.y - startNode.y, endNode.z - startNode.z)
+            : 0;
+          const isZeroLength = barStartNodeId === clickedNodeId || dist3D < 1e-4;
+
+          const isDuplicate = elements.some(
+            (e) =>
+              (e.n1 === barStartNodeId && e.n2 === clickedNodeId) ||
+              (e.n1 === clickedNodeId && e.n2 === barStartNodeId)
+          );
+
+          if (isZeroLength) {
+            setBarStartNodeId(clickedNodeId);
+            setLastPlacedNodeId(clickedNodeId);
+            setStatusHint(`Nie można utworzyć pręta o długości 0 m – zmieniono węzeł startowy na W${clickedNodeId}.`);
+          } else if (isDuplicate) {
+            setBarStartNodeId(clickedNodeId);
+            setLastPlacedNodeId(clickedNodeId);
+            setStatusHint(`Pręt (W${barStartNodeId}—W${clickedNodeId}) już istnieje – zmieniono węzeł startowy na W${clickedNodeId}.`);
+          } else {
+            const nextElemId = elements.length > 0 ? Math.max(...elements.map((e) => e.id)) + 1 : 1;
+            const newElem: Element3D = {
+              id: nextElemId,
+              n1: barStartNodeId,
+              n2: clickedNodeId,
+              sectionId: defaultSectionId,
+              materialId: defaultMaterialId,
+              rollAngle: 0,
+              hinges: {},
+              q: null,
+              thermal: null,
+            };
+            setElements((prev) => [...prev, newElem]);
+            setSelectedElemIds([nextElemId]);
+            setSelectedNodeIds([]);
+            setBarStartNodeId(clickedNodeId);
+            setLastDrawnElemId(nextElemId);
+            setLastPlacedNodeId(clickedNodeId);
+            setStatusHint(`Połączono prętem P${nextElemId} (W${barStartNodeId} → W${clickedNodeId}).`);
+            handleInvalidateResults();
+          }
+        }
+      } else {
+        // Clicked on empty space in addBar mode
+        if (allowNewNodesInBarMode) {
+          const pt = engine.unprojectToPlane(px, py, gridPlane, gridOffset);
+          let x = pt[0];
+          let y = pt[1];
+          let z = pt[2];
+          if (snapEnabled) {
+            if (gridPlane === 'XY') {
+              x = Math.round(x / snapSize) * snapSize;
+              y = Math.round(y / snapSize) * snapSize;
+              z = gridOffset;
+            } else if (gridPlane === 'XZ') {
+              x = Math.round(x / snapSize) * snapSize;
+              y = gridOffset;
+              z = Math.round(z / snapSize) * snapSize;
+            } else if (gridPlane === 'YZ') {
+              x = gridOffset;
+              y = Math.round(y / snapSize) * snapSize;
+              z = Math.round(z / snapSize) * snapSize;
+            }
+          } else {
+            if (gridPlane === 'XY') z = gridOffset;
+            else if (gridPlane === 'XZ') y = gridOffset;
+            else if (gridPlane === 'YZ') x = gridOffset;
+          }
+
+          const existingNode = nodes.find(
+            (n) => Math.hypot(n.x - x, n.y - y, n.z - z) < 1e-3
+          );
+          let targetNodeId: number;
+
+          if (existingNode) {
+            targetNodeId = existingNode.id;
+          } else {
+            const nextNodeId = nodes.length > 0 ? Math.max(...nodes.map((n) => n.id)) + 1 : 1;
+            const newNode: Node3D = {
+              id: nextNodeId,
+              x,
+              y,
+              z,
+              support: null,
+              force: null,
+              moment: null,
+              mass: null,
+            };
+            setNodes((prev) => [...prev, newNode]);
+            targetNodeId = nextNodeId;
+            setLastPlacedNodeId(targetNodeId);
+          }
+          engine.setRotationCenter([x, y, z]);
+
+          if (barStartNodeId == null) {
+            setBarStartNodeId(targetNodeId);
+            setLastPlacedNodeId(targetNodeId);
+            setStatusHint(`Utworzono węzeł W${targetNodeId} (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)} m). Wybierz punkt końcowy.`);
+          } else {
+            const startNode = nodes.find((n) => n.id === barStartNodeId);
+            const targetNode = existingNode || { id: targetNodeId, x, y, z };
+            const dist3D = startNode && targetNode
+              ? Math.hypot(targetNode.x - startNode.x, targetNode.y - startNode.y, targetNode.z - startNode.z)
+              : 0;
+            const isZeroLength = barStartNodeId === targetNodeId || dist3D < 1e-4;
+
+            const isDuplicate = elements.some(
+              (e) =>
+                (e.n1 === barStartNodeId && e.n2 === targetNodeId) ||
+                (e.n1 === targetNodeId && e.n2 === barStartNodeId)
+            );
+
+            if (isZeroLength) {
+              setBarStartNodeId(targetNodeId);
+              setLastPlacedNodeId(targetNodeId);
+              setStatusHint(`Nie można utworzyć pręta o długości 0 m – zmieniono węzeł startowy na W${targetNodeId}.`);
+            } else if (isDuplicate) {
+              setBarStartNodeId(targetNodeId);
+              setLastPlacedNodeId(targetNodeId);
+              setStatusHint(`Pręt (W${barStartNodeId}—W${targetNodeId}) już istnieje – zmieniono węzeł startowy na W${targetNodeId}.`);
+            } else {
+              const nextElemId = elements.length > 0 ? Math.max(...elements.map((e) => e.id)) + 1 : 1;
+              const newElem: Element3D = {
+                id: nextElemId,
+                n1: barStartNodeId,
+                n2: targetNodeId,
+                sectionId: defaultSectionId,
+                materialId: defaultMaterialId,
+                rollAngle: 0,
+                hinges: {},
+                q: null,
+                thermal: null,
+              };
+              setElements((prev) => [...prev, newElem]);
+              setSelectedElemIds([nextElemId]);
+              setSelectedNodeIds([]);
+              setBarStartNodeId(targetNodeId);
+              setLastDrawnElemId(nextElemId);
+              setLastPlacedNodeId(targetNodeId);
+              setStatusHint(`Połączono prętem P${nextElemId} (W${barStartNodeId} → W${targetNodeId}).`);
+              handleInvalidateResults();
+            }
+          }
+        } else {
+          setShowCanvasUI((prev) => !prev);
         }
       }
     } else {
@@ -867,14 +1613,14 @@ export default function App() {
       } else {
         // Check element hit
         let clickedElemId: number | null = null;
-        let minElemDist = 8;
+        let minElemDist = 10;
         elements.forEach((el) => {
           const n1 = nodes.find((n) => n.id === el.n1);
           const n2 = nodes.find((n) => n.id === el.n2);
           if (!n1 || !n2) return;
           const p1 = engine.project([n1.x, n1.y, n1.z]);
           const p2 = engine.project([n2.x, n2.y, n2.z]);
-  
+
           const dx = p2.x - p1.x;
           const dy = p2.y - p1.y;
           const lenSq = dx * dx + dy * dy;
@@ -889,16 +1635,36 @@ export default function App() {
             setProbe({ elId: el.id, t });
           }
         });
-  
+
         if (clickedElemId != null) {
+          const el = elements.find((e) => e.id === clickedElemId);
+          if (el) {
+            const n1 = nodes.find((n) => n.id === el.n1);
+            const n2 = nodes.find((n) => n.id === el.n2);
+            if (n1 && n2) {
+              const midX = (n1.x + n2.x) / 2;
+              const midY = (n1.y + n2.y) / 2;
+              const midZ = (n1.z + n2.z) / 2;
+              engine.setRotationCenter([midX, midY, midZ]);
+            }
+          }
           setSelectedElemIds((prev) => updateSelection(prev, [clickedElemId!], selMode));
           if (selMode === 'replace') {
             setSelectedNodeIds([]);
           }
         } else {
+          // Clicked on empty space
           if (selMode === 'replace') {
-            setSelectedNodeIds([]);
-            setSelectedElemIds([]);
+            if (selectedNodeIds.length > 0 || selectedElemIds.length > 0) {
+              setSelectedNodeIds([]);
+              setSelectedElemIds([]);
+            } else {
+              setShowCanvasUI((prev) => !prev);
+            }
+            setLastPlacedNodeId(null);
+            setLastDrawnElemId(null);
+          } else {
+            setShowCanvasUI((prev) => !prev);
           }
         }
       }
@@ -912,11 +1678,13 @@ export default function App() {
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
 
-    let selMode: 'replace' | 'add' | 'subtract' | 'toggle' = 'replace';
-    if (e.ctrlKey && e.shiftKey) selMode = 'toggle';
-    else if (e.ctrlKey) selMode = 'add';
-    else if (e.shiftKey) selMode = 'subtract';
-    else selMode = mobileSelMode;
+    const ctrl = e.ctrlKey || e.metaKey;
+    const shift = e.shiftKey;
+    if (ctrl !== keyModifiersRef.current.ctrl || shift !== keyModifiersRef.current.shift) {
+      keyModifiersRef.current = { ctrl, shift };
+      setKeyModifiers({ ctrl, shift });
+    }
+    const selMode = getEffectiveSelectionMode(ctrl, shift, mobileSelMode);
 
     if (boxSelectStateRef.current.isDragging) {
       const { startX, startY, curX, curY, hasMoved } = boxSelectStateRef.current;
@@ -926,6 +1694,7 @@ export default function App() {
       } else {
         handleCanvasClickAt(px, py, selMode);
       }
+      updateCanvasCursor({ ctrl, shift });
       redraw();
       return;
     }
@@ -937,6 +1706,7 @@ export default function App() {
     if (!wasMoved) {
       handleCanvasClickAt(px, py, selMode);
     }
+    updateCanvasCursor({ ctrl, shift });
     redraw();
   };
 
@@ -963,6 +1733,10 @@ export default function App() {
 
   // Touch handlers
   const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    isTouchRef.current = true;
+    mousePosRef.current = null;
+    hoverNodeIdRef.current = null;
+    hoverElemIdRef.current = null;
     const canvas = overlayCanvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -973,18 +1747,33 @@ export default function App() {
       const px = t0.clientX - rect.left;
       const py = t0.clientY - rect.top;
 
-      const cubeHit = engine.hitTestViewCube(px, py);
+      const cubeHit = showCanvasUI ? engine.hitTestViewCube(px, py) : null;
       if (cubeHit) {
-        const angles = engine.getViewAngles(cubeHit);
-        engine.animateCameraTo(angles.az, angles.el, 320, () => {
-          redraw();
-        });
+        if (cubeHit === 'FIT') {
+          handleFitView();
+        } else {
+          if (cubeHit === 'FRONT' || cubeHit === 'BACK') {
+            setGridPlane('XZ');
+            setStatusHint('Zmieniono płaszczyznę siatki na XZ (y=0).');
+          } else if (cubeHit === 'LEFT' || cubeHit === 'RIGHT') {
+            setGridPlane('YZ');
+            setStatusHint('Zmieniono płaszczyznę siatki na YZ (x=0).');
+          } else if (cubeHit === 'TOP' || cubeHit === 'BOTTOM') {
+            setGridPlane('XY');
+            setStatusHint('Zmieniono płaszczyznę siatki na XY (z=0).');
+          }
+
+          const angles = engine.getViewAngles(cubeHit);
+          engine.animateCameraTo(angles.az, angles.el, 320, () => {
+            redraw();
+          });
+        }
         return;
       }
 
       engine.stopCameraAnimation();
 
-      if (mode === 'select' && boxSelectEnabled) {
+      if (mode === 'select' && navMode === 'boxSelect') {
         boxSelectStateRef.current = {
           isDragging: true,
           startX: px,
@@ -999,6 +1788,7 @@ export default function App() {
           startDist: 0,
           startScale: engine.camera.scale,
           isPinching: false,
+          dragType: 'orbit',
           startAzimuth: engine.camera.azimuth,
           startElevation: engine.camera.elevation,
           startPanX: engine.camera.panX,
@@ -1009,12 +1799,16 @@ export default function App() {
         return;
       }
 
+      const activeDragType: 'orbit' | 'pan' | 'zoom' =
+        navMode === 'zoom' ? 'zoom' : navMode === 'pan' ? 'pan' : 'orbit';
+
       touchStateRef.current = {
         startX: px,
         startY: py,
         startDist: 0,
         startScale: engine.camera.scale,
         isPinching: false,
+        dragType: activeDragType,
         startAzimuth: engine.camera.azimuth,
         startElevation: engine.camera.elevation,
         startPanX: engine.camera.panX,
@@ -1022,8 +1816,14 @@ export default function App() {
       };
       dragRef.current.isDragging = true;
       dragRef.current.hasMoved = false;
+      dragRef.current.dragType = activeDragType;
       dragRef.current.startX = px;
       dragRef.current.startY = py;
+      dragRef.current.startScale = engine.camera.scale;
+      dragRef.current.startPanX = engine.camera.panX;
+      dragRef.current.startPanY = engine.camera.panY;
+      dragRef.current.startAzimuth = engine.camera.azimuth;
+      dragRef.current.startElevation = engine.camera.elevation;
     } else if (e.touches.length >= 2) {
       // cancel touch box selection dragging if multi-touch zooming/pan starts
       if (boxSelectStateRef.current.isDragging) {
@@ -1048,6 +1848,7 @@ export default function App() {
         startDist: Math.max(10, dist),
         startScale: engine.camera.scale,
         isPinching: true,
+        dragType: 'orbit',
         startAzimuth: engine.camera.azimuth,
         startElevation: engine.camera.elevation,
         startPanX: engine.camera.panX,
@@ -1078,6 +1879,7 @@ export default function App() {
           startDist: Math.max(10, dist),
           startScale: engine.camera.scale,
           isPinching: true,
+          dragType: 'orbit',
           startAzimuth: engine.camera.azimuth,
           startElevation: engine.camera.elevation,
           startPanX: engine.camera.panX,
@@ -1134,7 +1936,17 @@ export default function App() {
         dragRef.current.hasMoved = true;
       }
 
-      if (navMode === 'pan') {
+      if (touchStateRef.current.dragType === 'zoom') {
+        const zoomFactor = Math.exp(-dy * 0.01);
+        const startScale = touchStateRef.current.startScale;
+        const newScale = Math.max(2, Math.min(1000, startScale * zoomFactor));
+        const centerX = touchStateRef.current.startX;
+        const centerY = touchStateRef.current.startY;
+
+        engine.camera.panX = centerX - ((centerX - touchStateRef.current.startPanX) / startScale) * newScale;
+        engine.camera.panY = centerY - ((centerY - touchStateRef.current.startPanY) / startScale) * newScale;
+        engine.camera.scale = newScale;
+      } else if (touchStateRef.current.dragType === 'pan') {
         engine.camera.panX = touchStateRef.current.startPanX + dx;
         engine.camera.panY = touchStateRef.current.startPanY + dy;
       } else {
@@ -1179,9 +1991,17 @@ export default function App() {
     }
   };
 
-  // Keyboard Shortcuts
+  // Keyboard Shortcuts & Modifier Tracking
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const ctrl = e.ctrlKey || e.metaKey;
+      const shift = e.shiftKey;
+      if (ctrl !== keyModifiersRef.current.ctrl || shift !== keyModifiersRef.current.shift) {
+        keyModifiersRef.current = { ctrl, shift };
+        setKeyModifiers({ ctrl, shift });
+        updateCanvasCursor({ ctrl, shift });
+      }
+
       const targetTag = (e.target as HTMLElement)?.tagName?.toUpperCase();
       if (targetTag === 'INPUT' || targetTag === 'SELECT' || targetTag === 'TEXTAREA') return;
 
@@ -1207,9 +2027,34 @@ export default function App() {
         setMode('addBar');
       }
     };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const ctrl = e.ctrlKey || e.metaKey;
+      const shift = e.shiftKey;
+      if (ctrl !== keyModifiersRef.current.ctrl || shift !== keyModifiersRef.current.shift) {
+        keyModifiersRef.current = { ctrl, shift };
+        setKeyModifiers({ ctrl, shift });
+        updateCanvasCursor({ ctrl, shift });
+      }
+    };
+
+    const handleBlur = () => {
+      if (keyModifiersRef.current.ctrl || keyModifiersRef.current.shift) {
+        keyModifiersRef.current = { ctrl: false, shift: false };
+        setKeyModifiers({ ctrl: false, shift: false });
+        updateCanvasCursor({ ctrl: false, shift: false });
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  });
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [handleUndo, handleRedo, handleSolveOrBack, handleFitView, updateCanvasCursor]);
 
   return (
     <div id="app">
@@ -1219,6 +2064,8 @@ export default function App() {
         setMode={(m) => {
           setMode(m);
           setBarStartNodeId(null);
+          setLastPlacedNodeId(null);
+          setLastDrawnElemId(null);
         }}
         isSolved={!!solved}
         onSolveOrBack={handleSolveOrBack}
@@ -1276,12 +2123,11 @@ export default function App() {
           input.click();
         }}
         onOpenOptions={() => setOptionsOpen(true)}
+        onOpenAbout={() => setAboutOpen(true)}
         snapEnabled={snapEnabled}
         setSnapEnabled={setSnapEnabled}
         allowNewNodesInBarMode={allowNewNodesInBarMode}
         setAllowNewNodesInBarMode={setAllowNewNodesInBarMode}
-        boxSelectEnabled={boxSelectEnabled}
-        setBoxSelectEnabled={setBoxSelectEnabled}
         sections={sections}
         materials={materials}
         defaultSectionId={defaultSectionId}
@@ -1302,6 +2148,7 @@ export default function App() {
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseLeave}
             onWheel={handleWheel}
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
@@ -1312,9 +2159,9 @@ export default function App() {
 
           {/* Floating Selection Modifier Bar */}
           {mode === 'select' && (
-            <div className="absolute top-3 left-3 flex items-center gap-1 p-1 z-10 rounded-lg shadow-lg border border-[var(--sidebar-border)] bg-[var(--surface-translucent)] backdrop-blur-md select-none">
+            <div className={`absolute top-3 left-3 flex items-center gap-1 p-1 z-10 rounded-lg shadow-lg border border-[var(--sidebar-border)] bg-[var(--surface-translucent)] backdrop-blur-md select-none transition-all duration-200 ${showCanvasUI ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 -translate-y-2 pointer-events-none'}`}>
               <button
-                className={`zbtn ${mobileSelMode === 'replace' ? 'active' : ''}`}
+                className={`zbtn ${effectiveSelMode === 'replace' ? 'active' : ''}`}
                 onClick={() => setMobileSelMode('replace')}
                 title="Wybór zwykły (Zastąp zaznaczenie)"
               >
@@ -1323,7 +2170,7 @@ export default function App() {
                 </svg>
               </button>
               <button
-                className={`zbtn ${mobileSelMode === 'add' ? 'active' : ''}`}
+                className={`zbtn ${effectiveSelMode === 'add' ? 'active' : ''}`}
                 onClick={() => setMobileSelMode('add')}
                 title="Dodaj do zaznaczenia (Przytrzymaj Ctrl na komputerze)"
               >
@@ -1334,7 +2181,7 @@ export default function App() {
                 </svg>
               </button>
               <button
-                className={`zbtn ${mobileSelMode === 'subtract' ? 'active' : ''}`}
+                className={`zbtn ${effectiveSelMode === 'subtract' ? 'active' : ''}`}
                 onClick={() => setMobileSelMode('subtract')}
                 title="Odejmij od zaznaczenia (Przytrzymaj Shift na komputerze)"
               >
@@ -1344,7 +2191,7 @@ export default function App() {
                 </svg>
               </button>
               <button
-                className={`zbtn ${mobileSelMode === 'toggle' ? 'active' : ''}`}
+                className={`zbtn ${effectiveSelMode === 'toggle' ? 'active' : ''}`}
                 onClick={() => setMobileSelMode('toggle')}
                 title="Odwróć zaznaczenie (Przytrzymaj Ctrl + Shift na komputerze)"
               >
@@ -1355,14 +2202,26 @@ export default function App() {
                   <line x1="15" y1="21" x2="21" y2="21" strokeWidth="2.5" />
                 </svg>
               </button>
+              <div style={{ width: '1px', height: '18px', background: 'var(--sidebar-border)', margin: '0 2px' }} />
+              <button
+                className={`zbtn ${selectByOpen ? 'active' : ''}`}
+                onClick={() => setSelectByOpen(true)}
+                title="Zaznacz według... (długości, profilu, materiału)"
+              >
+                <svg className="w-4.5 h-4.5 stroke-current" fill="none" viewBox="0 0 24 24" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="2 3 22 3 14 12.5 14 19 10 21 10 12.5 2 3" />
+                  <line x1="17" y1="15" x2="22" y2="15" strokeWidth="2.2" />
+                  <line x1="17" y1="18" x2="22" y2="18" strokeWidth="2.2" />
+                </svg>
+              </button>
             </div>
           )}
 
           {/* Bottom Overlay containing:
-              - #overlayRow with the 3 navigation switch buttons (Pan, Orbit, Zoom/Fit)
+              - #overlayRow with the navigation and display switch buttons (bottom-left and bottom-right)
               - #statusbar with Hint and Coordinates
           */}
-          <div id="canvasBottomOverlay">
+          <div id="canvasBottomOverlay" className={`transition-all duration-200 ${showCanvasUI ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 translate-y-2 pointer-events-none'}`}>
             <div id="overlayRow">
               <div id="quickTogglesBar">
                 <button
@@ -1415,6 +2274,13 @@ export default function App() {
                   {TOGGLE_ICONS.localAxes}
                 </button>
                 <button
+                  className={`zbtn ${showHingeLabels ? 'active' : ''}`}
+                  onClick={() => setShowHingeLabels(!showHingeLabels)}
+                  title="Pokaż opisy przegubów (Ux, Ry...)"
+                >
+                  {TOGGLE_ICONS.hingeLabels}
+                </button>
+                <button
                   className={`zbtn ${showLoads ? 'active' : ''}`}
                   onClick={() => setShowLoads(!showLoads)}
                   title="Pokaż obciążenia"
@@ -1432,25 +2298,33 @@ export default function App() {
 
               <div id="zoomCtl">
                 <button
+                  className={`zbtn ${navMode === 'boxSelect' ? 'active' : ''}`}
+                  onClick={() => setNavMode(navMode === 'boxSelect' ? 'orbit' : 'boxSelect')}
+                  title="Zaznaczanie ramką (Ramka)"
+                >
+                  {ICONS.boxselect}
+                </button>
+                <button
                   className={`zbtn ${navMode === 'pan' ? 'active' : ''}`}
-                  onClick={() => setNavMode(navMode === 'pan' ? 'select' : 'pan')}
-                  title="Przesuwanie widoku (Pan)"
+                  onClick={() => setNavMode(navMode === 'pan' ? 'orbit' : 'pan')}
+                  title="Przesuwanie widoku (Łapka)"
                 >
                   {ICONS.pan}
                 </button>
                 <button
-                  className={`zbtn ${navMode === 'orbit' ? 'active' : ''}`}
-                  onClick={() => setNavMode(navMode === 'orbit' ? 'select' : 'orbit')}
-                  title="Swobodne obracanie 3D (Orbit)"
+                  className={`zbtn ${navMode === 'zoom' ? 'active' : ''}`}
+                  onClick={() => setNavMode(navMode === 'zoom' ? 'orbit' : 'zoom')}
+                  title="Przybliżanie i oddalanie przeciąganiem (Lupa)"
                 >
-                  {ICONS.orbit}
-                </button>
-                <button className="zbtn" onClick={handleFitView} title="Dopasuj widok do modelu">
-                  {ICONS.fit}
+                  {ICONS.zoom}
                 </button>
               </div>
             </div>
-            <div id="statusbar">
+            <div
+              id="statusbar"
+              onMouseDown={handlePanelResizeStart}
+              onTouchStart={handlePanelResizeStart}
+            >
               <span id="hint">{statusHint}</span>
               <span id="coords" ref={coordsSpanRef}>
                 x=0.00 m, y=0.00 m, z=0.00 m
@@ -1507,8 +2381,13 @@ export default function App() {
           probe={probe}
           setProbe={setProbe}
           onInvalidateResults={handleInvalidateResults}
+          onNodeCoordinateSet={handleNodeCoordinateSet}
+          onNodePlaced={(id) => setLastPlacedNodeId(id)}
+          onElemDrawn={(id) => setLastDrawnElemId(id)}
           defaultSectionId={defaultSectionId}
           defaultMaterialId={defaultMaterialId}
+          panelHeight={panelHeight}
+          onPanelHandleStart={handlePanelResizeStart}
         />
       </div>
 
@@ -1532,6 +2411,25 @@ export default function App() {
       />
 
       <AboutModal isOpen={aboutOpen} onClose={() => setAboutOpen(false)} />
+
+      <SelectByModal
+        isOpen={selectByOpen}
+        onClose={() => setSelectByOpen(false)}
+        nodes={nodes}
+        elements={elements}
+        sections={sections}
+        materials={materials}
+        onSelectElements={(elemIds, desc) => {
+          setSelectedElemIds(elemIds);
+          setSelectedNodeIds([]);
+          setMode('select');
+          setStatusHint(
+            elemIds.length > 0
+              ? `Zaznaczono ${elemIds.length} ${elemIds.length === 1 ? 'pręt' : elemIds.length < 5 ? 'pręty' : 'prętów'} według ${desc}`
+              : `Brak prętów spełniających kryterium (${desc})`
+          );
+        }}
+      />
     </div>
   );
 }

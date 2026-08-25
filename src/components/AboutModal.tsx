@@ -1,4 +1,5 @@
 import React from 'react';
+import logoImg from '../logo3d64.png';
 
 interface AboutModalProps {
   isOpen: boolean;
@@ -88,14 +89,16 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: 'var(--accent)',
-                fontWeight: 800,
-                fontSize: '20px',
-                fontFamily: 'var(--mono)',
                 flex: '0 0 auto',
+                overflow: 'hidden',
+                padding: '6px',
               }}
             >
-              3D
+              <img
+                src={logoImg}
+                alt="Materia 3D"
+                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+              />
             </div>
             <div>
               <div style={{ fontSize: '17px', fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.01em' }}>

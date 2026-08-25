@@ -52,7 +52,8 @@ export type ViewCubeHit =
   // Navigation Controls
   | 'ROLL_CCW'
   | 'ROLL_CW'
-  | 'HOME';
+  | 'HOME'
+  | 'FIT';
 
 export class RenderEngine3D {
   public camera: Camera3D = {
@@ -167,6 +168,14 @@ export class RenderEngine3D {
     return { right, up, forward };
   }
 
+  public setRotationCenter(target3D: Vec3) {
+    const oldScreenPos = this.project(target3D);
+    this.camera.target = [target3D[0], target3D[1], target3D[2]];
+    this.camera.panX = oldScreenPos.x;
+    this.camera.panY = oldScreenPos.y;
+    this.updateThreeCamera();
+  }
+
   public updateThreeCamera() {
     const { right, up, forward } = this.getCameraBasis();
     const target = this.camera.target;
@@ -216,7 +225,7 @@ export class RenderEngine3D {
     };
   }
 
-  public unprojectToZPlane(screenX: number, screenY: number, zLevel = 0): Vec3 {
+  public unprojectToXYPlane(screenX: number, screenY: number, zLevel = 0): Vec3 {
     const { right, up, forward } = this.getCameraBasis();
     const xCam = (screenX - this.camera.panX) / this.camera.scale;
     const yCam = -(screenY - this.camera.panY) / this.camera.scale;
@@ -233,6 +242,54 @@ export class RenderEngine3D {
 
     const t = (zLevel - pCam[2]) / forward[2];
     return [pCam[0] + t * forward[0], pCam[1] + t * forward[1], zLevel];
+  }
+
+  public unprojectToXZPlane(screenX: number, screenY: number, yLevel = 0): Vec3 {
+    const { right, up, forward } = this.getCameraBasis();
+    const xCam = (screenX - this.camera.panX) / this.camera.scale;
+    const yCam = -(screenY - this.camera.panY) / this.camera.scale;
+
+    const pCam: Vec3 = [
+      this.camera.target[0] + xCam * right[0] + yCam * up[0],
+      this.camera.target[1] + xCam * right[1] + yCam * up[1],
+      this.camera.target[2] + xCam * right[2] + yCam * up[2],
+    ];
+
+    if (Math.abs(forward[1]) < 1e-4) {
+      return [pCam[0], yLevel, pCam[2]];
+    }
+
+    const t = (yLevel - pCam[1]) / forward[1];
+    return [pCam[0] + t * forward[0], yLevel, pCam[2] + t * forward[2]];
+  }
+
+  public unprojectToYZPlane(screenX: number, screenY: number, xLevel = 0): Vec3 {
+    const { right, up, forward } = this.getCameraBasis();
+    const xCam = (screenX - this.camera.panX) / this.camera.scale;
+    const yCam = -(screenY - this.camera.panY) / this.camera.scale;
+
+    const pCam: Vec3 = [
+      this.camera.target[0] + xCam * right[0] + yCam * up[0],
+      this.camera.target[1] + xCam * right[1] + yCam * up[1],
+      this.camera.target[2] + xCam * right[2] + yCam * up[2],
+    ];
+
+    if (Math.abs(forward[0]) < 1e-4) {
+      return [xLevel, pCam[1], pCam[2]];
+    }
+
+    const t = (xLevel - pCam[0]) / forward[0];
+    return [xLevel, pCam[1] + t * forward[1], pCam[2] + t * forward[2]];
+  }
+
+  public unprojectToPlane(screenX: number, screenY: number, plane: 'XY' | 'XZ' | 'YZ', planeOffset = 0): Vec3 {
+    if (plane === 'XZ') return this.unprojectToXZPlane(screenX, screenY, planeOffset);
+    if (plane === 'YZ') return this.unprojectToYZPlane(screenX, screenY, planeOffset);
+    return this.unprojectToXYPlane(screenX, screenY, planeOffset);
+  }
+
+  public unprojectToZPlane(screenX: number, screenY: number, zLevel = 0): Vec3 {
+    return this.unprojectToXYPlane(screenX, screenY, zLevel);
   }
 
   public fitView(nodes: Node3D[], margin = 80) {
@@ -452,16 +509,30 @@ export class RenderEngine3D {
   // --- ViewCube Drawing & Interaction ---
   public getViewCubeCenter(): { cx: number; cy: number } {
     return {
-      cx: this.width - this.cubeMargin - this.cubeSize / 2 - 8,
-      cy: this.cubeMargin + this.cubeSize / 2 + 8,
+      cx: this.width - this.cubeMargin - this.cubeSize / 2 - 14,
+      cy: this.cubeMargin + this.cubeSize / 2 + 14,
     };
   }
 
   public drawViewCube(ctx: CanvasRenderingContext2D, hoverHit: ViewCubeHit | null) {
     const { cx, cy } = this.getViewCubeCenter();
     const rRing = this.cubeSize * 0.72;
+    const cornerOffset = 49;
+    const rBtn = 11;
 
     ctx.save();
+
+    // Helper to draw circular corner buttons outside compass
+    const drawCornerBtn = (bx: number, by: number, isHov: boolean, drawIcon: () => void) => {
+      ctx.beginPath();
+      ctx.arc(bx, by, rBtn, 0, 2 * Math.PI);
+      ctx.fillStyle = isHov ? 'rgba(37, 99, 235, 0.95)' : 'rgba(30, 41, 59, 0.88)';
+      ctx.fill();
+      ctx.strokeStyle = isHov ? '#93c5fd' : 'rgba(148, 163, 184, 0.55)';
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+      drawIcon();
+    };
 
     // 1. Compass Base Disc & Outer Ring
     ctx.beginPath();
@@ -502,7 +573,6 @@ export class RenderEngine3D {
     }
 
     // Cardinal directions on compass ring (N, E, S, W)
-    // Formula: px = cx + R * sin(ang + az), py = cy - R * cos(ang + az)
     const cardinals: { label: string; ang: number; hit: ViewCubeHit; color: string }[] = [
       { label: 'N', ang: 0, hit: 'COMPASS_N', color: '#f43f5e' },
       { label: 'E', ang: 90, hit: 'COMPASS_E', color: '#e2e8f0' },
@@ -548,99 +618,127 @@ export class RenderEngine3D {
     ctx.fillStyle = '#f43f5e';
     ctx.fill();
 
-    // 2. Home Button (Top-Left of ViewCube area)
-    const hx = cx - rRing + 3;
-    const hy = cy - rRing + 3;
+    // 2. Corner Navigation Buttons (Outside the compass circle)
+    // 2a. Top-Left: Home Button (Domek)
+    const hx = cx - cornerOffset;
+    const hy = cy - cornerOffset;
     const isHomeHov = hoverHit === 'HOME';
 
-    ctx.beginPath();
-    ctx.arc(hx, hy, 9, 0, 2 * Math.PI);
-    ctx.fillStyle = isHomeHov ? 'rgba(37, 99, 235, 0.95)' : 'rgba(30, 41, 59, 0.75)';
-    ctx.fill();
-    ctx.strokeStyle = isHomeHov ? '#93c5fd' : 'rgba(148, 163, 184, 0.5)';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
+    drawCornerBtn(hx, hy, isHomeHov, () => {
+      ctx.beginPath();
+      // Roof peak
+      ctx.moveTo(hx, hy - 5.5);
+      ctx.lineTo(hx - 5.2, hy - 0.6);
+      ctx.lineTo(hx - 3.3, hy - 0.6);
+      ctx.lineTo(hx - 3.3, hy + 4.8);
+      ctx.lineTo(hx + 3.3, hy + 4.8);
+      ctx.lineTo(hx + 3.3, hy - 0.6);
+      ctx.lineTo(hx + 5.2, hy - 0.6);
+      ctx.closePath();
+      ctx.fillStyle = isHomeHov ? '#ffffff' : '#f1f5f9';
+      ctx.fill();
 
-    // House icon
-    ctx.beginPath();
-    ctx.moveTo(hx, hy - 4.5);
-    ctx.lineTo(hx - 4.2, hy - 0.5);
-    ctx.lineTo(hx - 2.8, hy - 0.5);
-    ctx.lineTo(hx - 2.8, hy + 3.8);
-    ctx.lineTo(hx + 2.8, hy + 3.8);
-    ctx.lineTo(hx + 2.8, hy - 0.5);
-    ctx.lineTo(hx + 4.2, hy - 0.5);
-    ctx.closePath();
-    ctx.fillStyle = isHomeHov ? '#ffffff' : '#e2e8f0';
-    ctx.fill();
+      // Door cutout
+      ctx.beginPath();
+      ctx.rect(hx - 1.2, hy + 1.2, 2.4, 3.6);
+      ctx.fillStyle = isHomeHov ? 'rgba(37, 99, 235, 0.95)' : 'rgba(30, 41, 59, 0.88)';
+      ctx.fill();
+    });
 
-    // 3. Roll Buttons (90° CCW and 90° CW in plane)
-    const rollRadius = rRing + 6;
-    const rollAngleOffset = 0.45;
+    // 2b. Top-Right: Fit Button (Dopasuj widok)
+    const fx = cx + cornerOffset;
+    const fy = cy - cornerOffset;
+    const isFitHov = hoverHit === 'FIT';
 
-    // Roll CCW Button (top-left)
-    const rCCWx = cx - rollRadius * Math.sin(rollAngleOffset);
-    const rCCWy = cy - rollRadius * Math.cos(rollAngleOffset);
+    drawCornerBtn(fx, fy, isFitHov, () => {
+      ctx.strokeStyle = isFitHov ? '#ffffff' : '#f1f5f9';
+      ctx.lineWidth = 1.4;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      const d = 4.8;
+      const arm = 2.4;
+
+      ctx.beginPath();
+      // Top-Left corner bracket
+      ctx.moveTo(fx - d, fy - d + arm);
+      ctx.lineTo(fx - d, fy - d);
+      ctx.lineTo(fx - d + arm, fy - d);
+
+      // Top-Right corner bracket
+      ctx.moveTo(fx + d - arm, fy - d);
+      ctx.lineTo(fx + d, fy - d);
+      ctx.lineTo(fx + d, fy - d + arm);
+
+      // Bottom-Left corner bracket
+      ctx.moveTo(fx - d, fy + d - arm);
+      ctx.lineTo(fx - d, fy + d);
+      ctx.lineTo(fx - d + arm, fy + d);
+
+      // Bottom-Right corner bracket
+      ctx.moveTo(fx + d - arm, fy + d);
+      ctx.lineTo(fx + d, fy + d);
+      ctx.lineTo(fx + d, fy + d - arm);
+      ctx.stroke();
+
+      // Center dot
+      ctx.beginPath();
+      ctx.arc(fx, fy, 1.2, 0, 2 * Math.PI);
+      ctx.fillStyle = isFitHov ? '#ffffff' : '#f1f5f9';
+      ctx.fill();
+    });
+
+    // 2c. Bottom-Left: Roll CCW Button (Obróć w lewo)
+    const rCCWx = cx - cornerOffset;
+    const rCCWy = cy + cornerOffset;
     const isCCWHov = hoverHit === 'ROLL_CCW';
 
-    ctx.beginPath();
-    ctx.arc(rCCWx, rCCWy, 7.5, 0, 2 * Math.PI);
-    ctx.fillStyle = isCCWHov ? 'rgba(37, 99, 235, 0.95)' : 'rgba(30, 41, 59, 0.65)';
-    ctx.fill();
-    ctx.strokeStyle = isCCWHov ? '#93c5fd' : 'rgba(148, 163, 184, 0.35)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    drawCornerBtn(rCCWx, rCCWy, isCCWHov, () => {
+      ctx.save();
+      ctx.translate(rCCWx, rCCWy);
+      ctx.beginPath();
+      ctx.arc(0, 0, 4.8, Math.PI * 0.25, Math.PI * 1.6);
+      ctx.strokeStyle = isCCWHov ? '#ffffff' : '#f1f5f9';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
 
-    // Draw CCW Arrow
-    ctx.save();
-    ctx.translate(rCCWx, rCCWy);
-    ctx.beginPath();
-    ctx.arc(0, 0, 3.8, Math.PI * 0.2, Math.PI * 1.6);
-    ctx.strokeStyle = isCCWHov ? '#ffffff' : '#cbd5e1';
-    ctx.lineWidth = 1.3;
-    ctx.stroke();
-    // Arrow head
-    ctx.beginPath();
-    ctx.moveTo(-3.8, -1.8);
-    ctx.lineTo(-1.8, -4.2);
-    ctx.lineTo(-4.8, -4.6);
-    ctx.closePath();
-    ctx.fillStyle = isCCWHov ? '#ffffff' : '#cbd5e1';
-    ctx.fill();
-    ctx.restore();
+      // Arrowhead
+      ctx.beginPath();
+      ctx.moveTo(-5.0, -2.0);
+      ctx.lineTo(-2.2, -5.4);
+      ctx.lineTo(-6.0, -5.8);
+      ctx.closePath();
+      ctx.fillStyle = isCCWHov ? '#ffffff' : '#f1f5f9';
+      ctx.fill();
+      ctx.restore();
+    });
 
-    // Roll CW Button (top-right)
-    const rCWx = cx + rollRadius * Math.sin(rollAngleOffset);
-    const rCWy = cy - rollRadius * Math.cos(rollAngleOffset);
+    // 2d. Bottom-Right: Roll CW Button (Obróć w prawo)
+    const rCWx = cx + cornerOffset;
+    const rCWy = cy + cornerOffset;
     const isCWHov = hoverHit === 'ROLL_CW';
 
-    ctx.beginPath();
-    ctx.arc(rCWx, rCWy, 7.5, 0, 2 * Math.PI);
-    ctx.fillStyle = isCWHov ? 'rgba(37, 99, 235, 0.95)' : 'rgba(30, 41, 59, 0.65)';
-    ctx.fill();
-    ctx.strokeStyle = isCWHov ? '#93c5fd' : 'rgba(148, 163, 184, 0.35)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    drawCornerBtn(rCWx, rCWy, isCWHov, () => {
+      ctx.save();
+      ctx.translate(rCWx, rCWy);
+      ctx.beginPath();
+      ctx.arc(0, 0, 4.8, -Math.PI * 0.6, Math.PI * 0.75);
+      ctx.strokeStyle = isCWHov ? '#ffffff' : '#f1f5f9';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
 
-    // Draw CW Arrow
-    ctx.save();
-    ctx.translate(rCWx, rCWy);
-    ctx.beginPath();
-    ctx.arc(0, 0, 3.8, -Math.PI * 0.6, Math.PI * 0.8);
-    ctx.strokeStyle = isCWHov ? '#ffffff' : '#cbd5e1';
-    ctx.lineWidth = 1.3;
-    ctx.stroke();
-    // Arrow head
-    ctx.beginPath();
-    ctx.moveTo(3.8, -1.8);
-    ctx.lineTo(1.8, -4.2);
-    ctx.lineTo(4.8, -4.6);
-    ctx.closePath();
-    ctx.fillStyle = isCWHov ? '#ffffff' : '#cbd5e1';
-    ctx.fill();
-    ctx.restore();
+      // Arrowhead
+      ctx.beginPath();
+      ctx.moveTo(5.0, -2.0);
+      ctx.lineTo(2.2, -5.4);
+      ctx.lineTo(6.0, -5.8);
+      ctx.closePath();
+      ctx.fillStyle = isCWHov ? '#ffffff' : '#f1f5f9';
+      ctx.fill();
+      ctx.restore();
+    });
 
-    // 4. 3D Mini Cube Projection & Shading
+    // 3. 3D Mini Cube Projection & Shading
     const s = this.cubeSize * 0.34;
     const { right, up, forward } = this.getCameraBasis();
 
@@ -794,22 +892,29 @@ export class RenderEngine3D {
     const { cx, cy } = this.getViewCubeCenter();
     const dist = Math.hypot(px - cx, py - cy);
     const rRing = this.cubeSize * 0.72;
+    const cornerOffset = 49;
+    const hitRadius = 13;
 
-    // 1. Home button test
-    const hx = cx - rRing + 3;
-    const hy = cy - rRing + 3;
-    if (Math.hypot(px - hx, py - hy) <= 10) return 'HOME';
+    // 1. Four Corner Buttons Test
+    // 1a. Top-Left: Home
+    const hx = cx - cornerOffset;
+    const hy = cy - cornerOffset;
+    if (Math.hypot(px - hx, py - hy) <= hitRadius) return 'HOME';
 
-    // 2. Roll CCW & CW buttons test
-    const rollRadius = rRing + 6;
-    const rollAngleOffset = 0.45;
-    const rCCWx = cx - rollRadius * Math.sin(rollAngleOffset);
-    const rCCWy = cy - rollRadius * Math.cos(rollAngleOffset);
-    if (Math.hypot(px - rCCWx, py - rCCWy) <= 9) return 'ROLL_CCW';
+    // 1b. Top-Right: Fit
+    const fx = cx + cornerOffset;
+    const fy = cy - cornerOffset;
+    if (Math.hypot(px - fx, py - fy) <= hitRadius) return 'FIT';
 
-    const rCWx = cx + rollRadius * Math.sin(rollAngleOffset);
-    const rCWy = cy - rollRadius * Math.cos(rollAngleOffset);
-    if (Math.hypot(px - rCWx, py - rCWy) <= 9) return 'ROLL_CW';
+    // 1c. Bottom-Left: Roll CCW
+    const rCCWx = cx - cornerOffset;
+    const rCCWy = cy + cornerOffset;
+    if (Math.hypot(px - rCCWx, py - rCCWy) <= hitRadius) return 'ROLL_CCW';
+
+    // 1d. Bottom-Right: Roll CW
+    const rCWx = cx + cornerOffset;
+    const rCWy = cy + cornerOffset;
+    if (Math.hypot(px - rCWx, py - rCWy) <= hitRadius) return 'ROLL_CW';
 
     // If outside interactive ring perimeter + margin
     if (dist > rRing + 8) return null;

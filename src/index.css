@@ -76,6 +76,34 @@ html[data-theme="dark"] {
   --axis-color: #3d5164;
 }
 
+option {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* Themed Scrollbars */
+#sidebarScroll::-webkit-scrollbar,
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+#sidebarScroll::-webkit-scrollbar-track,
+::-webkit-scrollbar-track {
+  background: var(--sidebar-bg);
+}
+
+#sidebarScroll::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-thumb {
+  background: var(--surface-border);
+  border-radius: 4px;
+}
+
+#sidebarScroll::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -416,16 +444,17 @@ html, body {
   }
   #canvasWrap {
     flex: 1 1 auto;
-    min-height: 140px;
+    min-height: 120px;
   }
   #sidebar {
     width: 100%;
     flex: 0 0 auto;
-    height: 44vh;
+    height: var(--panel-height, 44vh);
     min-height: 20px;
-    max-height: 62vh;
+    max-height: 88vh;
     border-left: none;
     border-top: none;
+    overflow: hidden;
   }
   #sidebarScroll {
     -webkit-overflow-scrolling: touch;
@@ -436,15 +465,20 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    flex: 0 0 auto;
+    flex: 0 0 20px;
     height: 20px;
+    box-sizing: border-box;
     touch-action: none;
-    cursor: grab;
     cursor: row-resize;
     -webkit-user-select: none;
     user-select: none;
     background: var(--sidebar-bg);
     border-top: 1px solid var(--sidebar-border);
+    transition: background 0.1s;
+  }
+  #panelHandle:hover,
+  #panelHandle:active {
+    background: var(--surface);
   }
   .panel-grip {
     width: 38px;
@@ -454,10 +488,12 @@ html, body {
   }
   #statusbar {
     touch-action: none;
-    cursor: grab;
     cursor: row-resize;
     -webkit-user-select: none;
     user-select: none;
+  }
+  #statusbar:active {
+    background: var(--surface-2);
   }
   .tb-btn span {
     display: none;
@@ -1009,6 +1045,22 @@ table.probetable tr.section-head td {
   border-radius: 7px;
   font-size: 11.5px;
   margin-bottom: 8px;
+}
+
+html[data-theme="dark"] .warn {
+  background: rgba(234, 88, 12, 0.16);
+  border: 1px solid rgba(251, 146, 60, 0.35);
+  color: #fdba74;
+}
+
+html[data-theme="dark"] button.mini.danger:hover {
+  background: rgba(220, 38, 38, 0.20);
+  border-color: var(--danger);
+}
+
+html[data-theme="dark"] .listitem .del:hover {
+  color: #f87171;
+  background: rgba(220, 38, 38, 0.20);
 }
 
 .collapsible-head {
