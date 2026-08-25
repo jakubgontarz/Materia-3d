@@ -5,7 +5,7 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
-    base: './',
+    base: 'Materia-3d',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
