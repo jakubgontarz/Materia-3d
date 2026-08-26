@@ -37,6 +37,7 @@ export interface SceneRenderOptions {
   selectedElemIds: number[];
   hoverNodeId: number | null;
   hoverElemId: number | null;
+  mode?: 'select' | 'addBar';
   probe: { elId: number | null; t: number };
   theme: 'light' | 'dark';
   accentColor: string;
@@ -2180,9 +2181,11 @@ function drawHoverAndSelection2DOverlay(
         ctx.lineWidth = 2;
         ctx.stroke();
 
-        // Hover tag with coordinates
-        const tag = `W${n.id} (${n.x.toFixed(2)}, ${n.y.toFixed(2)}, ${n.z.toFixed(2)})`;
-        drawPillTag(ctx, p.x, p.y - 18, tag, isDark ? '#38bdf8' : '#0284c7', '#38bdf8', isDark, 11);
+        // Hover tag with coordinates (only in select mode; in addBar mode the tip with pointer is displayed instead)
+        if (options.mode !== 'addBar') {
+          const tag = `W${n.id} (${n.x.toFixed(2)}, ${n.y.toFixed(2)}, ${n.z.toFixed(2)})`;
+          drawPillTag(ctx, p.x, p.y - 18, tag, isDark ? '#38bdf8' : '#0284c7', '#38bdf8', isDark, 11);
+        }
         ctx.restore();
       }
     }

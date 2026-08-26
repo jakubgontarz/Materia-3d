@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Section, Material } from '../fem/types';
+import logoImg from '../logo3d64.png';
 
 export const ICONS = {
   select: (
@@ -53,6 +54,34 @@ export const ICONS = {
   dl: (
     <svg viewBox="0 0 24 24">
       <path d="M5 3h11l4 4v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM7 21v-8h10v8M8 3v5h8V3M10 5v2" />
+    </svg>
+  ),
+  saveAs: (
+    <svg viewBox="0 0 24 24">
+      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+      <polyline points="17 21 17 13 7 13 7 21" />
+      <polyline points="7 3 7 8 15 8" />
+    </svg>
+  ),
+  importJson: (
+    <svg viewBox="0 0 24 24">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="17 8 12 3 7 8" />
+      <line x1="12" y1="3" x2="12" y2="15" />
+    </svg>
+  ),
+  exportJson: (
+    <svg viewBox="0 0 24 24">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  ),
+  info: (
+    <svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="16" x2="12" y2="12" />
+      <line x1="12" y1="8" x2="12.01" y2="8" />
     </svg>
   ),
   undo: (
@@ -216,11 +245,50 @@ export const ICONS = {
       <path d="M11 8v6M8 11h6" />
     </svg>
   ),
+  selReplace: (
+    <svg viewBox="0 0 24 24">
+      <polygon points="3 3 10.07 19.97 12.58 11.58 21 10.07 3 3" />
+    </svg>
+  ),
+  selAdd: (
+    <svg viewBox="0 0 24 24">
+      <polygon points="3 3 10.07 19.97 12.58 11.58 21 10.07 3 3" />
+      <line x1="15" y1="17" x2="21" y2="17" strokeWidth="2.5" />
+      <line x1="18" y1="14" x2="18" y2="20" strokeWidth="2.5" />
+    </svg>
+  ),
+  selSubtract: (
+    <svg viewBox="0 0 24 24">
+      <polygon points="3 3 10.07 19.97 12.58 11.58 21 10.07 3 3" />
+      <line x1="15" y1="17" x2="21" y2="17" strokeWidth="2.5" />
+    </svg>
+  ),
+  selToggle: (
+    <svg viewBox="0 0 24 24">
+      <polygon points="3 3 10.07 19.97 12.58 11.58 21 10.07 3 3" />
+      <line x1="15" y1="15" x2="21" y2="15" strokeWidth="2.5" />
+      <line x1="18" y1="12" x2="18" y2="18" strokeWidth="2.5" />
+      <line x1="15" y1="21" x2="21" y2="21" strokeWidth="2.5" />
+    </svg>
+  ),
+  filterBy: (
+    <svg viewBox="0 0 24 24">
+      <polygon points="2 3 22 3 14 12.5 14 19 10 21 10 12.5 2 3" />
+      <line x1="17" y1="15" x2="22" y2="15" strokeWidth="2.2" />
+      <line x1="17" y1="18" x2="22" y2="18" strokeWidth="2.2" />
+    </svg>
+  ),
 };
 
 interface ToolbarProps {
   mode: 'select' | 'addBar';
   setMode: (m: 'select' | 'addBar') => void;
+  navMode?: string;
+  setNavMode?: (m: any) => void;
+  effectiveSelMode?: 'replace' | 'add' | 'subtract' | 'toggle';
+  setMobileSelMode?: (m: 'replace' | 'add' | 'subtract' | 'toggle') => void;
+  onOpenSelectBy?: () => void;
+  selectByOpen?: boolean;
   isSolved: boolean;
   onSolveOrBack: () => void;
   onUndo: () => void;
@@ -229,9 +297,12 @@ interface ToolbarProps {
   canRedo: boolean;
   onNewModel: () => void;
   onSaveModel: () => void;
+  onSaveAsModel: () => void;
   onLoadModel: () => void;
+  onImportJson: () => void;
+  onExportJson: () => void;
   onOpenOptions: () => void;
-  onOpenAbout?: () => void;
+  onOpenAbout: () => void;
   snapEnabled: boolean;
   setSnapEnabled: (v: boolean) => void;
   allowNewNodesInBarMode: boolean;
@@ -248,6 +319,12 @@ interface ToolbarProps {
 export const Toolbar: React.FC<ToolbarProps> = ({
   mode,
   setMode,
+  navMode = 'orbit',
+  setNavMode,
+  effectiveSelMode = 'replace',
+  setMobileSelMode,
+  onOpenSelectBy,
+  selectByOpen = false,
   isSolved,
   onSolveOrBack,
   onUndo,
@@ -256,7 +333,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   canRedo,
   onNewModel,
   onSaveModel,
+  onSaveAsModel,
   onLoadModel,
+  onImportJson,
+  onExportJson,
   onOpenOptions,
   onOpenAbout,
   snapEnabled,
@@ -271,9 +351,24 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   setDefaultMaterialId,
   snapSize = 0.5,
 }) => {
-  const showSnapToggle = mode === 'addBar' || mode === 'select';
-  const showNewNodesToggle = mode === 'addBar';
-  const hasToggles = showSnapToggle || showNewNodesToggle;
+  const [menuOpen, setMenuOpen] = useState<boolean>(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    if (menuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('touchstart', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [menuOpen]);
 
   return (
     <div id="toolbar">
@@ -290,20 +385,146 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         </button>
       </div>
 
-      {/* Grupa 1: Nowy, Wczytaj, Zapisz, Cofnij, Ponów, Opcje */}
-      <div className="tb-group">
-        <button className="tb-btn" id="btnNew" onClick={onNewModel} title="Nowy model">
-          {ICONS.neu}
-          <span>Nowy</span>
-        </button>
-        <button className="tb-btn" id="btnImport" onClick={onLoadModel} title="Wczytaj model">
-          {ICONS.ul}
-          <span>Wczytaj</span>
-        </button>
-        <button className="tb-btn" id="btnExport" onClick={onSaveModel} title="Zapisz model">
-          {ICONS.dl}
-          <span>Zapisz</span>
-        </button>
+      {/* Główna grupa: Menu z logo, Cofnij, Ponów, Zaznacz, Rysuj */}
+      <div className="tb-group" style={{ position: 'relative' }}>
+        {/* Przycisk Menu z logo */}
+        <div style={{ position: 'relative', display: 'inline-flex' }} ref={menuRef}>
+          <button
+            className={`tb-btn ${menuOpen ? 'active' : ''}`}
+            id="btnMenu"
+            onClick={() => setMenuOpen(!menuOpen)}
+            title="Główne menu programu"
+            style={{ minWidth: '46px' }}
+          >
+            <img
+              src={logoImg}
+              alt="Menu"
+              style={{
+                width: '18px',
+                height: '18px',
+                objectFit: 'contain',
+                filter: menuOpen ? 'brightness(1.2)' : 'none',
+              }}
+            />
+            <span>Menu</span>
+          </button>
+
+          {/* Rozwijane Menu */}
+          {menuOpen && (
+            <div
+              className="toolbar-dropdown-menu"
+              style={{
+                position: 'absolute',
+                top: '100%',
+                left: 0,
+                marginTop: '6px',
+                background: 'var(--sidebar-bg)',
+                border: '1px solid var(--sidebar-border)',
+                borderRadius: '10px',
+                padding: '6px',
+                minWidth: '210px',
+                boxShadow: '0 12px 30px rgba(0, 0, 0, 0.45)',
+                zIndex: 1000,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '2px',
+              }}
+            >
+              <button
+                className="menu-item-btn"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onNewModel();
+                }}
+              >
+                <span className="menu-item-icon">{ICONS.neu}</span>
+                <span className="menu-item-text">Nowy</span>
+              </button>
+
+              <button
+                className="menu-item-btn"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onLoadModel();
+                }}
+              >
+                <span className="menu-item-icon">{ICONS.ul}</span>
+                <span className="menu-item-text">Wczytaj</span>
+              </button>
+
+              <button
+                className="menu-item-btn"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onSaveModel();
+                }}
+              >
+                <span className="menu-item-icon">{ICONS.dl}</span>
+                <span className="menu-item-text">Zapisz</span>
+              </button>
+
+              <button
+                className="menu-item-btn"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onSaveAsModel();
+                }}
+              >
+                <span className="menu-item-icon">{ICONS.saveAs}</span>
+                <span className="menu-item-text">Zapisz jako</span>
+              </button>
+
+              <div style={{ height: '1px', background: 'var(--surface-border-soft)', margin: '4px 2px' }} />
+
+              <button
+                className="menu-item-btn"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onImportJson();
+                }}
+              >
+                <span className="menu-item-icon">{ICONS.importJson}</span>
+                <span className="menu-item-text">Importuj json</span>
+              </button>
+
+              <button
+                className="menu-item-btn"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onExportJson();
+                }}
+              >
+                <span className="menu-item-icon">{ICONS.exportJson}</span>
+                <span className="menu-item-text">Eksportuj json</span>
+              </button>
+
+              <div style={{ height: '1px', background: 'var(--surface-border-soft)', margin: '4px 2px' }} />
+
+              <button
+                className="menu-item-btn"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onOpenOptions();
+                }}
+              >
+                <span className="menu-item-icon">{ICONS.gear}</span>
+                <span className="menu-item-text">Opcje</span>
+              </button>
+
+              <button
+                className="menu-item-btn"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onOpenAbout();
+                }}
+              >
+                <span className="menu-item-icon">{ICONS.info}</span>
+                <span className="menu-item-text">O programie</span>
+              </button>
+            </div>
+          )}
+        </div>
+
         <button className="tb-btn" id="btnUndo" onClick={onUndo} disabled={!canUndo} title="Cofnij (Ctrl+Z)">
           {ICONS.undo}
           <span>Cofnij</span>
@@ -312,36 +533,85 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           {ICONS.redo}
           <span>Ponów</span>
         </button>
-        <button className="tb-btn" id="btnOptions" onClick={onOpenOptions} title="Opcje programu">
-          {ICONS.gear}
-          <span>Opcje</span>
+        <div className="tb-sep" />
+        <button
+          className={`tb-btn ${mode === 'select' ? 'active' : ''}`}
+          id="btnModeSelect"
+          onClick={() => setMode('select')}
+          title="Zaznacz / przesuń (V)"
+        >
+          {ICONS.select}
+          <span>Zaznacz</span>
+        </button>
+        <button
+          className={`tb-btn ${mode === 'addBar' ? 'active' : ''}`}
+          id="btnModeDraw"
+          onClick={() => setMode('addBar')}
+          title="Rysuj pręt / węzeł (R / B)"
+        >
+          {ICONS.bar}
+          <span>Rysuj</span>
         </button>
       </div>
 
-      {/* Klaster 3 grup (Zaznacz/Rysuj + Przekrój/Materiał + Przełączniki) — przenoszą się razem jako jeden blok */}
-      <div className="tb-cluster">
-        {/* Grupa 2: Zaznacz i Rysuj */}
-        <div className="tb-group">
+      {/* Kontekstowa grupa narzędzi dla aktywnego trybu (wyświetlana w toolbarze na ekranach poziomych) */}
+      {mode === 'select' && (
+        <div className="tb-group tb-group-contextual">
           <button
-            className={`tb-btn ${mode === 'select' ? 'active' : ''}`}
-            onClick={() => setMode('select')}
-            title="Zaznacz / przesuń (V)"
+            className={`tb-btn ${navMode === 'boxSelect' ? 'active' : ''}`}
+            onClick={() => setNavMode?.(navMode === 'boxSelect' ? 'orbit' : 'boxSelect')}
+            title="Zaznaczanie ramką / obszarem (Ramka)"
           >
-            {ICONS.select}
-            <span>Zaznacz</span>
+            {ICONS.boxselect}
+            <span>Ramka</span>
+          </button>
+          <div className="tb-sep" />
+          <button
+            className={`tb-btn ${effectiveSelMode === 'replace' ? 'active' : ''}`}
+            onClick={() => setMobileSelMode?.('replace')}
+            title="Wybór zwykły (Zastąp zaznaczenie)"
+          >
+            {ICONS.selReplace}
+            <span>Zwykły</span>
           </button>
           <button
-            className={`tb-btn ${mode === 'addBar' ? 'active' : ''}`}
-            onClick={() => setMode('addBar')}
-            title="Rysuj pręt / węzeł (R / B)"
+            className={`tb-btn ${effectiveSelMode === 'add' ? 'active' : ''}`}
+            onClick={() => setMobileSelMode?.('add')}
+            title="Dodaj do zaznaczenia (Ctrl)"
           >
-            {ICONS.bar}
-            <span>Rysuj</span>
+            {ICONS.selAdd}
+            <span>Dodaj</span>
+          </button>
+          <button
+            className={`tb-btn ${effectiveSelMode === 'subtract' ? 'active' : ''}`}
+            onClick={() => setMobileSelMode?.('subtract')}
+            title="Odejmij od zaznaczenia (Shift)"
+          >
+            {ICONS.selSubtract}
+            <span>Odejmij</span>
+          </button>
+          <button
+            className={`tb-btn ${effectiveSelMode === 'toggle' ? 'active' : ''}`}
+            onClick={() => setMobileSelMode?.('toggle')}
+            title="Odwróć zaznaczenie (Ctrl+Shift)"
+          >
+            {ICONS.selToggle}
+            <span>Odwróć</span>
+          </button>
+          <div className="tb-sep" />
+          <button
+            className={`tb-btn ${selectByOpen ? 'active' : ''}`}
+            onClick={onOpenSelectBy}
+            title="Zaznacz według kryteriów... (długości, profilu, materiału)"
+          >
+            {ICONS.filterBy}
+            <span>Zaznacz wg</span>
           </button>
         </div>
+      )}
 
-        {/* Grupa 3: Przekrój i Materiał */}
-        <div className="tb-group" style={!hasToggles ? { borderRight: 'none' } : undefined}>
+      {mode === 'addBar' && (
+        <div className="tb-group tb-group-contextual">
           <span className="tb-label">Przekrój</span>
           <select
             id="defSectionSel"
@@ -355,7 +625,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               </option>
             ))}
           </select>
-          <span className="tb-label">Materiał</span>
+          <span className="tb-label" style={{ marginLeft: '4px' }}>Materiał</span>
           <select
             id="defMaterialSel"
             className="tb-select"
@@ -368,36 +638,27 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               </option>
             ))}
           </select>
+          <div className="tb-sep" />
+          <button
+            className={`tb-btn ${snapEnabled ? 'active' : ''}`}
+            id="snapToggleBtn"
+            onClick={() => setSnapEnabled(!snapEnabled)}
+            title={`Przyciąganie do siatki (${snapSize} m)`}
+          >
+            {ICONS.grid}
+            <span>Przyciągaj</span>
+          </button>
+          <button
+            className={`tb-btn ${allowNewNodesInBarMode ? 'active' : ''}`}
+            id="newNodesToggleBtn"
+            onClick={() => setAllowNewNodesInBarMode(!allowNewNodesInBarMode)}
+            title="Twórz nowe węzły podczas rysowania pręta (Autowęzły)"
+          >
+            {ICONS.node}
+            <span>Autowęzły</span>
+          </button>
         </div>
-
-        {/* Grupa 4: Przełączniki (Przyciągaj, Auto-węzeł) */}
-        {hasToggles && (
-          <div className="tb-group" style={{ borderRight: 'none' }}>
-            {showSnapToggle && (
-              <button
-                className={`tb-btn ${snapEnabled ? 'active' : ''}`}
-                id="snapToggleBtn"
-                onClick={() => setSnapEnabled(!snapEnabled)}
-                title={`Przyciąganie do siatki (${snapSize} m)`}
-              >
-                {ICONS.grid}
-                <span>Przyciągaj</span>
-              </button>
-            )}
-            {showNewNodesToggle && (
-              <button
-                className={`tb-btn ${allowNewNodesInBarMode ? 'active' : ''}`}
-                id="newNodesToggleBtn"
-                onClick={() => setAllowNewNodesInBarMode(!allowNewNodesInBarMode)}
-                title="Twórz nowe węzły podczas rysowania pręta"
-              >
-                {ICONS.node}
-                <span>Auto-węzeł</span>
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 };

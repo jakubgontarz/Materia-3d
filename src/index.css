@@ -224,7 +224,8 @@ html, body {
 
 .tb-sep {
   width: 1px;
-  align-self: stretch;
+  height: 24px;
+  align-self: center;
   background: #364353;
   margin: 0 4px;
 }
@@ -247,6 +248,37 @@ html, body {
   letter-spacing: 0.04em;
   margin-right: 2px;
   vertical-align: middle;
+}
+
+.tb-group-contextual {
+  display: inline-flex;
+}
+
+@media (max-width: 1160px), (orientation: portrait) {
+  .tb-group-contextual {
+    display: none !important;
+  }
+}
+
+/* Contextual top-left overlay on canvas (shown in portrait / narrow mode) */
+#contextualTopOverlay {
+  display: none;
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  right: 140px; /* leaves safe space for navigation cube and compass on top-right */
+  max-width: calc(100% - 150px);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  z-index: 10;
+  user-select: none;
+}
+
+@media (max-width: 1160px), (orientation: portrait) {
+  #contextualTopOverlay {
+    display: flex;
+  }
 }
 
 /* ---------- Main layout ---------- */
@@ -413,6 +445,30 @@ html, body {
 
 .zbtn.active svg {
   stroke: #fff;
+}
+
+.zselect {
+  height: 32px;
+  border-radius: 7px;
+  border: 1px solid var(--sidebar-border);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 0 8px;
+  cursor: pointer;
+  max-width: 125px;
+  outline: none;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.zselect:hover {
+  border-color: var(--accent);
+}
+
+.zselect:focus {
+  border-color: var(--accent);
 }
 
 /* ---------- Sidebar ---------- */
@@ -1077,3 +1133,70 @@ hr.sep {
   border-top: 1px solid var(--surface-border-soft);
   margin: 10px 0;
 }
+
+/* Dropdown Menu styling */
+.toolbar-dropdown-menu {
+  animation: fadeInMenu 0.12s ease-out;
+}
+
+@keyframes fadeInMenu {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.menu-item-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-family: var(--sans);
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  user-select: none;
+}
+
+.menu-item-btn:hover {
+  background: var(--surface-2);
+  color: var(--accent-light, var(--accent));
+}
+
+.menu-item-btn .menu-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.menu-item-btn:hover .menu-item-icon {
+  color: var(--accent-light, var(--accent));
+}
+
+.menu-item-btn .menu-item-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+}
+
+.menu-item-btn .menu-item-text {
+  flex: 1 1 auto;
+}
+

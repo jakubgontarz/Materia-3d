@@ -1,5 +1,4 @@
 import React from 'react';
-import logoImg from '../logo3d64.png';
 
 export const APP_ACCENTS: Record<
   string,
@@ -30,7 +29,6 @@ interface OptionsModalProps {
   setIncludeSelfWeight: (v: boolean) => void;
   snapSize: number;
   setSnapSize: (v: number) => void;
-  onOpenAbout?: () => void;
 }
 
 export const OptionsModal: React.FC<OptionsModalProps> = ({
@@ -48,7 +46,6 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
   setIncludeSelfWeight,
   snapSize,
   setSnapSize,
-  onOpenAbout,
 }) => {
   if (!isOpen) return null;
 
@@ -266,35 +263,6 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
               Określa krok (w metrach), do jakiego będą dociągane węzły przy włączonym przycisku „Przyciągaj”.
             </div>
           </div>
-
-          {onOpenAbout && (
-            <div style={{ marginTop: '18px', paddingTop: '14px', borderTop: '1px solid var(--sidebar-border)' }}>
-              <button
-                className="mini"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  width: '100%',
-                  padding: '8px 12px',
-                  fontSize: '12.5px',
-                  fontWeight: 600,
-                }}
-                onClick={() => {
-                  onClose();
-                  onOpenAbout();
-                }}
-              >
-                <img
-                  src={logoImg}
-                  alt="Materia 3D"
-                  style={{ width: '18px', height: '18px', objectFit: 'contain' }}
-                />
-                O programie Materia 3D
-              </button>
-            </div>
-          )}
         </div>
       </div>
     </div>

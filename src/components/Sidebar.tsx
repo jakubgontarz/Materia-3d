@@ -133,18 +133,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [analysisCollapsed, setAnalysisCollapsed] = useState(false);
   const [libraryCollapsed, setLibraryCollapsed] = useState(false);
 
-  // Form states for inline operations (Move, Rotate, Mirror, Split, Copy)
+  // Form states for unified operations in Properties (Move, Copy, Split)
   const [moveFormOpen, setMoveFormOpen] = useState(false);
-  const [moveDx, setMoveDx] = useState(0);
+  const [moveWithCopy, setMoveWithCopy] = useState(false);
+  const [moveConnect, setMoveConnect] = useState(false);
+  const [moveRepeat, setMoveRepeat] = useState(1);
+  const [moveDx, setMoveDx] = useState(2);
   const [moveDy, setMoveDy] = useState(0);
   const [moveDz, setMoveDz] = useState(0);
 
-  const [copyFormOpen, setCopyFormOpen] = useState(false);
-  const [copyDx, setCopyDx] = useState(2);
-  const [copyDy, setCopyDy] = useState(0);
-  const [copyDz, setCopyDz] = useState(0);
-
-  const [splitFormElId, setSplitFormElId] = useState<number | '__bulk__' | null>(null);
+  const [splitFormOpen, setSplitFormOpen] = useState(false);
   const [splitMode, setSplitMode] = useState<'single' | 'multi'>('single');
   const [splitT, setSplitT] = useState(0.5);
   const [splitN, setSplitN] = useState(2);
@@ -240,95 +238,170 @@ export const Sidebar: React.FC<SidebarProps> = ({
     onInvalidateResults();
   };
 
-  const deleteSelectedNodes = () => {
+  // Unified Delete Selected (all selected nodes & elements)
+  const handleDeleteSelected = () => {
+    const nodeIdsToDelete = new Set(selectedNodeIds);
+    const elemIdsToDelete = new Set(selectedElemIds);
+
     setElements((prev) =>
-      prev.filter((e) => !selectedNodeIds.includes(e.n1) && !selectedNodeIds.includes(e.n2))
+      prev.filter(
+        (e) =>
+          !elemIdsToDelete.has(e.id) &&
+          !nodeIdsToDelete.has(e.n1) &&
+          !nodeIdsToDelete.has(e.n2)
+      )
     );
-    setNodes((prev) => prev.filter((n) => !selectedNodeIds.includes(n.id)));
+    setNodes((prev) => prev.filter((n) => !nodeIdsToDelete.has(n.id)));
     setSelectedNodeIds([]);
     setSelectedElemIds([]);
+    setMoveFormOpen(false);
+    setSplitFormOpen(false);
     onInvalidateResults();
   };
 
-  const deleteSelectedElements = () => {
-    setElements((prev) => prev.filter((e) => !selectedElemIds.includes(e.id)));
-    setSelectedElemIds([]);
-    onInvalidateResults();
-  };
-
-  // Move action
-  const confirmMove = () => {
-    if (!selectedNodeIds.length) {
+  // Unified Move / Copy action
+  const confirmMoveOrCopy = () => {
+    const hasNodes = selectedNodeIds.length > 0;
+    const hasElements = selectedElemIds.length > 0;
+    if (!hasNodes && !hasElements) {
       setMoveFormOpen(false);
       return;
     }
-    setNodes((prev) =>
-      prev.map((n) =>
-        selectedNodeIds.includes(n.id)
-          ? {
-              ...n,
-              x: Math.round((n.x + moveDx) * 1e6) / 1e6,
-              y: Math.round((n.y + moveDy) * 1e6) / 1e6,
-              z: Math.round((n.z + moveDz) * 1e6) / 1e6,
-            }
-          : n
-      )
-    );
+
+    const repeat = Math.max(1, Math.min(50, Math.round(moveRepeat || 1)));
+
+    // Pure Move (without copying)
+    if (!moveWithCopy) {
+      const allNodeIdsToMove = new Set<number>(selectedNodeIds);
+      selectedElements.forEach((el) => {
+        allNodeIdsToMove.add(el.n1);
+        allNodeIdsToMove.add(el.n2);
+      });
+
+      const totalDx = moveDx * repeat;
+      const totalDy = moveDy * repeat;
+      const totalDz = moveDz * repeat;
+
+      setNodes((prev) =>
+        prev.map((n) =>
+          allNodeIdsToMove.has(n.id)
+            ? {
+                ...n,
+                x: Math.round((n.x + totalDx) * 1e6) / 1e6,
+                y: Math.round((n.y + totalDy) * 1e6) / 1e6,
+                z: Math.round((n.z + totalDz) * 1e6) / 1e6,
+              }
+            : n
+        )
+      );
+      setMoveFormOpen(false);
+      onInvalidateResults();
+      return;
+    }
+
+    // Move With Copy (Multi-step repetition and optional connecting members)
+    const baseNodeIds = new Set<number>(selectedNodeIds);
+    selectedElements.forEach((el) => {
+      baseNodeIds.add(el.n1);
+      baseNodeIds.add(el.n2);
+    });
+
+    const baseNodes = Array.from(baseNodeIds)
+      .map((id) => getNode(id))
+      .filter((n): n is Node3D => !!n);
+
+    let nextNId = nodes.length > 0 ? Math.max(...nodes.map((n) => n.id)) + 1 : 1;
+    let nextEId = elements.length > 0 ? Math.max(...elements.map((e) => e.id)) + 1 : 1;
+
+    const newNodes: Node3D[] = [];
+    const newElements: Element3D[] = [];
+    const connectingElements: Element3D[] = [];
+
+    let prevStepNodeMap = new Map<number, number>();
+    baseNodes.forEach((n) => {
+      prevStepNodeMap.set(n.id, n.id);
+    });
+
+    const allCreatedElemIds: number[] = [];
+    const allCreatedNodeIds: number[] = [];
+
+    for (let step = 1; step <= repeat; step++) {
+      const currentStepNodeMap = new Map<number, number>();
+
+      baseNodes.forEach((origNode) => {
+        const newNodeId = nextNId++;
+        currentStepNodeMap.set(origNode.id, newNodeId);
+        allCreatedNodeIds.push(newNodeId);
+
+        const shiftedX = Math.round((origNode.x + moveDx * step) * 1e6) / 1e6;
+        const shiftedY = Math.round((origNode.y + moveDy * step) * 1e6) / 1e6;
+        const shiftedZ = Math.round((origNode.z + moveDz * step) * 1e6) / 1e6;
+
+        const newN: Node3D = {
+          ...JSON.parse(JSON.stringify(origNode)),
+          id: newNodeId,
+          x: shiftedX,
+          y: shiftedY,
+          z: shiftedZ,
+        };
+        newNodes.push(newN);
+
+        if (moveConnect) {
+          const prevNodeId = prevStepNodeMap.get(origNode.id);
+          if (prevNodeId != null) {
+            const connElId = nextEId++;
+            connectingElements.push({
+              id: connElId,
+              n1: prevNodeId,
+              n2: newNodeId,
+              sectionId: defaultSectionId,
+              materialId: defaultMaterialId,
+              rollAngle: 0,
+              hinges: {},
+              q: null,
+              thermal: null,
+            });
+            allCreatedElemIds.push(connElId);
+          }
+        }
+      });
+
+      selectedElements.forEach((origEl) => {
+        const newElemId = nextEId++;
+        allCreatedElemIds.push(newElemId);
+
+        const n1Mapped = currentStepNodeMap.get(origEl.n1)!;
+        const n2Mapped = currentStepNodeMap.get(origEl.n2)!;
+
+        const newEl: Element3D = {
+          ...JSON.parse(JSON.stringify(origEl)),
+          id: newElemId,
+          n1: n1Mapped,
+          n2: n2Mapped,
+        };
+        newElements.push(newEl);
+      });
+
+      prevStepNodeMap = currentStepNodeMap;
+    }
+
+    setNodes((prev) => [...prev, ...newNodes]);
+    setElements((prev) => [...prev, ...newElements, ...connectingElements]);
+
+    if (allCreatedElemIds.length > 0) {
+      setSelectedElemIds(allCreatedElemIds);
+      setSelectedNodeIds([]);
+    } else {
+      setSelectedNodeIds(allCreatedNodeIds);
+      setSelectedElemIds([]);
+    }
+
     setMoveFormOpen(false);
     onInvalidateResults();
   };
 
-  // Copy elements action
-  const confirmCopy = () => {
-    if (!selectedElements.length) {
-      setCopyFormOpen(false);
-      return;
-    }
-    const nodeMap = new Map<number, number>();
-    const newNodes: Node3D[] = [];
-    let nextNId = nodes.length > 0 ? Math.max(...nodes.map((n) => n.id)) + 1 : 1;
-
-    selectedElements.forEach((el) => {
-      [el.n1, el.n2].forEach((nid) => {
-        if (!nodeMap.has(nid)) {
-          const oldN = getNode(nid);
-          if (oldN) {
-            const newN: Node3D = {
-              ...JSON.parse(JSON.stringify(oldN)),
-              id: nextNId,
-              x: oldN.x + copyDx,
-              y: oldN.y + copyDy,
-              z: oldN.z + copyDz,
-            };
-            nodeMap.set(nid, nextNId);
-            newNodes.push(newN);
-            nextNId++;
-          }
-        }
-      });
-    });
-
-    let nextEId = elements.length > 0 ? Math.max(...elements.map((e) => e.id)) + 1 : 1;
-    const newElements: Element3D[] = selectedElements.map((el) => {
-      const e: Element3D = {
-        ...JSON.parse(JSON.stringify(el)),
-        id: nextEId++,
-        n1: nodeMap.get(el.n1)!,
-        n2: nodeMap.get(el.n2)!,
-      };
-      return e;
-    });
-
-    setNodes((prev) => [...prev, ...newNodes]);
-    setElements((prev) => [...prev, ...newElements]);
-    setSelectedElemIds(newElements.map((e) => e.id));
-    setSelectedNodeIds([]);
-    setCopyFormOpen(false);
-    onInvalidateResults();
-  };
-
   // Split element action
-  const confirmSplit = (elId: number | '__bulk__') => {
+  const confirmSplit = (elId: number | '__bulk__' = '__bulk__') => {
     const targetEls =
       elId === '__bulk__'
         ? selectedElements
@@ -355,9 +428,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         const t = splitMode === 'single' ? splitT : i / numParts;
         const midN: Node3D = {
           id: nextNId++,
-          x: a.x + (b.x - a.x) * t,
-          y: a.y + (b.y - a.y) * t,
-          z: a.z + (b.z - a.z) * t,
+          x: Math.round((a.x + (b.x - a.x) * t) * 1e6) / 1e6,
+          y: Math.round((a.y + (b.y - a.y) * t) * 1e6) / 1e6,
+          z: Math.round((a.z + (b.z - a.z) * t) * 1e6) / 1e6,
           support: null,
           force: null,
           moment: null,
@@ -384,7 +457,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ...prev.filter((e) => !removedElemIds.has(e.id)),
       ...addedElements,
     ]);
-    setSplitFormElId(null);
+    setSplitFormOpen(false);
     setSelectedElemIds(addedElements.map((e) => e.id));
     onInvalidateResults();
   };
@@ -1064,23 +1137,242 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   aby edytować jego właściwości: podpory, obciążenia, przekrój i materiał.
                 </div>
               </div>
-            ) : selectedNodeIds.length + selectedElemIds.length > 1 ? (
+            ) : (
               <div className="panel">
-                <h3>Właściwości</h3>
-                <div className="muted">
-                  Zaznaczono:{' '}
-                  <b>
-                    {[
-                      selectedNodeIds.length ? pluralUnit(selectedNodeIds.length, 'węzeł', 'węzły', 'węzłów') : null,
-                      selectedElemIds.length ? pluralUnit(selectedElemIds.length, 'pręt', 'pręty', 'prętów') : null,
-                    ]
-                      .filter(Boolean)
-                      .join(', ')}
-                  </b>
-                  .
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <h3 style={{ margin: 0 }}>Właściwości</h3>
+                  <div className="muted" style={{ fontSize: '11px', fontWeight: 600 }}>
+                    {selectedNodeIds.length === 1 && selectedElemIds.length === 0
+                      ? `Węzeł W${selectedNodeIds[0]}`
+                      : selectedElemIds.length === 1 && selectedNodeIds.length === 0
+                      ? `Pręt P${selectedElemIds[0]} (W${selectedElements[0]?.n1}→W${selectedElements[0]?.n2})`
+                      : [
+                          selectedNodeIds.length ? pluralUnit(selectedNodeIds.length, 'węzeł', 'węzły', 'węzłów') : null,
+                          selectedElemIds.length ? pluralUnit(selectedElemIds.length, 'pręt', 'pręty', 'prętów') : null,
+                        ]
+                          .filter(Boolean)
+                          .join(', ')}
+                  </div>
                 </div>
+
+                {/* Wspólne przyciski operacji */}
+                <div className="btnrow" style={{ marginTop: '6px', gap: '5px' }}>
+                  <button
+                    className="mini danger"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '5px 10px', fontWeight: 600 }}
+                    onClick={handleDeleteSelected}
+                    title="Usuń zaznaczone węzły i pręty"
+                  >
+                    {ICONS.del}
+                    <span>Usuń</span>
+                  </button>
+                  <button
+                    className={`mini ${moveFormOpen ? 'on' : ''}`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '5px 10px', fontWeight: 600 }}
+                    onClick={() => {
+                      setMoveFormOpen(!moveFormOpen);
+                      if (splitFormOpen) setSplitFormOpen(false);
+                    }}
+                    title="Przenieś lub kopiuj zaznaczone obiekty"
+                  >
+                    {ICONS.moveNode}
+                    <span>Przenieś</span>
+                  </button>
+                  {selectedElemIds.length > 0 && (
+                    <button
+                      className={`mini ${splitFormOpen ? 'on' : ''}`}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '5px 10px', fontWeight: 600 }}
+                      onClick={() => {
+                        setSplitFormOpen(!splitFormOpen);
+                        if (moveFormOpen) setMoveFormOpen(false);
+                      }}
+                      title="Podziel zaznaczone pręty"
+                    >
+                      {ICONS.splitBar}
+                      <span>Podziel</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Formularz Przenieś / Kopiuj */}
+                {moveFormOpen && (
+                  <div
+                    className="card"
+                    style={{
+                      marginTop: '10px',
+                      background: 'var(--surface)',
+                      borderColor: 'var(--input-border)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span style={{ fontWeight: 600, fontSize: '11px', color: 'var(--text)' }}>
+                        Opcje przenoszenia
+                      </span>
+                    </div>
+
+                    <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <label style={{ margin: 0 }}>Tryb</label>
+                      <div className="btnrow" style={{ margin: 0, gap: '4px' }}>
+                        <button
+                          type="button"
+                          className={`mini ${!moveWithCopy ? 'on' : ''}`}
+                          style={{ padding: '3px 8px', fontSize: '10.5px' }}
+                          onClick={() => setMoveWithCopy(false)}
+                        >
+                          Przesuń
+                        </button>
+                        <button
+                          type="button"
+                          className={`mini ${moveWithCopy ? 'on' : ''}`}
+                          style={{ padding: '3px 8px', fontSize: '10.5px' }}
+                          onClick={() => setMoveWithCopy(true)}
+                        >
+                          Z kopiowaniem
+                        </button>
+                      </div>
+                    </div>
+
+                    {moveWithCopy && (
+                      <>
+                        <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                          <label style={{ margin: 0 }} title="Łączy stary węzeł z nowym węzłem nowym prętem">Połącz</label>
+                          <button
+                            type="button"
+                            className={`mini ${moveConnect ? 'on' : ''}`}
+                            style={{ padding: '3px 8px', fontSize: '10.5px' }}
+                            onClick={() => setMoveConnect(!moveConnect)}
+                            title="Łączy węzły prętami o przekroju i materiale z paska"
+                          >
+                            {moveConnect ? 'Połącz: WŁ' : 'Połącz: WYŁ'}
+                          </button>
+                        </div>
+                        <div className="row" style={{ marginBottom: '8px' }}>
+                          <label>Wielokrotność</label>
+                          <div className="inp-unit">
+                            <SmartNumberInput
+                              min={1}
+                              max={50}
+                              step="1"
+                              value={moveRepeat}
+                              onChange={(v) => setMoveRepeat(Math.max(1, Math.round(v)))}
+                            />
+                            <span className="unit">×</span>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    <div className="muted" style={{ marginBottom: '5px', fontSize: '10px' }}>
+                      Wektor przeniesienia 3D (krok):
+                    </div>
+                    <div className="row-triple">
+                      <div className="third">
+                        <label>Δx</label>
+                        <div className="inp-unit">
+                          <SmartNumberInput
+                            step="0.5"
+                            value={moveDx}
+                            onChange={(v) => setMoveDx(v)}
+                          />
+                          <span className="unit">m</span>
+                        </div>
+                      </div>
+                      <div className="third">
+                        <label>Δy</label>
+                        <div className="inp-unit">
+                          <SmartNumberInput
+                            step="0.5"
+                            value={moveDy}
+                            onChange={(v) => setMoveDy(v)}
+                          />
+                          <span className="unit">m</span>
+                        </div>
+                      </div>
+                      <div className="third">
+                        <label>Δz</label>
+                        <div className="inp-unit">
+                          <SmartNumberInput
+                            step="0.5"
+                            value={moveDz}
+                            onChange={(v) => setMoveDz(v)}
+                          />
+                          <span className="unit">m</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="btnrow" style={{ marginTop: '10px', justifyContent: 'flex-end', gap: '6px' }}>
+                      <button className="mini" onClick={() => setMoveFormOpen(false)}>
+                        Anuluj
+                      </button>
+                      <button className="mini on" onClick={confirmMoveOrCopy}>
+                        {moveWithCopy ? (moveRepeat > 1 ? `Kopiuj (${moveRepeat}×)` : 'Kopiuj') : 'Przenieś'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Formularz Podziału */}
+                {splitFormOpen && selectedElemIds.length > 0 && (
+                  <div
+                    className="card"
+                    style={{
+                      marginTop: '10px',
+                      background: 'var(--surface)',
+                      borderColor: 'var(--input-border)',
+                    }}
+                  >
+                    <div className="btnrow" style={{ marginBottom: '8px' }}>
+                      <button
+                        type="button"
+                        className={`mini ${splitMode === 'single' ? 'on' : ''}`}
+                        onClick={() => setSplitMode('single')}
+                      >
+                        Pojedynczy podział
+                      </button>
+                      <button
+                        type="button"
+                        className={`mini ${splitMode === 'multi' ? 'on' : ''}`}
+                        onClick={() => setSplitMode('multi')}
+                      >
+                        Podział na N części
+                      </button>
+                    </div>
+                    {splitMode === 'single' ? (
+                      <div className="row">
+                        <label>Punkt t (0–1)</label>
+                        <SmartNumberInput
+                          min={0.05}
+                          max={0.95}
+                          step="0.05"
+                          value={splitT}
+                          onChange={(v) => setSplitT(v)}
+                        />
+                      </div>
+                    ) : (
+                      <div className="row">
+                        <label>Liczba części</label>
+                        <SmartNumberInput
+                          min={2}
+                          max={20}
+                          step="1"
+                          value={splitN}
+                          onChange={(v) => setSplitN(Math.round(v))}
+                        />
+                      </div>
+                    )}
+                    <div className="btnrow" style={{ marginTop: '8px', justifyContent: 'flex-end', gap: '6px' }}>
+                      <button className="mini" onClick={() => setSplitFormOpen(false)}>
+                        Anuluj
+                      </button>
+                      <button className="mini on" onClick={() => confirmSplit('__bulk__')}>
+                        Podziel
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-            ) : null}
+            )}
 
             {/* GRUPA WĘZŁY (gdy zaznaczony przynajmniej jeden węzeł) */}
             {selectedNodeIds.length > 0 && (
@@ -1144,81 +1436,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         </div>
                       ) : (
                         <div className="muted">Aby edytować współrzędne X/Y/Z, zaznacz pojedynczy węzeł.</div>
-                      )}
-
-                      <div className="btnrow">
-                        <button
-                          className="mini mini-icon danger"
-                          onClick={deleteSelectedNodes}
-                          title="Usuń zaznaczone węzły"
-                        >
-                          {ICONS.del}
-                        </button>
-                        <button
-                          className={`mini mini-icon ${moveFormOpen ? 'on' : ''}`}
-                          onClick={() => setMoveFormOpen(!moveFormOpen)}
-                          title="Przenieś węzły o wektor ΔX, ΔY, ΔZ"
-                        >
-                          {ICONS.moveNode}
-                        </button>
-                      </div>
-
-                      {moveFormOpen && (
-                        <div
-                          className="card"
-                          style={{
-                            marginTop: '8px',
-                            background: 'var(--surface)',
-                            borderColor: 'var(--input-border)',
-                          }}
-                        >
-                          <div className="muted" style={{ marginBottom: '6px' }}>
-                            Wektor przeniesienia 3D:
-                          </div>
-                          <div className="row-triple">
-                            <div className="third">
-                              <label>Δx</label>
-                              <div className="inp-unit">
-                                <SmartNumberInput
-                                  step="0.1"
-                                  value={moveDx}
-                                  onChange={(v) => setMoveDx(v)}
-                                />
-                                <span className="unit">m</span>
-                              </div>
-                            </div>
-                            <div className="third">
-                              <label>Δy</label>
-                              <div className="inp-unit">
-                                <SmartNumberInput
-                                  step="0.1"
-                                  value={moveDy}
-                                  onChange={(v) => setMoveDy(v)}
-                                />
-                                <span className="unit">m</span>
-                              </div>
-                            </div>
-                            <div className="third">
-                              <label>Δz</label>
-                              <div className="inp-unit">
-                                <SmartNumberInput
-                                  step="0.1"
-                                  value={moveDz}
-                                  onChange={(v) => setMoveDz(v)}
-                                />
-                                <span className="unit">m</span>
-                              </div>
-                            </div>
-                          </div>
-                          <div className="btnrow" style={{ marginTop: '8px' }}>
-                            <button className="mini on" onClick={confirmMove}>
-                              Przenieś
-                            </button>
-                            <button className="mini" onClick={() => setMoveFormOpen(false)}>
-                              Anuluj
-                            </button>
-                          </div>
-                        </div>
                       )}
                     </div>
 
@@ -1701,148 +1918,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         <h3>Pręty ({selectedElemIds.length}): {selectedElemIds.map((id) => 'P' + id).join(', ')}</h3>
                       )}
 
-                      <div className="btnrow">
-                        <button
-                          className="mini mini-icon danger"
-                          onClick={deleteSelectedElements}
-                          title="Usuń pręt"
-                        >
-                          {ICONS.del}
-                        </button>
-                        <button
-                          className={`mini mini-icon ${splitFormElId != null ? 'on' : ''}`}
-                          onClick={() =>
-                            setSplitFormElId(
-                              splitFormElId != null ? null : singleElem ? singleElem.id : '__bulk__'
-                            )
-                          }
-                          title="Podziel pręt"
-                        >
-                          {ICONS.splitBar}
-                        </button>
-                        <button
-                          className={`mini mini-icon ${copyFormOpen ? 'on' : ''}`}
-                          onClick={() => setCopyFormOpen(!copyFormOpen)}
-                          title="Kopiuj pręt"
-                        >
-                          {ICONS.copyVec}
-                        </button>
-                      </div>
-
-                      {splitFormElId != null && (
-                        <div
-                          className="card"
-                          style={{
-                            marginTop: '8px',
-                            background: 'var(--surface)',
-                            borderColor: 'var(--input-border)',
-                          }}
-                        >
-                          <div className="btnrow" style={{ marginBottom: '8px' }}>
-                            <button
-                              className={`mini ${splitMode === 'single' ? 'on' : ''}`}
-                              onClick={() => setSplitMode('single')}
-                            >
-                              Pojedynczy podział
-                            </button>
-                            <button
-                              className={`mini ${splitMode === 'multi' ? 'on' : ''}`}
-                              onClick={() => setSplitMode('multi')}
-                            >
-                              Podział na N części
-                            </button>
-                          </div>
-                          {splitMode === 'single' ? (
-                            <div className="row">
-                              <label>Punkt t (0–1)</label>
-                              <SmartNumberInput
-                                min={0.05}
-                                max={0.95}
-                                step="0.05"
-                                value={splitT}
-                                onChange={(v) => setSplitT(v)}
-                              />
-                            </div>
-                          ) : (
-                            <div className="row">
-                              <label>Liczba części</label>
-                              <SmartNumberInput
-                                min={2}
-                                max={20}
-                                step="1"
-                                value={splitN}
-                                onChange={(v) => setSplitN(Math.round(v))}
-                              />
-                            </div>
-                          )}
-                          <div className="btnrow" style={{ marginTop: '8px' }}>
-                            <button className="mini on" onClick={() => confirmSplit(splitFormElId)}>
-                              Podziel
-                            </button>
-                            <button className="mini" onClick={() => setSplitFormElId(null)}>
-                              Anuluj
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {copyFormOpen && (
-                        <div
-                          className="card"
-                          style={{
-                            marginTop: '8px',
-                            background: 'var(--surface)',
-                            borderColor: 'var(--input-border)',
-                          }}
-                        >
-                          <div className="muted" style={{ marginBottom: '6px' }}>
-                            Kopiuje zaznaczone pręty o wektor ΔX, ΔY, ΔZ:
-                          </div>
-                          <div className="row-triple">
-                            <div className="third">
-                              <label>Δx</label>
-                              <div className="inp-unit">
-                                <SmartNumberInput
-                                  step="0.5"
-                                  value={copyDx}
-                                  onChange={(v) => setCopyDx(v)}
-                                />
-                                <span className="unit">m</span>
-                              </div>
-                            </div>
-                            <div className="third">
-                              <label>Δy</label>
-                              <div className="inp-unit">
-                                <SmartNumberInput
-                                  step="0.5"
-                                  value={copyDy}
-                                  onChange={(v) => setCopyDy(v)}
-                                />
-                                <span className="unit">m</span>
-                              </div>
-                            </div>
-                            <div className="third">
-                              <label>Δz</label>
-                              <div className="inp-unit">
-                                <SmartNumberInput
-                                  step="0.5"
-                                  value={copyDz}
-                                  onChange={(v) => setCopyDz(v)}
-                                />
-                                <span className="unit">m</span>
-                              </div>
-                            </div>
-                          </div>
-                          <div className="btnrow" style={{ marginTop: '8px' }}>
-                            <button className="mini on" onClick={confirmCopy}>
-                              Kopiuj
-                            </button>
-                            <button className="mini" onClick={() => setCopyFormOpen(false)}>
-                              Anuluj
-                            </button>
-                          </div>
-                        </div>
-                      )}
+                      {/* (Akcje prętów: Usuń, Przenieś, Podziel znajdują się teraz w sekcji Właściwości) */}
                     </div>
 
                     {/* PRZEKRÓJ I MATERIAŁ */}
@@ -2683,9 +2759,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <div className="row">
                       <label>Pręt</label>
                       <select
-                        value={probe.elId ?? (elements[0]?.id || '')}
-                        onChange={(e) => setProbe({ elId: parseInt(e.target.value), t: probe.t })}
+                        value={probe.elId ?? ''}
+                        onChange={(e) => {
+                          const val = e.target.value === '' ? null : parseInt(e.target.value);
+                          setProbe({ elId: isNaN(val as number) ? null : val, t: probe.t });
+                        }}
                       >
+                        <option value="">— wybierz pręt lub kliknij na modelu —</option>
                         {elements.map((e) => (
                           <option key={e.id} value={e.id}>
                             P{e.id} (W{e.n1}→W{e.n2})
@@ -2693,20 +2773,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         ))}
                       </select>
                     </div>
-                    <div className="row">
-                      <label>Pozycja x</label>
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        step="1"
-                        value={probe.t * 100}
-                        onChange={(e) => setProbe({ elId: probe.elId, t: parseFloat(e.target.value) / 100 })}
-                      />
-                      <span className="unit" style={{ width: '56px' }}>
-                        {(probe.t * 100).toFixed(0)}%
-                      </span>
-                    </div>
+                    {probe.elId != null ? (
+                      <div className="row">
+                        <label>Pozycja x</label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value={probe.t * 100}
+                          onChange={(e) => setProbe({ elId: probe.elId, t: parseFloat(e.target.value) / 100 })}
+                        />
+                        <span className="unit" style={{ width: '56px' }}>
+                          {(probe.t * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '11px', color: 'var(--text-dim)', padding: '6px 2px', lineHeight: '1.4' }}>
+                        Kliknij pręt na modelu 3D lub wybierz z listy powyżej, aby odczytać siły i ugięcia.
+                      </div>
+                    )}
 
                     {probe.elId != null && (solved.elements?.[probe.elId] || (solved.type === 'linear_static' && solved.results[elements.findIndex((e) => e.id === probe.elId)])) && (
                       <div style={{ marginTop: '8px' }}>

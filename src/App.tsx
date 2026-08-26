@@ -18,6 +18,14 @@ import { OptionsModal, APP_ACCENTS } from './components/OptionsModal';
 import { AboutModal } from './components/AboutModal';
 import { SelectByModal } from './components/SelectByModal';
 import {
+  SaveLocalModal,
+  LoadLocalModal,
+  ExportJsonModal,
+  StoredModelRecord,
+  getStoredModelsList,
+  saveStoredModelsList,
+} from './components/StorageModals';
+import {
   getCanvasCursor,
   getEffectiveSelectionMode,
   SelectionModeType,
@@ -414,6 +422,7 @@ export default function App() {
   const [lastDrawnElemId, setLastDrawnElemId] = useState<number | null>(null);
   const mousePosRef = useRef<{ px: number; py: number } | null>(null);
   const isTouchRef = useRef<boolean>(false);
+  const lastTouchTimeRef = useRef<number>(0);
 
   // Fast direct hover refs (avoids 60fps React re-renders on mousemove for 120 FPS buttery smooth performance)
   const hoverViewCubeRef = useRef<ViewCubeHit | null>(null);
@@ -507,6 +516,12 @@ export default function App() {
   const [optionsOpen, setOptionsOpen] = useState<boolean>(false);
   const [aboutOpen, setAboutOpen] = useState<boolean>(false);
   const [selectByOpen, setSelectByOpen] = useState<boolean>(false);
+  const [saveModalOpen, setSaveModalOpen] = useState<boolean>(false);
+  const [loadModalOpen, setLoadModalOpen] = useState<boolean>(false);
+  const [exportModalOpen, setExportModalOpen] = useState<boolean>(false);
+  const [currentModelName, setCurrentModelName] = useState<string>('Projekt konstrukcji 3D');
+  const [currentModelId, setCurrentModelId] = useState<string | null>(null);
+  const jsonFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Undo / Redo Stack
   const [history, setHistory] = useState<HistoryState[]>([]);
@@ -626,6 +641,161 @@ export default function App() {
   const handleInvalidateResults = () => {
     setSolved(null);
     setSolveWarning(null);
+    setProbe({ elId: null, t: 0.5 });
+  };
+
+  // Model storage and file operations
+  const handleNewModel = () => {
+    setNodes([]);
+    setElements([]);
+    setSolved(null);
+    setSelectedNodeIds([]);
+    setSelectedElemIds([]);
+    setCurrentModelName('Projekt konstrukcji 3D');
+    setCurrentModelId(null);
+    setHistory([]);
+    setHistoryIndex(-1);
+    setStatusHint('Utworzono nowy czysty model 3D.');
+  };
+
+  const handleSaveModel = () => {
+    if (currentModelId) {
+      const list = getStoredModelsList();
+      const idx = list.findIndex((m) => m.id === currentModelId);
+      const data = { nodes, elements, sections, materials, analysisSettings };
+      const now = new Date().toISOString();
+      if (idx !== -1) {
+        list[idx] = {
+          ...list[idx],
+          name: currentModelName,
+          updatedAt: now,
+          nodesCount: nodes.length,
+          elementsCount: elements.length,
+          data,
+        };
+        saveStoredModelsList(list);
+        setStatusHint(`Zapisano model "${currentModelName}" w pamięci przeglądarki.`);
+        return;
+      }
+    }
+    setSaveModalOpen(true);
+  };
+
+  const handleSaveAsModel = () => {
+    setSaveModalOpen(true);
+  };
+
+  const handleLoadModel = () => {
+    setLoadModalOpen(true);
+  };
+
+  const handleConfirmSaveLocal = (name: string) => {
+    const list = getStoredModelsList();
+    const cleanName = name.trim() || 'Projekt konstrukcji 3D';
+    const existingIdx = list.findIndex(
+      (m) => m.id === currentModelId || m.name.trim().toLowerCase() === cleanName.toLowerCase()
+    );
+    const id =
+      existingIdx >= 0
+        ? list[existingIdx].id
+        : 'model_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    const data = { nodes, elements, sections, materials, analysisSettings };
+    const now = new Date().toISOString();
+    const record: StoredModelRecord = {
+      id,
+      name: cleanName,
+      updatedAt: now,
+      nodesCount: nodes.length,
+      elementsCount: elements.length,
+      data,
+    };
+    if (existingIdx >= 0) {
+      list[existingIdx] = record;
+    } else {
+      list.unshift(record);
+    }
+    saveStoredModelsList(list);
+    setCurrentModelName(record.name);
+    setCurrentModelId(record.id);
+    setSaveModalOpen(false);
+    setStatusHint(`Zapisano model "${record.name}" w pamięci przeglądarki.`);
+  };
+
+  const handleSelectLocalModel = (record: StoredModelRecord) => {
+    if (record.data) {
+      if (record.data.nodes) setNodes(record.data.nodes);
+      if (record.data.elements) setElements(record.data.elements);
+      if (record.data.sections) setSections(record.data.sections);
+      if (record.data.materials) setMaterials(record.data.materials);
+      if (record.data.analysisSettings) setAnalysisSettings(record.data.analysisSettings);
+      setSolved(null);
+      setSelectedNodeIds([]);
+      setSelectedElemIds([]);
+      if (record.data.nodes && record.data.nodes.length > 0) {
+        engineRef.current.fitView(record.data.nodes);
+      }
+      setCurrentModelName(record.name);
+      setCurrentModelId(record.id);
+      setLoadModalOpen(false);
+      setStatusHint(`Wczytano model "${record.name}" z pamięci przeglądarki.`);
+    }
+  };
+
+  const handleImportJson = () => {
+    if (jsonFileInputRef.current) {
+      jsonFileInputRef.current.value = '';
+      jsonFileInputRef.current.click();
+    }
+  };
+
+  const handleJsonFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result as string);
+        if (parsed.nodes && parsed.elements) {
+          setNodes(parsed.nodes);
+          setElements(parsed.elements);
+          if (parsed.sections) setSections(parsed.sections);
+          if (parsed.materials) setMaterials(parsed.materials);
+          if (parsed.analysisSettings) setAnalysisSettings(parsed.analysisSettings);
+          setSolved(null);
+          setSelectedNodeIds([]);
+          setSelectedElemIds([]);
+          engineRef.current.fitView(parsed.nodes);
+          const baseName = file.name.replace(/\.json$/i, '');
+          setCurrentModelName(baseName);
+          setCurrentModelId(null);
+          setStatusHint(`Zaimportowano model z pliku JSON: ${file.name}`);
+        } else {
+          alert('Plik nie zawiera poprawnej struktury modelu (węzły i pręty).');
+        }
+      } catch (err: any) {
+        alert('Błąd podczas importu pliku JSON: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleExportJson = () => {
+    setExportModalOpen(true);
+  };
+
+  const handleConfirmExportJson = (filename: string) => {
+    const cleanName = filename.trim().replace(/\.json$/i, '') || 'model-3d';
+    const data = { nodes, elements, sections, materials, analysisSettings };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${cleanName}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setExportModalOpen(false);
+    setStatusHint(`Wyeksportowano model do pliku ${cleanName}.json`);
   };
 
   // Perform 3D FEM Analysis
@@ -633,6 +803,7 @@ export default function App() {
     if (solved) {
       setSolved(null);
       setSolveWarning(null);
+      setProbe({ elId: null, t: 0.5 });
       setStatusHint('Tryb: Zaznacz');
       return;
     }
@@ -657,6 +828,9 @@ export default function App() {
       setSolveWarning('Model nie posiada żadnych podpór (układ geometrycznie zmienny).');
       return;
     }
+
+    // Always reset probe to inactive state when running calculation
+    setProbe({ elId: null, t: 0.5 });
 
     const solverModel = {
       nodes,
@@ -759,6 +933,7 @@ export default function App() {
       selectedElemIds,
       hoverNodeId: hoverNodeIdRef.current,
       hoverElemId: hoverElemIdRef.current,
+      mode,
       probe,
       theme,
       accentColor: accentDef.hex,
@@ -881,6 +1056,10 @@ export default function App() {
   const [panelHeight, setPanelHeight] = useState<number | null>(null);
 
   const handlePanelResizeStart = (e: React.MouseEvent | React.TouchEvent) => {
+    const target = e.target as HTMLElement;
+    const isFromStatusbar = target.closest('#statusbar') !== null;
+    if (isFromStatusbar && !showCanvasUI) return;
+
     const sidebarEl = document.getElementById('sidebar');
     const mainEl = document.getElementById('main');
     if (!sidebarEl) return;
@@ -1116,6 +1295,10 @@ export default function App() {
   }, [updateCanvasCursor]);
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // Ignore simulated mouse events from touches
+    if (Date.now() - lastTouchTimeRef.current < 800) {
+      return;
+    }
     const canvas = overlayCanvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -1272,6 +1455,10 @@ export default function App() {
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // Ignore simulated mouse events from touches
+    if (Date.now() - lastTouchTimeRef.current < 800) {
+      return;
+    }
     isTouchRef.current = false;
     const canvas = overlayCanvasRef.current;
     if (!canvas) return;
@@ -1672,6 +1859,10 @@ export default function App() {
   };
 
   const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // Ignore simulated mouse events from touches
+    if (Date.now() - lastTouchTimeRef.current < 800) {
+      return;
+    }
     const canvas = overlayCanvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -1734,6 +1925,7 @@ export default function App() {
   // Touch handlers
   const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
     isTouchRef.current = true;
+    lastTouchTimeRef.current = Date.now();
     mousePosRef.current = null;
     hoverNodeIdRef.current = null;
     hoverElemIdRef.current = null;
@@ -1858,6 +2050,7 @@ export default function App() {
   };
 
   const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    lastTouchTimeRef.current = Date.now();
     const canvas = overlayCanvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -1959,6 +2152,7 @@ export default function App() {
   };
 
   const handleTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    lastTouchTimeRef.current = Date.now();
     if (e.touches.length === 0) {
       const wasPinching = touchStateRef.current.isPinching;
       const wasDragging = dragRef.current.isDragging;
@@ -2067,61 +2261,24 @@ export default function App() {
           setLastPlacedNodeId(null);
           setLastDrawnElemId(null);
         }}
+        navMode={navMode}
+        setNavMode={setNavMode}
+        effectiveSelMode={effectiveSelMode}
+        setMobileSelMode={setMobileSelMode}
+        onOpenSelectBy={() => setSelectByOpen(true)}
+        selectByOpen={selectByOpen}
         isSolved={!!solved}
         onSolveOrBack={handleSolveOrBack}
         onUndo={handleUndo}
         onRedo={handleRedo}
         canUndo={historyIndex > 0}
         canRedo={historyIndex < history.length - 1}
-        onNewModel={() => {
-          setNodes([]);
-          setElements([]);
-          setSolved(null);
-          setSelectedNodeIds([]);
-          setSelectedElemIds([]);
-          setStatusHint('Utworzono nowy czysty model 3D.');
-        }}
-        onSaveModel={() => {
-          const data = { nodes, elements, sections, materials, analysisSettings };
-          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = 'model-3d.json';
-          a.click();
-          URL.revokeObjectURL(url);
-        }}
-        onLoadModel={() => {
-          const input = document.createElement('input');
-          input.type = 'file';
-          input.accept = '.json';
-          input.onchange = (e: any) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = () => {
-              try {
-                const parsed = JSON.parse(reader.result as string);
-                if (parsed.nodes && parsed.elements) {
-                  setNodes(parsed.nodes);
-                  setElements(parsed.elements);
-                  if (parsed.sections) setSections(parsed.sections);
-                  if (parsed.materials) setMaterials(parsed.materials);
-                  if (parsed.analysisSettings) setAnalysisSettings(parsed.analysisSettings);
-                  setSolved(null);
-                  setSelectedNodeIds([]);
-                  setSelectedElemIds([]);
-                  engineRef.current.fitView(parsed.nodes);
-                  setStatusHint(`Wczytano model: ${file.name}`);
-                }
-              } catch (err: any) {
-                alert('Błąd formatu pliku: ' + err.message);
-              }
-            };
-            reader.readAsText(file);
-          };
-          input.click();
-        }}
+        onNewModel={handleNewModel}
+        onSaveModel={handleSaveModel}
+        onSaveAsModel={handleSaveAsModel}
+        onLoadModel={handleLoadModel}
+        onImportJson={handleImportJson}
+        onExportJson={handleExportJson}
         onOpenOptions={() => setOptionsOpen(true)}
         onOpenAbout={() => setAboutOpen(true)}
         snapEnabled={snapEnabled}
@@ -2157,65 +2314,105 @@ export default function App() {
             onContextMenu={(e) => e.preventDefault()}
           />
 
-          {/* Floating Selection Modifier Bar */}
-          {mode === 'select' && (
-            <div className={`absolute top-3 left-3 flex items-center gap-1 p-1 z-10 rounded-lg shadow-lg border border-[var(--sidebar-border)] bg-[var(--surface-translucent)] backdrop-blur-md select-none transition-all duration-200 ${showCanvasUI ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 -translate-y-2 pointer-events-none'}`}>
-              <button
-                className={`zbtn ${effectiveSelMode === 'replace' ? 'active' : ''}`}
-                onClick={() => setMobileSelMode('replace')}
-                title="Wybór zwykły (Zastąp zaznaczenie)"
-              >
-                <svg className="w-4.5 h-4.5 stroke-current" fill="none" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="3 3 10.07 19.97 12.58 11.58 21 10.07 3 3" />
-                </svg>
-              </button>
-              <button
-                className={`zbtn ${effectiveSelMode === 'add' ? 'active' : ''}`}
-                onClick={() => setMobileSelMode('add')}
-                title="Dodaj do zaznaczenia (Przytrzymaj Ctrl na komputerze)"
-              >
-                <svg className="w-4.5 h-4.5 stroke-current" fill="none" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="3 3 10.07 19.97 12.58 11.58 21 10.07 3 3" />
-                  <line x1="15" y1="17" x2="21" y2="17" strokeWidth="2.5" />
-                  <line x1="18" y1="14" x2="18" y2="20" strokeWidth="2.5" />
-                </svg>
-              </button>
-              <button
-                className={`zbtn ${effectiveSelMode === 'subtract' ? 'active' : ''}`}
-                onClick={() => setMobileSelMode('subtract')}
-                title="Odejmij od zaznaczenia (Przytrzymaj Shift na komputerze)"
-              >
-                <svg className="w-4.5 h-4.5 stroke-current" fill="none" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="3 3 10.07 19.97 12.58 11.58 21 10.07 3 3" />
-                  <line x1="15" y1="17" x2="21" y2="17" strokeWidth="2.5" />
-                </svg>
-              </button>
-              <button
-                className={`zbtn ${effectiveSelMode === 'toggle' ? 'active' : ''}`}
-                onClick={() => setMobileSelMode('toggle')}
-                title="Odwróć zaznaczenie (Przytrzymaj Ctrl + Shift na komputerze)"
-              >
-                <svg className="w-4.5 h-4.5 stroke-current" fill="none" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="3 3 10.07 19.97 12.58 11.58 21 10.07 3 3" />
-                  <line x1="15" y1="15" x2="21" y2="15" strokeWidth="2.5" />
-                  <line x1="18" y1="12" x2="18" y2="18" strokeWidth="2.5" />
-                  <line x1="15" y1="21" x2="21" y2="21" strokeWidth="2.5" />
-                </svg>
-              </button>
-              <div style={{ width: '1px', height: '18px', background: 'var(--sidebar-border)', margin: '0 2px' }} />
-              <button
-                className={`zbtn ${selectByOpen ? 'active' : ''}`}
-                onClick={() => setSelectByOpen(true)}
-                title="Zaznacz według... (długości, profilu, materiału)"
-              >
-                <svg className="w-4.5 h-4.5 stroke-current" fill="none" viewBox="0 0 24 24" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="2 3 22 3 14 12.5 14 19 10 21 10 12.5 2 3" />
-                  <line x1="17" y1="15" x2="22" y2="15" strokeWidth="2.2" />
-                  <line x1="17" y1="18" x2="22" y2="18" strokeWidth="2.2" />
-                </svg>
-              </button>
-            </div>
-          )}
+          {/* Contextual Sub-Toolbar on canvas (Visible in vertical/portrait mode or narrower screens) */}
+          <div
+            id="contextualTopOverlay"
+            className={`transition-all duration-200 ${
+              showCanvasUI ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 -translate-y-2 pointer-events-none'
+            }`}
+          >
+            {mode === 'select' && (
+              <>
+                <button
+                  className={`zbtn ${navMode === 'boxSelect' ? 'active' : ''}`}
+                  onClick={() => setNavMode(navMode === 'boxSelect' ? 'orbit' : 'boxSelect')}
+                  title="Zaznaczanie ramką / obszarem (Ramka)"
+                >
+                  {ICONS.boxselect}
+                </button>
+                <button
+                  className={`zbtn ${effectiveSelMode === 'replace' ? 'active' : ''}`}
+                  onClick={() => setMobileSelMode('replace')}
+                  title="Wybór zwykły (Zastąp zaznaczenie)"
+                >
+                  {ICONS.selReplace}
+                </button>
+                <button
+                  className={`zbtn ${effectiveSelMode === 'add' ? 'active' : ''}`}
+                  onClick={() => setMobileSelMode('add')}
+                  title="Dodaj do zaznaczenia (Przytrzymaj Ctrl na komputerze)"
+                >
+                  {ICONS.selAdd}
+                </button>
+                <button
+                  className={`zbtn ${effectiveSelMode === 'subtract' ? 'active' : ''}`}
+                  onClick={() => setMobileSelMode('subtract')}
+                  title="Odejmij od zaznaczenia (Przytrzymaj Shift na komputerze)"
+                >
+                  {ICONS.selSubtract}
+                </button>
+                <button
+                  className={`zbtn ${effectiveSelMode === 'toggle' ? 'active' : ''}`}
+                  onClick={() => setMobileSelMode('toggle')}
+                  title="Odwróć zaznaczenie (Przytrzymaj Ctrl + Shift na komputerze)"
+                >
+                  {ICONS.selToggle}
+                </button>
+                <button
+                  className={`zbtn ${selectByOpen ? 'active' : ''}`}
+                  onClick={() => setSelectByOpen(true)}
+                  title="Zaznacz według kryteriów... (długości, profilu, materiału)"
+                >
+                  {ICONS.filterBy}
+                </button>
+              </>
+            )}
+
+            {mode === 'addBar' && (
+              <>
+                <select
+                  className="zselect"
+                  value={defaultSectionId}
+                  onChange={(e) => setDefaultSectionId(parseInt(e.target.value))}
+                  title="Domyślny przekrój"
+                >
+                  {sections.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  className="zselect"
+                  value={defaultMaterialId}
+                  onChange={(e) => setDefaultMaterialId(parseInt(e.target.value))}
+                  title="Domyślny materiał"
+                >
+                  {materials.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  className={`zbtn ${snapEnabled ? 'active' : ''}`}
+                  onClick={() => setSnapEnabled(!snapEnabled)}
+                  title={`Przyciąganie do siatki (${snapSize} m)`}
+                >
+                  {ICONS.grid}
+                </button>
+                <button
+                  className={`zbtn ${allowNewNodesInBarMode ? 'active' : ''}`}
+                  onClick={() => setAllowNewNodesInBarMode(!allowNewNodesInBarMode)}
+                  title="Twórz nowe węzły podczas rysowania pręta (Autowęzły)"
+                >
+                  {ICONS.node}
+                </button>
+              </>
+            )}
+          </div>
 
           {/* Bottom Overlay containing:
               - #overlayRow with the navigation and display switch buttons (bottom-left and bottom-right)
@@ -2223,7 +2420,7 @@ export default function App() {
           */}
           <div id="canvasBottomOverlay" className={`transition-all duration-200 ${showCanvasUI ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 translate-y-2 pointer-events-none'}`}>
             <div id="overlayRow">
-              <div id="quickTogglesBar">
+              <div id="quickTogglesBar" style={{ pointerEvents: showCanvasUI ? 'auto' : 'none' }}>
                 <button
                   className={`zbtn ${showNodeNumbers ? 'active' : ''}`}
                   onClick={() => setShowNodeNumbers(!showNodeNumbers)}
@@ -2296,14 +2493,7 @@ export default function App() {
                 </button>
               </div>
 
-              <div id="zoomCtl">
-                <button
-                  className={`zbtn ${navMode === 'boxSelect' ? 'active' : ''}`}
-                  onClick={() => setNavMode(navMode === 'boxSelect' ? 'orbit' : 'boxSelect')}
-                  title="Zaznaczanie ramką (Ramka)"
-                >
-                  {ICONS.boxselect}
-                </button>
+              <div id="zoomCtl" style={{ pointerEvents: showCanvasUI ? 'auto' : 'none' }}>
                 <button
                   className={`zbtn ${navMode === 'pan' ? 'active' : ''}`}
                   onClick={() => setNavMode(navMode === 'pan' ? 'orbit' : 'pan')}
@@ -2322,6 +2512,7 @@ export default function App() {
             </div>
             <div
               id="statusbar"
+              style={{ pointerEvents: showCanvasUI ? 'auto' : 'none' }}
               onMouseDown={handlePanelResizeStart}
               onTouchStart={handlePanelResizeStart}
             >
@@ -2407,10 +2598,39 @@ export default function App() {
         setIncludeSelfWeight={setIncludeSelfWeight}
         snapSize={snapSize}
         setSnapSize={setSnapSize}
-        onOpenAbout={() => setAboutOpen(true)}
       />
 
       <AboutModal isOpen={aboutOpen} onClose={() => setAboutOpen(false)} />
+
+      <SaveLocalModal
+        isOpen={saveModalOpen}
+        onClose={() => setSaveModalOpen(false)}
+        onSave={handleConfirmSaveLocal}
+        currentName={currentModelName}
+      />
+
+      <LoadLocalModal
+        isOpen={loadModalOpen}
+        onClose={() => setLoadModalOpen(false)}
+        onSelectModel={handleSelectLocalModel}
+        currentModelId={currentModelId}
+      />
+
+      <ExportJsonModal
+        isOpen={exportModalOpen}
+        onClose={() => setExportModalOpen(false)}
+        onExport={handleConfirmExportJson}
+        defaultName={currentModelName}
+      />
+
+      {/* Ukryty input do importu plików JSON */}
+      <input
+        type="file"
+        ref={jsonFileInputRef}
+        accept=".json"
+        style={{ display: 'none' }}
+        onChange={handleJsonFileChange}
+      />
 
       <SelectByModal
         isOpen={selectByOpen}
