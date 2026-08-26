@@ -693,7 +693,7 @@ export default function App() {
     const list = getStoredModelsList();
     const cleanName = name.trim() || 'Projekt konstrukcji 3D';
     const existingIdx = list.findIndex(
-      (m) => m.id === currentModelId || m.name.trim().toLowerCase() === cleanName.toLowerCase()
+      (m) => m.name.trim().toLowerCase() === cleanName.toLowerCase()
     );
     const id =
       existingIdx >= 0

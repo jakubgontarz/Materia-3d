@@ -47,8 +47,9 @@ export function saveStoredModelsList(list: StoredModelRecord[]) {
 interface SaveLocalModalProps {
   isOpen: boolean;
   onClose: () => void;
-  currentName: string;
-  onConfirmSave: (name: string) => void;
+  currentName?: string;
+  onConfirmSave?: (name: string) => void;
+  onSave?: (name: string) => void;
 }
 
 export const SaveLocalModal: React.FC<SaveLocalModalProps> = ({
@@ -56,7 +57,9 @@ export const SaveLocalModal: React.FC<SaveLocalModalProps> = ({
   onClose,
   currentName,
   onConfirmSave,
+  onSave,
 }) => {
+  const saveFn = onConfirmSave || onSave || (() => {});
   const [modelName, setModelName] = useState(currentName || 'model-3d');
   const [overwriteConfirm, setOverwriteConfirm] = useState<{ isOpen: boolean; name: string }>({
     isOpen: false,
@@ -86,7 +89,7 @@ export const SaveLocalModal: React.FC<SaveLocalModalProps> = ({
     if (exists) {
       setOverwriteConfirm({ isOpen: true, name });
     } else {
-      onConfirmSave(name);
+      saveFn(name);
       onClose();
     }
   };
@@ -241,7 +244,7 @@ export const SaveLocalModal: React.FC<SaveLocalModalProps> = ({
                   type="button"
                   className="mini on"
                   onClick={() => {
-                    onConfirmSave(overwriteConfirm.name);
+                    saveFn(overwriteConfirm.name);
                     setOverwriteConfirm({ isOpen: false, name: '' });
                     onClose();
                   }}
@@ -263,10 +266,19 @@ export const SaveLocalModal: React.FC<SaveLocalModalProps> = ({
 interface LoadLocalModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLoadModel: (record: StoredModelRecord) => void;
+  onLoadModel?: (record: StoredModelRecord) => void;
+  onSelectModel?: (record: StoredModelRecord) => void;
+  currentModelId?: string | null;
 }
 
-export const LoadLocalModal: React.FC<LoadLocalModalProps> = ({ isOpen, onClose, onLoadModel }) => {
+export const LoadLocalModal: React.FC<LoadLocalModalProps> = ({
+  isOpen,
+  onClose,
+  onLoadModel,
+  onSelectModel,
+  currentModelId,
+}) => {
+  const selectFn = onLoadModel || onSelectModel || (() => {});
   const [list, setList] = useState<StoredModelRecord[]>([]);
   const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean; id: string; name: string }>({
     isOpen: false,
@@ -365,6 +377,7 @@ export const LoadLocalModal: React.FC<LoadLocalModalProps> = ({ isOpen, onClose,
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', margin: '4px 0 16px' }}>
                 {list.map((m) => {
+                  const isCurrent = currentModelId && m.id === currentModelId;
                   const d = new Date(m.updatedAt || Date.now());
                   const dateStr =
                     d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -376,8 +389,10 @@ export const LoadLocalModal: React.FC<LoadLocalModalProps> = ({ isOpen, onClose,
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         padding: '9px 12px',
-                        background: 'var(--surface)',
-                        border: '1px solid var(--surface-border)',
+                        background: isCurrent ? 'var(--accent-glow, rgba(37, 99, 235, 0.12))' : 'var(--surface)',
+                        border: isCurrent
+                          ? '1px solid var(--accent)'
+                          : '1px solid var(--surface-border)',
                         borderRadius: '8px',
                         gap: '10px',
                       }}
@@ -385,7 +400,7 @@ export const LoadLocalModal: React.FC<LoadLocalModalProps> = ({ isOpen, onClose,
                       <div
                         style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
                         onClick={() => {
-                          onLoadModel(m);
+                          selectFn(m);
                           onClose();
                         }}
                       >
@@ -399,7 +414,7 @@ export const LoadLocalModal: React.FC<LoadLocalModalProps> = ({ isOpen, onClose,
                             textOverflow: 'ellipsis',
                           }}
                         >
-                          {m.name}
+                          {m.name} {isCurrent && <span style={{ fontSize: '10.5px', color: 'var(--accent)', fontWeight: 500 }}>(aktualny)</span>}
                         </div>
                         <div className="muted" style={{ fontSize: '10.5px', marginTop: '2px' }}>
                           Węzłów: {m.nodesCount ?? m.data?.nodes?.length ?? 0}, Prętów:{' '}
@@ -410,7 +425,7 @@ export const LoadLocalModal: React.FC<LoadLocalModalProps> = ({ isOpen, onClose,
                         <button
                           className="mini on"
                           onClick={() => {
-                            onLoadModel(m);
+                            selectFn(m);
                             onClose();
                           }}
                           title="Wczytaj ten model"
@@ -552,23 +567,29 @@ export const LoadLocalModal: React.FC<LoadLocalModalProps> = ({ isOpen, onClose,
 interface ExportJsonModalProps {
   isOpen: boolean;
   onClose: () => void;
-  currentName: string;
-  onConfirmExport: (filename: string) => void;
+  currentName?: string;
+  defaultName?: string;
+  onConfirmExport?: (filename: string) => void;
+  onExport?: (filename: string) => void;
 }
 
 export const ExportJsonModal: React.FC<ExportJsonModalProps> = ({
   isOpen,
   onClose,
   currentName,
+  defaultName,
   onConfirmExport,
+  onExport,
 }) => {
-  const [fileName, setFileName] = useState(currentName || 'model-3d');
+  const exportFn = onConfirmExport || onExport || (() => {});
+  const effectiveName = currentName || defaultName || 'model-3d';
+  const [fileName, setFileName] = useState(effectiveName);
 
   useEffect(() => {
     if (isOpen) {
-      setFileName(currentName || 'model-3d');
+      setFileName(effectiveName);
     }
-  }, [isOpen, currentName]);
+  }, [isOpen, effectiveName]);
 
   if (!isOpen) return null;
 
@@ -579,7 +600,7 @@ export const ExportJsonModal: React.FC<ExportJsonModalProps> = ({
       name = name.slice(0, -5);
     }
     name = name || 'model-3d';
-    onConfirmExport(name);
+    exportFn(name);
     onClose();
   };
 
