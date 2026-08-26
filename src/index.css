@@ -327,9 +327,11 @@ html, body {
 
 #overlayRow {
   display: flex;
+  flex-wrap: wrap-reverse;
   justify-content: space-between;
-  align-items: flex-end;
+  align-items: flex-start;
   padding: 0 14px 10px 14px;
+  gap: 10px;
 }
 
 #zoomCtl, #statusbar, #quickTogglesBar {
@@ -341,7 +343,6 @@ html, body {
   flex-wrap: wrap;
   gap: 4px;
   align-items: center;
-  max-width: calc(100% - 44px);
 }
 
 .qbtn {
@@ -389,6 +390,7 @@ html, body {
   flex-direction: column;
   gap: 4px;
   margin-left: auto;
+  flex: 0 0 auto;
 }
 
 #statusbar {
@@ -735,6 +737,13 @@ select {
   font-size: 10.5px;
   width: 32px;
   flex: 0 0 auto;
+}
+
+.row .inp-unit {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
 }
 
 .row-pair {

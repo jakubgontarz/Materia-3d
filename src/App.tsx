@@ -106,6 +106,11 @@ const TOGGLE_ICONS = {
       <text x="11" y="16" fontSize="12" fontWeight="800" fill="currentColor" stroke="none" fontFamily="sans-serif">#</text>
     </svg>
   ),
+  panels: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="4 6 18 4 20 18 6 20" />
+    </svg>
+  ),
 };
 
 interface HistoryState {
@@ -608,6 +613,7 @@ export default function App() {
   const [showMaterialNames, setShowMaterialNames] = useState<boolean>(false);
   const [showSupports, setShowSupports] = useState<boolean>(true);
   const [showProfileSketches, setShowProfileSketches] = useState<boolean>(true);
+  const [showPanels, setShowPanels] = useState<boolean>(true);
   const [showLoads, setShowLoads] = useState<boolean>(true);
   const [showLoadValues, setShowLoadValues] = useState<boolean>(true);
   const [showHingeLabels, setShowHingeLabels] = useState<boolean>(true);
@@ -1060,6 +1066,7 @@ export default function App() {
       showGrid,
       showAxes,
       showLocalAxes,
+      showPanels,
       showNodeNumbers,
       showElementNumbers,
       showSectionNames,
@@ -1170,6 +1177,7 @@ export default function App() {
     showGrid,
     showAxes,
     showLocalAxes,
+    showPanels,
     showNodeNumbers,
     showElementNumbers,
     showSectionNames,
@@ -1702,6 +1710,110 @@ export default function App() {
     }
   };
 
+  const getClosestEntityAt = (
+    px: number,
+    py: number,
+    options: {
+      includeNodes?: boolean;
+      includeElements?: boolean;
+      includePanels?: boolean;
+    } = { includeNodes: true, includeElements: true, includePanels: true }
+  ) => {
+    const engine = engineRef.current;
+    if (!engine) return null;
+
+    interface Candidate {
+      type: 'node' | 'element' | 'panel';
+      id: number;
+      depth: number;
+      dist2D: number;
+      t?: number;
+    }
+
+    const candidates: Candidate[] = [];
+
+    // 1. Check nodes
+    if (options.includeNodes) {
+      nodes.forEach((n) => {
+        const p = engine.project([n.x, n.y, n.z]);
+        const d = Math.hypot(p.x - px, p.y - py);
+        if (d < 14) {
+          // Subtract a tiny depth bias so nodes are preferred over elements/panels at the exact same depth/position
+          candidates.push({
+            type: 'node',
+            id: n.id,
+            depth: p.depth - 0.05,
+            dist2D: d,
+          });
+        }
+      });
+    }
+
+    // 2. Check elements
+    if (options.includeElements) {
+      elements.forEach((el) => {
+        const n1 = nodes.find((n) => n.id === el.n1);
+        const n2 = nodes.find((n) => n.id === el.n2);
+        if (!n1 || !n2) return;
+        const p1 = engine.project([n1.x, n1.y, n1.z]);
+        const p2 = engine.project([n2.x, n2.y, n2.z]);
+
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const lenSq = dx * dx + dy * dy;
+        let t = lenSq > 0 ? ((px - p1.x) * dx + (py - p1.y) * dy) / lenSq : 0;
+        t = Math.max(0, Math.min(1, t));
+        const cx = p1.x + t * dx;
+        const cy = p1.y + t * dy;
+        const d = Math.hypot(px - cx, py - cy);
+        if (d < 10) {
+          // Calculate precise 3D point on the element to get its depth
+          const x3D = n1.x + t * (n2.x - n1.x);
+          const y3D = n1.y + t * (n2.y - n1.y);
+          const z3D = n1.z + t * (n2.z - n1.z);
+          const proj3D = engine.project([x3D, y3D, z3D]);
+
+          // Subtract a tiny depth bias so elements are preferred over panels at the same depth
+          candidates.push({
+            type: 'element',
+            id: el.id,
+            depth: proj3D.depth - 0.02,
+            dist2D: d,
+            t,
+          });
+        }
+      });
+    }
+
+    // 3. Check panels
+    if (options.includePanels) {
+      panels.forEach((pan) => {
+        const corners = getPanelCorners(pan, nodes);
+        if (corners.length < 3) return;
+
+        const pts = corners.map((c) => engine.project(c));
+        if (!pts.every((p) => p.visible)) return;
+
+        if (isPointInPolygon2D(px, py, pts)) {
+          const avgDepth = pts.reduce((sum, p) => sum + p.depth, 0) / pts.length;
+          candidates.push({
+            type: 'panel',
+            id: pan.id,
+            depth: avgDepth,
+            dist2D: 0,
+          });
+        }
+      });
+    }
+
+    if (candidates.length === 0) return null;
+
+    // Sort by depth ascending (closest first)
+    candidates.sort((a, b) => a.depth - b.depth);
+
+    return candidates[0];
+  };
+
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     // Ignore simulated mouse events from touches
     if (Date.now() - lastTouchTimeRef.current < 800) {
@@ -1781,49 +1893,23 @@ export default function App() {
       coordsSpanRef.current.textContent = `x=${groundPt[0].toFixed(2)} m, y=${groundPt[1].toFixed(2)} m, z=${groundPt[2].toFixed(2)} m`;
     }
 
-    // Hit testing on nodes
+    // Depth-sorted hit testing
     let foundNodeId: number | null = null;
-    let minNodeDist = 14;
-
-    nodes.forEach((n) => {
-      const p = engine.project([n.x, n.y, n.z]);
-      const d = Math.hypot(p.x - px, p.y - py);
-      if (d < minNodeDist) {
-        minNodeDist = d;
-        foundNodeId = n.id;
-      }
-    });
-
-    // Hit testing on elements (bars) when no node is hovered
     let foundElemId: number | null = null;
-    if (foundNodeId == null) {
-      let minElemDist = 10;
-      elements.forEach((el) => {
-        const n1 = nodes.find((n) => n.id === el.n1);
-        const n2 = nodes.find((n) => n.id === el.n2);
-        if (!n1 || !n2) return;
-        const p1 = engine.project([n1.x, n1.y, n1.z]);
-        const p2 = engine.project([n2.x, n2.y, n2.z]);
-
-        const dx = p2.x - p1.x;
-        const dy = p2.y - p1.y;
-        const lenSq = dx * dx + dy * dy;
-        let t = lenSq > 0 ? ((px - p1.x) * dx + (py - p1.y) * dy) / lenSq : 0;
-        t = Math.max(0, Math.min(1, t));
-        const cx = p1.x + t * dx;
-        const cy = p1.y + t * dy;
-        const d = Math.hypot(px - cx, py - cy);
-        if (d < minElemDist) {
-          minElemDist = d;
-          foundElemId = el.id;
-        }
-      });
-    }
-
-    // Hit testing on panels (cladding) when no node or element is hovered
     let foundPanelId: number | null = null;
-    if (foundNodeId == null && foundElemId == null) {
-      foundPanelId = getHitPanelAt(px, py, panels, nodes, engine);
+
+    if (mode === 'addBar' || mode === 'addPanel') {
+      const closestNode = getClosestEntityAt(px, py, { includeNodes: true, includeElements: false, includePanels: false });
+      if (closestNode && closestNode.type === 'node') {
+        foundNodeId = closestNode.id;
+      }
+    } else {
+      const closest = getClosestEntityAt(px, py);
+      if (closest) {
+        if (closest.type === 'node') foundNodeId = closest.id;
+        else if (closest.type === 'element') foundElemId = closest.id;
+        else if (closest.type === 'panel') foundPanelId = closest.id;
+      }
     }
 
     // Direct hover refs update
@@ -1869,17 +1955,9 @@ export default function App() {
       return;
     }
   
-    // Check node hit
-    let clickedNodeId: number | null = null;
-    let minNodeDist = 14;
-    nodes.forEach((n) => {
-      const p = engine.project([n.x, n.y, n.z]);
-      const d = Math.hypot(p.x - px, p.y - py);
-      if (d < minNodeDist) {
-        minNodeDist = d;
-        clickedNodeId = n.id;
-      }
-    });
+    // Check node hit (sorted by depth to pick closest node first)
+    const closestNodeCandidate = getClosestEntityAt(px, py, { includeNodes: true, includeElements: false, includePanels: false });
+    const clickedNodeId = closestNodeCandidate && closestNodeCandidate.type === 'node' ? closestNodeCandidate.id : null;
 
     if (clickedNodeId != null) {
       const clickedNode = nodes.find((n) => n.id === clickedNodeId);
@@ -2213,39 +2291,17 @@ export default function App() {
       }
     } else {
       // Selection Mode
-      if (clickedNodeId != null) {
-        setSelectedNodeIds((prev) => updateSelection(prev, [clickedNodeId!], selMode));
-        if (selMode === 'replace') {
-          setSelectedElemIds([]);
-          setSelectedPanelIds([]);
-        }
-      } else {
-        // Check element hit
-        let clickedElemId: number | null = null;
-        let minElemDist = 10;
-        elements.forEach((el) => {
-          const n1 = nodes.find((n) => n.id === el.n1);
-          const n2 = nodes.find((n) => n.id === el.n2);
-          if (!n1 || !n2) return;
-          const p1 = engine.project([n1.x, n1.y, n1.z]);
-          const p2 = engine.project([n2.x, n2.y, n2.z]);
-
-          const dx = p2.x - p1.x;
-          const dy = p2.y - p1.y;
-          const lenSq = dx * dx + dy * dy;
-          let t = lenSq > 0 ? ((px - p1.x) * dx + (py - p1.y) * dy) / lenSq : 0;
-          t = Math.max(0, Math.min(1, t));
-          const cx = p1.x + t * dx;
-          const cy = p1.y + t * dy;
-          const d = Math.hypot(px - cx, py - cy);
-          if (d < minElemDist) {
-            minElemDist = d;
-            clickedElemId = el.id;
-            setProbe({ elId: el.id, t });
+      const closest = getClosestEntityAt(px, py);
+      if (closest) {
+        if (closest.type === 'node') {
+          const clickedNodeId = closest.id;
+          setSelectedNodeIds((prev) => updateSelection(prev, [clickedNodeId], selMode));
+          if (selMode === 'replace') {
+            setSelectedElemIds([]);
+            setSelectedPanelIds([]);
           }
-        });
-
-        if (clickedElemId != null) {
+        } else if (closest.type === 'element') {
+          const clickedElemId = closest.id;
           const el = elements.find((e) => e.id === clickedElemId);
           if (el) {
             const n1 = nodes.find((n) => n.id === el.n1);
@@ -2257,46 +2313,44 @@ export default function App() {
               engine.setRotationCenter([midX, midY, midZ]);
             }
           }
-          setSelectedElemIds((prev) => updateSelection(prev, [clickedElemId!], selMode));
+          setProbe({ elId: clickedElemId, t: closest.t ?? 0.5 });
+          setSelectedElemIds((prev) => updateSelection(prev, [clickedElemId], selMode));
           if (selMode === 'replace') {
             setSelectedNodeIds([]);
             setSelectedPanelIds([]);
           }
-        } else {
-          // Check panel hit
-          const clickedPanelId = getHitPanelAt(px, py, panels, nodes, engine);
-          if (clickedPanelId != null) {
-            const pan = panels.find((p) => p.id === clickedPanelId);
-            if (pan) {
-              const corners = getPanelCorners(pan, nodes);
-              if (corners.length >= 3) {
-                const cx = corners.reduce((sum, c) => sum + c[0], 0) / corners.length;
-                const cy = corners.reduce((sum, c) => sum + c[1], 0) / corners.length;
-                const cz = corners.reduce((sum, c) => sum + c[2], 0) / corners.length;
-                engine.setRotationCenter([cx, cy, cz]);
-              }
-            }
-            setSelectedPanelIds((prev) => updateSelection(prev, [clickedPanelId], selMode));
-            if (selMode === 'replace') {
-              setSelectedNodeIds([]);
-              setSelectedElemIds([]);
-            }
-          } else {
-            // Clicked on empty space
-            if (selMode === 'replace') {
-              if (selectedNodeIds.length > 0 || selectedElemIds.length > 0 || selectedPanelIds.length > 0) {
-                setSelectedNodeIds([]);
-                setSelectedElemIds([]);
-                setSelectedPanelIds([]);
-              } else {
-                setShowCanvasUI((prev) => !prev);
-              }
-              setLastPlacedNodeId(null);
-              setLastDrawnElemId(null);
-            } else {
-              setShowCanvasUI((prev) => !prev);
+        } else if (closest.type === 'panel') {
+          const clickedPanelId = closest.id;
+          const pan = panels.find((p) => p.id === clickedPanelId);
+          if (pan) {
+            const corners = getPanelCorners(pan, nodes);
+            if (corners.length >= 3) {
+              const cx = corners.reduce((sum, c) => sum + c[0], 0) / corners.length;
+              const cy = corners.reduce((sum, c) => sum + c[1], 0) / corners.length;
+              const cz = corners.reduce((sum, c) => sum + c[2], 0) / corners.length;
+              engine.setRotationCenter([cx, cy, cz]);
             }
           }
+          setSelectedPanelIds((prev) => updateSelection(prev, [clickedPanelId], selMode));
+          if (selMode === 'replace') {
+            setSelectedNodeIds([]);
+            setSelectedElemIds([]);
+          }
+        }
+      } else {
+        // Clicked on empty space
+        if (selMode === 'replace') {
+          if (selectedNodeIds.length > 0 || selectedElemIds.length > 0 || selectedPanelIds.length > 0) {
+            setSelectedNodeIds([]);
+            setSelectedElemIds([]);
+            setSelectedPanelIds([]);
+          } else {
+            setShowCanvasUI((prev) => !prev);
+          }
+          setLastPlacedNodeId(null);
+          setLastDrawnElemId(null);
+        } else {
+          setShowCanvasUI((prev) => !prev);
         }
       }
     }
@@ -2982,6 +3036,13 @@ export default function App() {
                   title="Pokaż podpory"
                 >
                   {TOGGLE_ICONS.supports}
+                </button>
+                <button
+                  className={`zbtn ${showPanels ? 'active' : ''}`}
+                  onClick={() => setShowPanels(!showPanels)}
+                  title="Pokaż okładziny"
+                >
+                  {TOGGLE_ICONS.panels}
                 </button>
                 <button
                   className={`zbtn ${showProfileSketches ? 'active' : ''}`}

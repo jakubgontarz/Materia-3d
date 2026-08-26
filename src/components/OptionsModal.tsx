@@ -206,7 +206,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                 gap: '10px',
               }}
             >
-              <span style={{ fontSize: '12.5px', fontWeight: 600 }}>Osie globalne układu 3D (XYZ)</span>
+              <span style={{ fontSize: '12.5px', fontWeight: 600 }}>Osie globalne układu (XYZ)</span>
               <input
                 type="checkbox"
                 checked={showAxes}

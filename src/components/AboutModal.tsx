@@ -179,7 +179,37 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
             </div>
           </div>
 
-          <div className="card" style={{ marginBottom: 0 }}>
+          
+          <div className="card" style={{ marginBottom: '14px' }}>
+            <div
+              style={{
+                fontWeight: 600,
+                marginBottom: '6px',
+                color: 'var(--text)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+              Licencja i dostępność
+            </div>
+            <div style={{ fontSize: '11.5px', color: 'var(--text-dim)', lineHeight: 1.45 }}>
+              Program jest <strong>darmowy</strong> i udostępniany do celów edukacyjnych oraz inżynierskich. Dostępny
+              bezpłatnie na{' '}
+              <a
+                href="https://wbia.pollub.pl/wydzial/struktura-wydzialu/katedra-mechaniki-budowli/pracownicy/jakub-gontarz" target="_blank" rel="noopener noreferrer"
+                style={{ color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}
+              >
+                stronie internetowej autora
+              </a>
+              .
+            </div>
+          </div>
+<div className="card" style={{ marginBottom: 0 }}>
             <div
               style={{
                 fontWeight: 600,
@@ -194,7 +224,7 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
                 <polyline points="16 18 22 12 16 6" />
                 <polyline points="8 6 2 12 8 18" />
               </svg>
-              Narzędzia i technologie
+              Wykorzystane narzędzia i technologie
             </div>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <span
@@ -208,7 +238,7 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
                   fontWeight: 600,
                 }}
               >
-                MES 3D / FEM 3D
+                Claude AI
               </span>
               <span
                 className="tag"
@@ -221,7 +251,7 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
                   fontWeight: 600,
                 }}
               >
-                HTML5 Canvas 3D
+                Google AI Studio
               </span>
               <span
                 className="tag"
@@ -234,7 +264,46 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
                   color: 'var(--text-dim)',
                 }}
               >
-                TypeScript / React
+                HTML5 Canvas
+              </span>
+              <span
+                className="tag"
+                style={{
+                  fontSize: '10.5px',
+                  padding: '3px 8px',
+                  borderRadius: '6px',
+                  background: 'var(--surface)',
+                  border: '1px solid var(--surface-border)',
+                  color: 'var(--text-dim)',
+                }}
+              >
+                TypeScript
+              </span>
+              <span
+                className="tag"
+                style={{
+                  fontSize: '10.5px',
+                  padding: '3px 8px',
+                  borderRadius: '6px',
+                  background: 'var(--surface)',
+                  border: '1px solid var(--surface-border)',
+                  color: 'var(--text-dim)',
+                }}
+              >
+                React.js
+              </span>
+              <span
+                className="tag"
+                style={{
+                  fontSize: '10.5px',
+                  padding: '3px 8px',
+                  borderRadius: '6px',
+                  background: 'var(--surface)',
+                  border: '1px solid var(--surface-border)',
+                  color: 'var(--text-dim)',
+                }}
+              >
+                Three.js
               </span>
             </div>
           </div>

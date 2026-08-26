@@ -16,6 +16,7 @@ export interface SceneRenderOptions {
   showMaterialNames: boolean;
   showSupports: boolean;
   showProfileSketches: boolean;
+  showPanels?: boolean;
   showLoads: boolean;
   showLoadValues: boolean;
   showHingeLabels: boolean;
@@ -84,10 +85,10 @@ function computeGeometryKey(
   let pSig = `${panels.length}_`;
   for (let i = 0; i < panels.length; i++) {
     const p = panels[i];
-    pSig += `${p.id}:${p.shape}:${p.nodeIds.join('-')};`;
+    pSig += `${p.id}:${p.shape}:${p.nodeIds.join('-')}:${p.loadTransferDir || 'two_way'}:${JSON.stringify(p.pressure || {})};`;
   }
 
-  const optSig = `g:${options.showGrid ? 1 : 0}_gp:${options.gridPlane || 'XY'}_go:${options.gridOffset || 0}_a:${options.showAxes ? 1 : 0}_la:${options.showLocalAxes ? 1 : 0}_supp:${options.showSupports ? 1 : 0}_prof:${options.showProfileSketches ? 1 : 0}_loads:${options.showLoads ? 1 : 0}_def:${options.showDeform ? 1 : 0}_my:${options.showMy ? 1 : 0}_mz:${options.showMz ? 1 : 0}_mx:${options.showMx ? 1 : 0}_vy:${options.showVy ? 1 : 0}_vz:${options.showVz ? 1 : 0}_n:${options.showN ? 1 : 0}_str:${options.showStress ? 1 : 0}_r:${options.showReactions ? 1 : 0}_hl:${options.hideLoadsInResults ? 1 : 0}_hs:${options.hideSupportsInResults ? 1 : 0}_ds:${options.deformScaleMult}_dgs:${options.diagramScaleMult}_t:${options.theme}_ac:${options.accentColor}`;
+  const optSig = `g:${options.showGrid ? 1 : 0}_gp:${options.gridPlane || 'XY'}_go:${options.gridOffset || 0}_a:${options.showAxes ? 1 : 0}_la:${options.showLocalAxes ? 1 : 0}_pan:${options.showPanels !== false ? 1 : 0}_supp:${options.showSupports ? 1 : 0}_prof:${options.showProfileSketches ? 1 : 0}_loads:${options.showLoads ? 1 : 0}_def:${options.showDeform ? 1 : 0}_my:${options.showMy ? 1 : 0}_mz:${options.showMz ? 1 : 0}_mx:${options.showMx ? 1 : 0}_vy:${options.showVy ? 1 : 0}_vz:${options.showVz ? 1 : 0}_n:${options.showN ? 1 : 0}_str:${options.showStress ? 1 : 0}_r:${options.showReactions ? 1 : 0}_hl:${options.hideLoadsInResults ? 1 : 0}_hs:${options.hideSupportsInResults ? 1 : 0}_ds:${options.deformScaleMult}_dgs:${options.diagramScaleMult}_t:${options.theme}_ac:${options.accentColor}`;
 
   const solvedSig = solved ? `${solved.type}_${(solved as any).currentMode || 0}` : 'none';
 
@@ -229,6 +230,35 @@ export function drawScene3D(
   if (options.showLoads && options.showLoadValues && (!options.hideLoadsInResults || !hasResults)) {
     // Continuous load values
     drawContinuousLoads2DOverlay(overlayCtx, engine, nodes, elements, options, isDark);
+
+    // Panel pressure load values
+    if (options.showPanels !== false) {
+      panels.forEach((p) => {
+        if (p.pressure && Math.abs(p.pressure.value) > 1e-4) {
+          const axes = computePanelLocalAxes(p, nodes);
+          if (axes) {
+            const pLabelPos = engine.project([
+              axes.centroid[0] - axes.vz[0] * 0.5,
+              axes.centroid[1] - axes.vz[1] * 0.5,
+              axes.centroid[2] - axes.vz[2] * 0.5,
+            ]);
+            if (pLabelPos.visible) {
+              const dirStr = p.pressure.dir === 'normal' ? 'prostopadle' : `globalne ${p.pressure.dir}`;
+              drawPillTag(
+                overlayCtx,
+                pLabelPos.x,
+                pLabelPos.y,
+                `p=${p.pressure.value > 0 ? '+' : ''}${p.pressure.value} kN/m² (${dirStr})`,
+                '#f97316',
+                '#ea580c',
+                isDark,
+                12
+              );
+            }
+          }
+        }
+      });
+    }
 
     const fColor = isDark ? '#f87171' : '#b91c1c';
     const mColor = isDark ? '#c084fc' : '#7e22ce';
@@ -374,9 +404,12 @@ function rebuild3DModelGroup(
   if (options.showAxes) build3DOriginTriad(engine);
 
   // Panels / Claddings (Obrysy / Okładziny powierzchniowe)
-  panels.forEach((p) => {
-    build3DSinglePanel(engine, p, nodes, options, isDark);
-  });
+  if (options.showPanels !== false) {
+    panels.forEach((p) => {
+      build3DSinglePanel(engine, p, nodes, options, isDark);
+      build3DPanelLoadTransferDirections(engine, p, nodes, isDark);
+    });
+  }
 
   // Deformed Shape
   if (options.showDeform && solved) {
@@ -483,6 +516,13 @@ function rebuild3DModelGroup(
         }
       }
     });
+
+    // Panel pressure loads
+    if (options.showPanels !== false) {
+      panels.forEach((p) => {
+        build3DPanelPressureLoad(engine, p, nodes, isDark);
+      });
+    }
   }
 
   // Nodes
@@ -561,6 +601,11 @@ function rebuild3DModelGroup(
         build3DLocalAxes(engine, el, n1, n2);
       }
     });
+    if (options.showPanels !== false) {
+      panels.forEach((p) => {
+        build3DPanelLocalAxes(engine, p, nodes);
+      });
+    }
   }
 }
 
@@ -617,6 +662,231 @@ export function getPanelCorners(panel: Panel3D, nodes: Node3D[]): [number, numbe
   }
 
   return [];
+}
+
+export function computePanelLocalAxes(panel: Panel3D, nodes: Node3D[]): {
+  centroid: [number, number, number];
+  vx: [number, number, number];
+  vy: [number, number, number];
+  vz: [number, number, number];
+} | null {
+  const corners = getPanelCorners(panel, nodes);
+  if (corners.length < 3) return null;
+
+  const N = corners.length;
+  let cx = 0, cy = 0, cz = 0;
+  for (let i = 0; i < N; i++) {
+    cx += corners[i][0];
+    cy += corners[i][1];
+    cz += corners[i][2];
+  }
+  cx /= N; cy /= N; cz /= N;
+
+  const [c1, c2, c3] = corners;
+
+  // Local x = direction C1 -> C2
+  let dx1 = c2[0] - c1[0];
+  let dy1 = c2[1] - c1[1];
+  let dz1 = c2[2] - c1[2];
+  let len1 = Math.hypot(dx1, dy1, dz1);
+  if (len1 < 1e-8) { dx1 = 1; dy1 = 0; dz1 = 0; len1 = 1; }
+  const vx: [number, number, number] = [dx1 / len1, dy1 / len1, dz1 / len1];
+
+  // Vector v = C1 -> C3
+  const dx2 = c3[0] - c1[0];
+  const dy2 = c3[1] - c1[1];
+  const dz2 = c3[2] - c1[2];
+
+  // vz = normal = vx x v
+  let nx = vx[1] * dz2 - vx[2] * dy2;
+  let ny = vx[2] * dx2 - vx[0] * dz2;
+  let nz = vx[0] * dy2 - vx[1] * dx2;
+  let nLen = Math.hypot(nx, ny, nz);
+  if (nLen < 1e-8) { nx = 0; ny = 0; nz = 1; nLen = 1; }
+  const vz: [number, number, number] = [nx / nLen, ny / nLen, nz / nLen];
+
+  // vy = vz x vx
+  const vyx = vz[1] * vx[2] - vz[2] * vx[1];
+  const vyy = vz[2] * vx[0] - vz[0] * vx[2];
+  const vyz = vz[0] * vx[1] - vz[1] * vx[0];
+  const vy: [number, number, number] = [vyx, vyy, vyz];
+
+  return { centroid: [cx, cy, cz], vx, vy, vz };
+}
+
+function build3DPanelLocalAxes(engine: RenderEngine3D, panel: Panel3D, nodes: Node3D[]) {
+  const axes = computePanelLocalAxes(panel, nodes);
+  if (!axes) return;
+
+  const origin = new THREE.Vector3(...axes.centroid);
+  const aLen = 0.6;
+  const arrowX = new THREE.ArrowHelper(new THREE.Vector3(...axes.vx), origin, aLen, 0xef4444, 0.14, 0.07);
+  const arrowY = new THREE.ArrowHelper(new THREE.Vector3(...axes.vy), origin, aLen, 0x22c55e, 0.14, 0.07);
+  const arrowZ = new THREE.ArrowHelper(new THREE.Vector3(...axes.vz), origin, aLen, 0x3b82f6, 0.14, 0.07);
+
+  makeOnTop(arrowX, 100);
+  makeOnTop(arrowY, 100);
+  makeOnTop(arrowZ, 100);
+
+  engine.modelGroup.add(arrowX);
+  engine.modelGroup.add(arrowY);
+  engine.modelGroup.add(arrowZ);
+}
+
+function build3DPanelLoadTransferDirections(
+  engine: RenderEngine3D,
+  panel: Panel3D,
+  nodes: Node3D[],
+  isDark: boolean
+) {
+  if (panel.shape === 'triangle') return;
+
+  const axes = computePanelLocalAxes(panel, nodes);
+  if (!axes) return;
+
+  const corners = getPanelCorners(panel, nodes);
+  if (corners.length < 3) return;
+
+  const dir = panel.loadTransferDir || 'two_way';
+
+  const [c1, c2] = corners;
+  const Lx = Math.hypot(c2[0] - c1[0], c2[1] - c1[1], c2[2] - c1[2]) || 1;
+  const Ly = (corners.length === 4)
+    ? Math.hypot(corners[3][0] - c1[0], corners[3][1] - c1[1], corners[3][2] - c1[2]) || 1
+    : Lx;
+
+  const origin = new THREE.Vector3(
+    axes.centroid[0] + axes.vz[0] * 0.008,
+    axes.centroid[1] + axes.vz[1] * 0.008,
+    axes.centroid[2] + axes.vz[2] * 0.008
+  );
+
+  const colorHex = isDark ? 0xf59e0b : 0xd97706;
+  const lineMat = new THREE.LineBasicMaterial({ color: colorHex, linewidth: 2 });
+
+  const symbolLen = Math.max(0.3, Math.min(0.55, Math.min(Lx, Ly) * 0.25));
+
+  const drawSmallBiArrow = (vDir: [number, number, number]) => {
+    const half = symbolLen * 0.5;
+    const p1 = new THREE.Vector3(
+      origin.x - vDir[0] * half,
+      origin.y - vDir[1] * half,
+      origin.z - vDir[2] * half
+    );
+    const p2 = new THREE.Vector3(
+      origin.x + vDir[0] * half,
+      origin.y + vDir[1] * half,
+      origin.z + vDir[2] * half
+    );
+
+    const lineGeom = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+    const line = new THREE.Line(lineGeom, lineMat);
+    makeOnTop(line, 90);
+    engine.modelGroup.add(line);
+
+    const arrHead1 = new THREE.ArrowHelper(
+      new THREE.Vector3(...vDir),
+      new THREE.Vector3(p2.x - vDir[0] * 0.1, p2.y - vDir[1] * 0.1, p2.z - vDir[2] * 0.1),
+      0.1,
+      colorHex,
+      0.08,
+      0.04
+    );
+    const arrHead2 = new THREE.ArrowHelper(
+      new THREE.Vector3(-vDir[0], -vDir[1], -vDir[2]),
+      new THREE.Vector3(p1.x + vDir[0] * 0.1, p1.y + vDir[1] * 0.1, p1.z + vDir[2] * 0.1),
+      0.1,
+      colorHex,
+      0.08,
+      0.04
+    );
+    makeOnTop(arrHead1, 90);
+    makeOnTop(arrHead2, 90);
+    engine.modelGroup.add(arrHead1);
+    engine.modelGroup.add(arrHead2);
+  };
+
+  if (dir === 'one_way_x' || dir === 'two_way') {
+    drawSmallBiArrow(axes.vx);
+  }
+  if (dir === 'one_way_y' || dir === 'two_way') {
+    drawSmallBiArrow(axes.vy);
+  }
+}
+
+function build3DPanelPressureLoad(
+  engine: RenderEngine3D,
+  panel: Panel3D,
+  nodes: Node3D[],
+  isDark: boolean
+) {
+  if (!panel.pressure || Math.abs(panel.pressure.value) < 1e-4) return;
+
+  const axes = computePanelLocalAxes(panel, nodes);
+  if (!axes) return;
+
+  const corners = getPanelCorners(panel, nodes);
+  if (corners.length < 3) return;
+
+  const val = panel.pressure.value;
+  const pDir = panel.pressure.dir;
+
+  let loadVec: [number, number, number] = [0, 0, 0];
+  if (pDir === 'normal') {
+    const sign = Math.sign(val);
+    loadVec = [-axes.vz[0] * sign, -axes.vz[1] * sign, -axes.vz[2] * sign];
+  } else if (pDir === 'X') {
+    const sign = Math.sign(val);
+    loadVec = [sign, 0, 0];
+  } else if (pDir === 'Y') {
+    const sign = Math.sign(val);
+    loadVec = [0, sign, 0];
+  } else if (pDir === 'Z') {
+    const sign = Math.sign(val);
+    loadVec = [0, 0, sign];
+  }
+
+  const colorHex = 0xf97316;
+  const arrowLength = 0.55;
+
+  const N = corners.length;
+  for (let i = 0; i < N; i++) {
+    const cA = corners[i];
+    const cB = corners[(i + 1) % N];
+
+    const numArrows = 4;
+    const tailPoints: THREE.Vector3[] = [];
+
+    for (let k = 0; k <= numArrows; k++) {
+      const t = k / numArrows;
+      const px = cA[0] + (cB[0] - cA[0]) * t;
+      const py = cA[1] + (cB[1] - cA[1]) * t;
+      const pz = cA[2] + (cB[2] - cA[2]) * t;
+
+      const pTip = new THREE.Vector3(px, py, pz);
+      const pTail = new THREE.Vector3(
+        px - loadVec[0] * arrowLength,
+        py - loadVec[1] * arrowLength,
+        pz - loadVec[2] * arrowLength
+      );
+      tailPoints.push(pTail);
+
+      const arrow = new THREE.ArrowHelper(
+        new THREE.Vector3(...loadVec),
+        pTail,
+        arrowLength,
+        colorHex,
+        0.12,
+        0.06
+      );
+      engine.modelGroup.add(arrow);
+    }
+
+    const lineGeom = new THREE.BufferGeometry().setFromPoints(tailPoints);
+    const lineMat = new THREE.LineBasicMaterial({ color: colorHex, linewidth: 2 });
+    const line = new THREE.Line(lineGeom, lineMat);
+    engine.modelGroup.add(line);
+  }
 }
 
 function build3DSinglePanel(
@@ -2371,8 +2641,8 @@ function drawHoverAndSelection2DOverlay(
         ctx.lineWidth = 2;
         ctx.stroke();
 
-        // Hover tag with coordinates (only in select mode; in addBar mode the tip with pointer is displayed instead)
-        if (options.mode !== 'addBar') {
+        // Hover tag with coordinates (only in select mode; in drawing modes the tip with pointer is displayed instead)
+        if (options.mode !== 'addBar' && options.mode !== 'addPanel') {
           const tag = `W${n.id} (${n.x.toFixed(2)}, ${n.y.toFixed(2)}, ${n.z.toFixed(2)})`;
           drawPillTag(ctx, p.x, p.y - 18, tag, isDark ? '#38bdf8' : '#0284c7', '#38bdf8', isDark, 11);
         }

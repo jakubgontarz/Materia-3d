@@ -673,7 +673,7 @@ export const ExportJsonModal: React.FC<ExportJsonModalProps> = ({
             </span>
           </div>
           <div className="muted" style={{ marginBottom: '14px' }}>
-            Plik zostanie pobrany w formacie JSON z pełną geometrią 3D, przekrojami, materiałami, podporami i obciążeniami.
+            Plik zostanie pobrany w formacie JSON z pełną geometrią, przekrojami, materiałami, podporami i obciążeniami.
           </div>
           <div className="btnrow" style={{ justifyContent: 'flex-end', gap: '8px' }}>
             <button type="button" className="mini" onClick={onClose}>

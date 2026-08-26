@@ -11,6 +11,8 @@ import {
   MemberHinges3D,
   Panel3D,
   PanelShape,
+  PanelLoadTransferDir,
+  PanelPressureLoad,
 } from '../fem/types';
 import { ICONS } from './Toolbar';
 import { CATALOG_DEFS, CATALOG_ORDER } from '../fem/catalogs';
@@ -1259,7 +1261,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="group-title">
                 <span>Współrzędne</span>
                 <span className="group-tag">
-                  {barStartNodeId != null ? `Start: W${barStartNodeId}` : 'Nowy pręt 3D'}
+                  {barStartNodeId != null ? `Start: W${barStartNodeId}` : 'Nowy pręt'}
                 </span>
               </div>
               <span className="subtle-icon">{addBarCoordsCollapsed ? '▸' : '▾'}</span>
@@ -1267,7 +1269,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {!addBarCoordsCollapsed && (
               <div className="group-body">
                 <div className="panel">
-                  <h3>Współrzędne 3D</h3>
+                  <h3>Współrzędne</h3>
                   {barStartNodeId != null ? (
                     <div
                       className="card"
@@ -1298,7 +1300,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     </div>
                   ) : (
                     <div className="muted" style={{ marginBottom: '10px' }}>
-                      Wpisz współrzędne pierwszego węzła 3D:
+                      Wpisz współrzędne pierwszego węzła:
                     </div>
                   )}
 
@@ -1376,7 +1378,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {!addBarCoordsCollapsed && (
               <div className="group-body">
                 <div className="panel">
-                  <h3>Obrys / Okładzina 3D</h3>
+                  <h3>Obrys / Okładzina</h3>
 
                   {/* Kształt obrysu */}
                   <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
@@ -1545,7 +1547,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="panel">
                 <h3>Właściwości</h3>
                 <div className="empty-state">
-                  Zaznacz węzeł, pręt lub okładzinę na rysunku 3D (tryb „Zaznacz”),<br />
+                  Zaznacz węzeł, pręt lub okładzinę na rysunku (tryb „Zaznacz”),<br />
                   aby edytować ich właściwości lub wykonać operacje.
                 </div>
               </div>
@@ -1678,7 +1680,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     )}
 
                     <div className="muted" style={{ marginBottom: '5px', fontSize: '10px' }}>
-                      Wektor przeniesienia 3D (krok):
+                      Wektor przeniesienia (krok):
                     </div>
                     <div className="row-triple">
                       <div className="third">
@@ -1794,7 +1796,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="sidebar-group">
                 <div className="group-header" onClick={() => setNodesGroupCollapsed(!nodesGroupCollapsed)}>
                   <div className="group-title">
-                    <span>Węzły 3D</span>
+                    <span>Węzły</span>
                     <span className="group-tag">
                       {selectedNodeIds.length > 1 ? `${selectedNodeIds.length} zaznaczone` : `W${selectedNodeIds[0]}`}
                     </span>
@@ -1856,7 +1858,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                     {/* PODPORA 3D */}
                     <div className="panel">
-                      <h3>Podpora 3D</h3>
+                      <h3>Podpora</h3>
                       <div className="btnrow">
                         <button
                           className={`mini mini-icon ${selectedNodes.length > 0 && selectedNodes.every((n) => presetMatches(n, 'none')) ? 'on' : ''}`}
@@ -1868,14 +1870,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         <button
                           className={`mini mini-icon ${selectedNodes.length > 0 && selectedNodes.every((n) => presetMatches(n, 'fixed')) ? 'on' : ''}`}
                           onClick={() => applySupportPreset('fixed')}
-                          title="Utwierdzenie 3D (Ux, Uy, Uz, Rx, Ry, Rz)"
+                          title="Utwierdzenie (Ux, Uy, Uz, Rx, Ry, Rz)"
                         >
                           {ICONS.supFixed}
                         </button>
                         <button
                           className={`mini mini-icon ${selectedNodes.length > 0 && selectedNodes.every((n) => presetMatches(n, 'pin')) ? 'on' : ''}`}
                           onClick={() => applySupportPreset('pin')}
-                          title="Podpora przegubowo-stała 3D (Ux, Uy, Uz)"
+                          title="Podpora przegubowo-stała (Ux, Uy, Uz)"
                         >
                           {ICONS.supPin}
                         </button>
@@ -2115,7 +2117,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       const curFz = commonVal(selectedNodes, (n) => n.force?.Fz ?? 0);
                       return (
                         <div className="panel">
-                          <h3>Siły skupione 3D</h3>
+                          <h3>Siły skupione</h3>
                           <div className="row-triple">
                             <div className="third">
                               <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
@@ -2177,7 +2179,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       const curMz = commonVal(selectedNodes, (n) => n.moment?.Mz ?? 0);
                       return (
                         <div className="panel">
-                          <h3>Momenty skupione 3D</h3>
+                          <h3>Momenty skupione</h3>
                           <div className="row-triple">
                             <div className="third">
                               <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
@@ -2300,7 +2302,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="sidebar-group">
                 <div className="group-header" onClick={() => setElementsGroupCollapsed(!elementsGroupCollapsed)}>
                   <div className="group-title">
-                    <span>Pręty 3D</span>
+                    <span>Pręty</span>
                     <span className="group-tag">
                       {selectedElemIds.length > 1 ? `${selectedElemIds.length} zaznaczone` : `P${selectedElemIds[0]}`}
                     </span>
@@ -2418,7 +2420,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     {/* OBCIĄŻENIE CIĄGŁE PRĘTA */}
                     <div className="panel">
                       <div className="row" style={{ justifyContent: 'space-between', marginBottom: '8px' }}>
-                        <h3>Obciążenie ciągłe 3D</h3>
+                        <h3>Obciążenie ciągłe</h3>
                         <div className="btnrow" style={{ gap: '2px' }}>
                           <button
                             type="button"
@@ -2863,7 +2865,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="sidebar-group">
                 <div className="group-header" onClick={() => setPanelsGroupCollapsed(!panelsGroupCollapsed)}>
                   <div className="group-title">
-                    <span>Okładziny 3D</span>
+                    <span>Okładziny</span>
                     <span className="group-tag">
                       {selectedPanelIds.length > 1 ? `${selectedPanelIds.length} zaznaczone` : `O${selectedPanelIds[0]}`}
                     </span>
@@ -2873,17 +2875,176 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 {!panelsGroupCollapsed && (
                   <div className="group-body">
                     <div className="panel">
-                      <h3>
-                        {selectedPanelIds.length > 1
-                          ? `Okładziny (${selectedPanelIds.length}): ${selectedPanelIds.map((id) => 'O' + id).join(', ')}`
-                          : `Okładzina O${selectedPanelIds[0]}`}
-                      </h3>
-                      {selectedPanels.map((pan) => (
-                        <div key={pan.id} style={{ marginBottom: '8px', fontSize: '12px' }}>
-                          <div style={{ fontWeight: 600 }}>O{pan.id} — kształt: {pan.shape === 'triangle' ? 'Trójkąt' : 'Prostokąt'}</div>
-                          <div className="muted">Węzły konturu: {pan.nodeIds.map((id) => 'W' + id).join(', ')}</div>
+                      {selectedPanelIds.length === 1 ? (
+                        <>
+                          <h3>Okładzina O{selectedPanelIds[0]}</h3>
+                          <div className="muted" style={{ marginBottom: '6px' }}>
+                            O{selectedPanels[0].id} — kształt: <strong>{selectedPanels[0].shape === 'triangle' ? 'Trójkąt' : 'Prostokąt'}</strong>
+                            <div>Węzły konturu: {selectedPanels[0].nodeIds.map((id) => 'W' + id).join(', ')}</div>
+                          </div>
+                        </>
+                      ) : (
+                        <h3>Okładziny ({selectedPanelIds.length}): {selectedPanelIds.map((id) => 'O' + id).join(', ')}</h3>
+                      )}
+                    </div>
+
+                    {/* KIERUNEK ROZKŁADU OBCIĄŻEŃ */}
+                    {selectedPanels.every((p) => p.shape !== 'triangle') && (
+                      <div className="panel">
+                        <h3>Rozkład obciążeń</h3>
+                        <div className="row" style={{ marginTop: '4px' }}>
+                          <label style={{ minWidth: '70px' }}>Kierunek</label>
+                          {(() => {
+                            const firstDir = selectedPanels[0]?.loadTransferDir || 'two_way';
+                            const allSame = selectedPanels.every((p) => (p.loadTransferDir || 'two_way') === firstDir);
+                            const curDir = allSame ? firstDir : undefined;
+
+                            const setDir = (dir: PanelLoadTransferDir) => {
+                              if (setPanels) {
+                                setPanels((prev) =>
+                                  prev.map((p) => (selectedPanelIds.includes(p.id) ? { ...p, loadTransferDir: dir } : p))
+                                );
+                              }
+                              onInvalidateResults();
+                            };
+
+                            return (
+                              <div className="btnrow" style={{ flex: 1, gap: '4px', marginTop: 0 }}>
+                                <button
+                                  type="button"
+                                  className={`mini ${curDir === 'two_way' ? 'on' : ''}`}
+                                  style={{ flex: 1, padding: '5px 2px', fontSize: '11px', textAlign: 'center' }}
+                                  onClick={() => setDir('two_way')}
+                                  title="Przekazywanie obciążeń w obu osiach"
+                                >
+                                  Dwukierunkowy
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`mini ${curDir === 'one_way_x' ? 'on' : ''}`}
+                                  style={{ flex: 1, padding: '5px 2px', fontSize: '11px', textAlign: 'center' }}
+                                  onClick={() => setDir('one_way_x')}
+                                  title="Przekazywanie wzdłuż osi X okładziny"
+                                >
+                                  Wzdłuż X
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`mini ${curDir === 'one_way_y' ? 'on' : ''}`}
+                                  style={{ flex: 1, padding: '5px 2px', fontSize: '11px', textAlign: 'center' }}
+                                  onClick={() => setDir('one_way_y')}
+                                  title="Przekazywanie wzdłuż osi Y okładziny"
+                                >
+                                  Wzdłuż Y
+                                </button>
+                              </div>
+                            );
+                          })()}
                         </div>
-                      ))}
+                      </div>
+                    )}
+
+                    {/* OBCIĄŻENIE CIŚNIENIEM */}
+                    <div className="panel">
+                      <h3>Obciążenie ciśnieniem</h3>
+                      {(() => {
+                        const firstP = selectedPanels[0]?.pressure;
+                        const allSameDir = selectedPanels.every((p) => (p.pressure?.dir || 'normal') === (firstP?.dir || 'normal'));
+                        const curDir = allSameDir ? (firstP?.dir || 'normal') : undefined;
+                        
+                        const firstVal = firstP?.value ?? 0;
+                        const allSameVal = selectedPanels.every((p) => (p.pressure?.value ?? 0) === firstVal);
+                        const curVal = allSameVal ? firstVal : undefined;
+                        
+                        const updatePressureDir = (dir: 'X' | 'Y' | 'Z' | 'normal') => {
+                          if (setPanels) {
+                            setPanels((prev) =>
+                              prev.map((p) => {
+                                if (!selectedPanelIds.includes(p.id)) return p;
+                                return {
+                                  ...p,
+                                  pressure: { dir, value: p.pressure?.value ?? 0 },
+                                };
+                              })
+                            );
+                          }
+                          onInvalidateResults();
+                        };
+
+                        const updatePressureVal = (value: number) => {
+                          if (setPanels) {
+                            setPanels((prev) =>
+                              prev.map((p) => {
+                                if (!selectedPanelIds.includes(p.id)) return p;
+                                return {
+                                  ...p,
+                                  pressure: { dir: p.pressure?.dir || 'normal', value },
+                                };
+                              })
+                            );
+                          }
+                          onInvalidateResults();
+                        };
+
+                        return (
+                          <>
+                            <div className="row" style={{ marginBottom: '8px' }}>
+                              <label style={{ minWidth: '70px' }}>Kierunek</label>
+                              <div className="btnrow" style={{ flex: 1, gap: '4px', marginTop: 0 }}>
+                                <button
+                                  type="button"
+                                  className={`mini ${curDir === 'normal' ? 'on' : ''}`}
+                                  style={{ flex: 1.5, padding: '5px 2px', fontSize: '11px', textAlign: 'center' }}
+                                  onClick={() => updatePressureDir('normal')}
+                                  title="Prostopadle do płaszczyzny okładziny"
+                                >
+                                  Prostopadle
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`mini ${curDir === 'X' ? 'on' : ''}`}
+                                  style={{ flex: 1, padding: '5px 2px', fontSize: '11px', textAlign: 'center' }}
+                                  onClick={() => updatePressureDir('X')}
+                                  title="Globalna oś X"
+                                >
+                                  X
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`mini ${curDir === 'Y' ? 'on' : ''}`}
+                                  style={{ flex: 1, padding: '5px 2px', fontSize: '11px', textAlign: 'center' }}
+                                  onClick={() => updatePressureDir('Y')}
+                                  title="Globalna oś Y"
+                                >
+                                  Y
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`mini ${curDir === 'Z' ? 'on' : ''}`}
+                                  style={{ flex: 1, padding: '5px 2px', fontSize: '11px', textAlign: 'center' }}
+                                  onClick={() => updatePressureDir('Z')}
+                                  title="Globalna oś Z"
+                                >
+                                  Z
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="row" style={{ marginBottom: 0 }}>
+                              <label style={{ minWidth: '70px' }}>Wartość</label>
+                              <div className="inp-unit">
+                                <SmartNumberInput
+                                  value={curVal}
+                                  placeholder={selectedPanelIds.length > 1 && curVal === undefined ? 'różne' : '0.0'}
+                                  onFocus={onInvalidateResults}
+                                  onChange={(v) => updatePressureVal(v)}
+                                />
+                                <span className="unit">kN/m²</span>
+                              </div>
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                 )}
@@ -2911,10 +3072,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               ) : (
                 <span className="group-tag">
                   {analysisSettings.type === 'stability'
-                    ? 'Stateczność 3D'
+                    ? 'Stateczność'
                     : analysisSettings.type === 'modal'
-                    ? 'Drgania własne 3D'
-                    : 'Statyka liniowa 3D'}
+                    ? 'Drgania własne'
+                    : 'Statyka liniowa'}
                 </span>
               )}
             </div>
@@ -2934,7 +3095,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <h3>Wyniki</h3>
                   <div className="empty-state">
                     Zbuduj model i kliknij <b>OBLICZ</b> w górnym pasku,<br />
-                    aby zobaczyć ugięcia 3D, siły wewnętrzne My, Mz, Mx, Vy, Vz, N i reakcje.
+                    aby zobaczyć ugięcia, siły wewnętrzne My, Mz, Mx, Vy, Vz, N i reakcje.
                   </div>
                 </div>
               ) : (
@@ -2985,7 +3146,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {solved.type === 'stability' && (
                     <div className="panel">
                       <h3>
-                        Stateczność 3D <span className="tag">α_cr</span>
+                        Stateczność <span className="tag">α_cr</span>
                       </h3>
                       {solved.modes.length === 0 ? (
                         <div className="warn">
@@ -3032,7 +3193,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {solved.type === 'modal' && (
                     <div className="panel">
                       <h3>
-                        Drgania własne 3D <span className="tag">modalna</span>
+                        Drgania własne <span className="tag">modalna</span>
                       </h3>
                       {solved.modes.length === 0 ? (
                         <div className="warn">
@@ -3095,7 +3256,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <div className={`diagToggle ${showDeform ? 'active' : ''}`}>
                       <span className="lbl">
                         <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
-                        Forma odkształcenia (ugięcie 3D)
+                        Forma odkształcenia (ugięcie)
                       </span>
                       <input
                         type="checkbox"
@@ -3237,7 +3398,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       </div>
                     ) : (
                       <div style={{ fontSize: '11px', color: 'var(--text-dim)', padding: '6px 2px', lineHeight: '1.4' }}>
-                        Kliknij pręt na modelu 3D lub wybierz z listy powyżej, aby odczytać siły i ugięcia.
+                        Kliknij pręt na modelu lub wybierz z listy powyżej, aby odczytać siły i ugięcia.
                       </div>
                     )}
 
@@ -3422,15 +3583,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           onInvalidateResults();
                         }}
                       >
-                        <option value="linear_static">Statyka liniowa 3D</option>
-                        <option value="stability">Stateczność (wyboczenie) 3D</option>
-                        <option value="modal">Drgania własne (modalna) 3D</option>
+                        <option value="linear_static">Statyka liniowa</option>
+                        <option value="stability">Stateczność (wyboczenie)</option>
+                        <option value="modal">Drgania własne (modalna)</option>
                       </select>
                     </div>
 
                     {analysisSettings.type === 'linear_static' && (
                       <div className="muted" style={{ marginTop: '6px', lineHeight: 1.4 }}>
-                        Analiza statyczna przestrzenna 3D: wyznacza 6 sił przekrojowych (N, Vy, Vz, Mx, My, Mz),
+                        Analiza statyczna: wyznacza 6 sił przekrojowych (N, Vy, Vz, Mx, My, Mz),
                         przemieszczenia w węzłach oraz reakcje podporowe.
                       </div>
                     )}
@@ -3457,8 +3618,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           />
                         </div>
                         <div className="muted" style={{ marginTop: '6px', lineHeight: 1.4 }}>
-                          Analiza stateczności 3D: wyznacza mnożniki obciążenia krytycznego α_cr i przestrzenne formy
-                          wyboczenia.
+                          Analiza stateczności: wyznacza mnożniki obciążenia krytycznego α_cr i formy wyboczenia.
                         </div>
                       </div>
                     )}

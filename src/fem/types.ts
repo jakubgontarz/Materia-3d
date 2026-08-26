@@ -97,12 +97,21 @@ export interface Element3D {
 
 export type PanelShape = 'triangle' | 'rectangle';
 
+export type PanelLoadTransferDir = 'one_way_x' | 'one_way_y' | 'two_way';
+
+export interface PanelPressureLoad {
+  dir: 'X' | 'Y' | 'Z' | 'normal'; // global X, Y, Z or normal to panel (local z)
+  value: number; // pressure magnitude in kPa (kN/m²)
+}
+
 export interface Panel3D {
   id: number;
-  shape: PanelShape; // 'triangle' (3 nodes) or 'rectangle' (4 nodes)
-  nodeIds: number[]; // [n1, n2, n3] or [n1, n2, n3, n4]
+  shape: PanelShape; // 'triangle' (3 nodes) or 'rectangle' (3 nodes N1, N2, N3)
+  nodeIds: number[]; // [n1, n2, n3]
   name?: string;
   color?: string; // custom tint or default
+  loadTransferDir?: PanelLoadTransferDir; // 'one_way_x' (along edge N1->N2), 'one_way_y' (perpendicular / local y), 'two_way'
+  pressure?: PanelPressureLoad | null;
 }
 
 export interface Material {
