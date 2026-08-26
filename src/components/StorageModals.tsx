@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Node3D, Element3D, Section, Material } from '../fem/types';
+import { Node3D, Element3D, Section, Material, Panel3D } from '../fem/types';
 
 export const STORAGE_MODELS_KEY = 'materia_3d_saved_models';
 
@@ -12,6 +12,7 @@ export interface StoredModelRecord {
   data: {
     nodes: Node3D[];
     elements: Element3D[];
+    panels?: Panel3D[];
     sections: Section[];
     materials: Material[];
     analysisSettings: any;

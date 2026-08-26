@@ -95,6 +95,16 @@ export interface Element3D {
   thermal: MemberThermalLoad3D | null;
 }
 
+export type PanelShape = 'triangle' | 'rectangle';
+
+export interface Panel3D {
+  id: number;
+  shape: PanelShape; // 'triangle' (3 nodes) or 'rectangle' (4 nodes)
+  nodeIds: number[]; // [n1, n2, n3] or [n1, n2, n3, n4]
+  name?: string;
+  color?: string; // custom tint or default
+}
+
 export interface Material {
   id: number;
   name: string;

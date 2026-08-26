@@ -9,6 +9,8 @@ import {
   AnalysisSettings,
   AnalysisType,
   MemberHinges3D,
+  Panel3D,
+  PanelShape,
 } from '../fem/types';
 import { ICONS } from './Toolbar';
 import { CATALOG_DEFS, CATALOG_ORDER } from '../fem/catalogs';
@@ -19,6 +21,8 @@ interface SidebarProps {
   setNodes: React.Dispatch<React.SetStateAction<Node3D[]>>;
   elements: Element3D[];
   setElements: React.Dispatch<React.SetStateAction<Element3D[]>>;
+  panels?: Panel3D[];
+  setPanels?: React.Dispatch<React.SetStateAction<Panel3D[]>>;
   sections: Section[];
   setSections: React.Dispatch<React.SetStateAction<Section[]>>;
   materials: Material[];
@@ -27,8 +31,14 @@ interface SidebarProps {
   setSelectedNodeIds: React.Dispatch<React.SetStateAction<number[]>>;
   selectedElemIds: number[];
   setSelectedElemIds: React.Dispatch<React.SetStateAction<number[]>>;
-  mode: 'select' | 'addBar';
-  setMode: (m: 'select' | 'addBar') => void;
+  selectedPanelIds?: number[];
+  setSelectedPanelIds?: React.Dispatch<React.SetStateAction<number[]>>;
+  mode: 'select' | 'addBar' | 'addPanel';
+  setMode: (m: 'select' | 'addBar' | 'addPanel') => void;
+  panelShape?: PanelShape;
+  setPanelShape?: (s: PanelShape) => void;
+  panelPoints?: number[];
+  setPanelPoints?: React.Dispatch<React.SetStateAction<number[]>>;
   barStartNodeId: number | null;
   setBarStartNodeId: (id: number | null) => void;
   analysisSettings: AnalysisSettings;
@@ -76,6 +86,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setNodes,
   elements,
   setElements,
+  panels = [],
+  setPanels,
   sections,
   setSections,
   materials,
@@ -84,8 +96,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setSelectedNodeIds,
   selectedElemIds,
   setSelectedElemIds,
+  selectedPanelIds = [],
+  setSelectedPanelIds = (_: React.SetStateAction<number[]>) => {},
   mode,
   setMode,
+  panelShape = 'triangle',
+  setPanelShape,
+  panelPoints = [],
+  setPanelPoints,
   barStartNodeId,
   setBarStartNodeId,
   analysisSettings,
@@ -129,6 +147,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [addBarCoordsCollapsed, setAddBarCoordsCollapsed] = useState(false);
   const [nodesGroupCollapsed, setNodesGroupCollapsed] = useState(false);
   const [elementsGroupCollapsed, setElementsGroupCollapsed] = useState(false);
+  const [panelsGroupCollapsed, setPanelsGroupCollapsed] = useState(false);
   const [calcGroupCollapsed, setCalcGroupCollapsed] = useState(false);
   const [analysisCollapsed, setAnalysisCollapsed] = useState(false);
   const [libraryCollapsed, setLibraryCollapsed] = useState(false);
@@ -189,6 +208,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Helper getters
   const selectedNodes: Node3D[] = nodes.filter((n) => selectedNodeIds.includes(n.id));
   const selectedElements: Element3D[] = elements.filter((e) => selectedElemIds.includes(e.id));
+  const selectedPanels: Panel3D[] = (panels || []).filter((p) => selectedPanelIds.includes(p.id));
   const getNode = (id: number) => nodes.find((n) => n.id === id);
   const getElement = (id: number) => elements.find((e) => e.id === id);
   const getSection = (id: number) => sections.find((s) => s.id === id);
@@ -238,10 +258,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     onInvalidateResults();
   };
 
-  // Unified Delete Selected (all selected nodes & elements)
+  // Unified Delete Selected (all selected nodes, elements & panels)
   const handleDeleteSelected = () => {
     const nodeIdsToDelete = new Set(selectedNodeIds);
     const elemIdsToDelete = new Set(selectedElemIds);
+    const panelIdsToDelete = new Set(selectedPanelIds);
 
     setElements((prev) =>
       prev.filter(
@@ -251,9 +272,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
           !nodeIdsToDelete.has(e.n2)
       )
     );
+    if (setPanels) {
+      setPanels((prev) =>
+        prev.filter(
+          (p) =>
+            !panelIdsToDelete.has(p.id) &&
+            p.nodeIds.every((nid) => !nodeIdsToDelete.has(nid))
+        )
+      );
+    }
     setNodes((prev) => prev.filter((n) => !nodeIdsToDelete.has(n.id)));
     setSelectedNodeIds([]);
     setSelectedElemIds([]);
+    setSelectedPanelIds([]);
     setMoveFormOpen(false);
     setSplitFormOpen(false);
     onInvalidateResults();
@@ -263,7 +294,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const confirmMoveOrCopy = () => {
     const hasNodes = selectedNodeIds.length > 0;
     const hasElements = selectedElemIds.length > 0;
-    if (!hasNodes && !hasElements) {
+    const hasPanels = selectedPanelIds.length > 0;
+    if (!hasNodes && !hasElements && !hasPanels) {
       setMoveFormOpen(false);
       return;
     }
@@ -276,6 +308,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       selectedElements.forEach((el) => {
         allNodeIdsToMove.add(el.n1);
         allNodeIdsToMove.add(el.n2);
+      });
+      selectedPanels.forEach((p) => {
+        p.nodeIds.forEach((nid) => allNodeIdsToMove.add(nid));
       });
 
       const totalDx = moveDx * repeat;
@@ -305,6 +340,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       baseNodeIds.add(el.n1);
       baseNodeIds.add(el.n2);
     });
+    selectedPanels.forEach((p) => {
+      p.nodeIds.forEach((nid) => baseNodeIds.add(nid));
+    });
 
     const baseNodes = Array.from(baseNodeIds)
       .map((id) => getNode(id))
@@ -312,9 +350,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     let nextNId = nodes.length > 0 ? Math.max(...nodes.map((n) => n.id)) + 1 : 1;
     let nextEId = elements.length > 0 ? Math.max(...elements.map((e) => e.id)) + 1 : 1;
+    let nextPanId = (panels && panels.length > 0) ? Math.max(...panels.map((p) => p.id)) + 1 : 1;
 
     const newNodes: Node3D[] = [];
     const newElements: Element3D[] = [];
+    const newPanels: Panel3D[] = [];
     const connectingElements: Element3D[] = [];
 
     let prevStepNodeMap = new Map<number, number>();
@@ -324,6 +364,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     const allCreatedElemIds: number[] = [];
     const allCreatedNodeIds: number[] = [];
+    const allCreatedPanelIds: number[] = [];
 
     for (let step = 1; step <= repeat; step++) {
       const currentStepNodeMap = new Map<number, number>();
@@ -382,18 +423,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
         newElements.push(newEl);
       });
 
+      selectedPanels.forEach((origPan) => {
+        const newPanelId = nextPanId++;
+        allCreatedPanelIds.push(newPanelId);
+        const mappedNodeIds = origPan.nodeIds.map((nid) => currentStepNodeMap.get(nid)!);
+
+        const newPan: Panel3D = {
+          ...JSON.parse(JSON.stringify(origPan)),
+          id: newPanelId,
+          nodeIds: mappedNodeIds,
+        };
+        newPanels.push(newPan);
+      });
+
       prevStepNodeMap = currentStepNodeMap;
     }
 
     setNodes((prev) => [...prev, ...newNodes]);
     setElements((prev) => [...prev, ...newElements, ...connectingElements]);
+    if (setPanels && newPanels.length > 0) {
+      setPanels((prev) => [...prev, ...newPanels]);
+    }
 
     if (allCreatedElemIds.length > 0) {
       setSelectedElemIds(allCreatedElemIds);
       setSelectedNodeIds([]);
+      setSelectedPanelIds([]);
+    } else if (allCreatedPanelIds.length > 0) {
+      setSelectedPanelIds(allCreatedPanelIds);
+      setSelectedNodeIds([]);
+      setSelectedElemIds([]);
     } else {
       setSelectedNodeIds(allCreatedNodeIds);
       setSelectedElemIds([]);
+      setSelectedPanelIds([]);
     }
 
     setMoveFormOpen(false);
@@ -742,6 +805,177 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
+  // Confirm Add Panel with coordinates
+  const confirmAddPanelCoords = () => {
+    const vX = addBarValX;
+    const vY = addBarValY;
+    const vZ = addBarValZ;
+
+    let targetX = vX;
+    let targetY = vY;
+    let targetZ = vZ;
+
+    const currentPts = panelPoints || [];
+    const isRect3rdPt = panelShape === 'rectangle' && currentPts.length >= 2;
+
+    const lastPointNodeId = currentPts.length > 0 ? currentPts[currentPts.length - 1] : null;
+    const lastNode = lastPointNodeId != null ? getNode(lastPointNodeId) : null;
+    if (lastNode && addBarRel) {
+      targetX = lastNode.x + vX;
+      targetY = lastNode.y + vY;
+      targetZ = lastNode.z + vZ;
+    }
+
+    let targetNodeId: number | null = null;
+    const existing = nodes.find(
+      (n) => Math.hypot(n.x - targetX, n.y - targetY, n.z - targetZ) < 1e-4
+    );
+
+    if (existing) {
+      targetNodeId = existing.id;
+    } else if (!isRect3rdPt) {
+      targetNodeId = nodes.length > 0 ? Math.max(...nodes.map((n) => n.id)) + 1 : 1;
+      setNodes((prev) => [
+        ...prev,
+        {
+          id: targetNodeId!,
+          x: targetX,
+          y: targetY,
+          z: targetZ,
+          support: null,
+          force: null,
+          moment: null,
+          mass: null,
+        },
+      ]);
+    }
+
+    if (onNodeCoordinateSet) {
+      onNodeCoordinateSet({ x: targetX, y: targetY, z: targetZ });
+    }
+    if (targetNodeId != null && onNodePlaced) {
+      onNodePlaced(targetNodeId);
+    }
+
+    if (panelShape === 'triangle') {
+      if (targetNodeId == null) return;
+      if (currentPts.length === 0) {
+        setPanelPoints?.([targetNodeId]);
+        setAddBarValX(0);
+        setAddBarValY(0);
+        setAddBarValZ(0);
+      } else if (currentPts.length === 1) {
+        if (currentPts[0] === targetNodeId) {
+          // Same node, ignore duplicate
+        } else {
+          setPanelPoints?.([currentPts[0], targetNodeId]);
+          setAddBarValX(0);
+          setAddBarValY(0);
+          setAddBarValZ(0);
+        }
+      } else if (currentPts.length >= 2) {
+        const n1Id = currentPts[0];
+        const n2Id = currentPts[1];
+        if (targetNodeId === n1Id || targetNodeId === n2Id) {
+          return;
+        }
+        const nextPanelId = (panels && panels.length > 0 ? Math.max(...panels.map((p) => p.id)) : 0) + 1;
+        const newPanel: Panel3D = {
+          id: nextPanelId,
+          shape: 'triangle',
+          nodeIds: [n1Id, n2Id, targetNodeId],
+        };
+        setPanels?.((prev) => [...prev, newPanel]);
+        setPanelPoints?.([]);
+        setAddBarValX(0);
+        setAddBarValY(0);
+        setAddBarValZ(0);
+        onInvalidateResults();
+      }
+    } else {
+      // rectangle
+      if (currentPts.length === 0) {
+        if (targetNodeId == null) return;
+        setPanelPoints?.([targetNodeId]);
+        setAddBarValX(0);
+        setAddBarValY(0);
+        setAddBarValZ(0);
+      } else if (currentPts.length === 1) {
+        if (targetNodeId == null) return;
+        if (currentPts[0] === targetNodeId) {
+          // Same node
+        } else {
+          setPanelPoints?.([currentPts[0], targetNodeId]);
+          setAddBarValX(0);
+          setAddBarValY(0);
+          setAddBarValZ(0);
+        }
+      } else if (currentPts.length >= 2) {
+        const p1 = nodes.find((n) => n.id === currentPts[0]);
+        const p2 = nodes.find((n) => n.id === currentPts[1]);
+        if (!p1 || !p2) return;
+
+        let n3Id: number;
+        if (existing) {
+          n3Id = existing.id;
+        } else {
+          const maxId = nodes.length > 0 ? Math.max(...nodes.map((n) => n.id)) : 0;
+          n3Id = maxId + 1;
+          const newNode: Node3D = {
+            id: n3Id,
+            x: targetX,
+            y: targetY,
+            z: targetZ,
+            support: null,
+            force: null,
+            moment: null,
+            mass: null,
+          };
+          setNodes((prev) => [...prev, newNode]);
+        }
+
+        const n3 = nodes.find((n) => n.id === n3Id) || { x: targetX, y: targetY, z: targetZ };
+
+        // Base vector u = p2 - p1
+        const ux = p2.x - p1.x;
+        const uy = p2.y - p1.y;
+        const uz = p2.z - p1.z;
+        const uLenSq = ux * ux + uy * uy + uz * uz;
+        if (uLenSq < 1e-8) return;
+
+        // Vector v = n3 - p1
+        const vx = n3.x - p1.x;
+        const vy = n3.y - p1.y;
+        const vz = n3.z - p1.z;
+
+        // Projection dot product
+        const dot = (vx * ux + vy * uy + vz * uz) / uLenSq;
+        const wx = vx - dot * ux;
+        const wy = vy - dot * uy;
+        const wz = vz - dot * uz;
+        const wLen = Math.hypot(wx, wy, wz);
+
+        if (wLen < 1e-4) {
+          return;
+        }
+
+        const nextPanelId = (panels && panels.length > 0 ? Math.max(...panels.map((p) => p.id)) : 0) + 1;
+        const newPanel: Panel3D = {
+          id: nextPanelId,
+          shape: 'rectangle',
+          nodeIds: [p1.id, p2.id, n3Id],
+        };
+
+        setPanels?.((prev) => [...prev, newPanel]);
+        setPanelPoints?.([]);
+        setAddBarValX(0);
+        setAddBarValY(0);
+        setAddBarValZ(0);
+        onInvalidateResults();
+      }
+    }
+  };
+
   // Add Material
   const handleAddMaterial = () => {
     const nextId = materials.length > 0 ? Math.max(...materials.map((m) => m.id)) + 1 : 1;
@@ -1018,7 +1252,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       <div id="sidebarScroll">
-        {/* GROUP 1: WSPÓŁRZĘDNE (w trybie Rysuj) LUB WŁAŚCIWOŚCI (w trybie Zaznacz) */}
+        {/* GROUP 1: WSPÓŁRZĘDNE (w trybie Rysuj / Obrys) LUB WŁAŚCIWOŚCI (w trybie Zaznacz) */}
         {mode === 'addBar' ? (
           <div className="sidebar-group">
             <div className="group-header" onClick={() => setAddBarCoordsCollapsed(!addBarCoordsCollapsed)}>
@@ -1126,15 +1360,193 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             )}
           </div>
+        ) : mode === 'addPanel' ? (
+          <div className="sidebar-group">
+            <div className="group-header" onClick={() => setAddBarCoordsCollapsed(!addBarCoordsCollapsed)}>
+              <div className="group-title">
+                <span>Współrzędne</span>
+                <span className="group-tag">
+                  {panelShape === 'triangle'
+                    ? `Trójkąt (${panelPoints.length}/3)`
+                    : `Prostokąt (${panelPoints.length}/3)`}
+                </span>
+              </div>
+              <span className="subtle-icon">{addBarCoordsCollapsed ? '▸' : '▾'}</span>
+            </div>
+            {!addBarCoordsCollapsed && (
+              <div className="group-body">
+                <div className="panel">
+                  <h3>Obrys / Okładzina 3D</h3>
+
+                  {/* Kształt obrysu */}
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+                    <button
+                      className={`mode-btn ${panelShape === 'triangle' ? 'active' : ''}`}
+                      style={{
+                        flex: 1,
+                        padding: '6px 8px',
+                        fontSize: '12px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '4px',
+                      }}
+                      onClick={() => setPanelShape?.('triangle')}
+                    >
+                      <span style={{ width: 14, height: 14, display: 'inline-flex' }}>{ICONS.triangle}</span>
+                      Trójkąt
+                    </button>
+                    <button
+                      className={`mode-btn ${panelShape === 'rectangle' ? 'active' : ''}`}
+                      style={{
+                        flex: 1,
+                        padding: '6px 8px',
+                        fontSize: '12px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '4px',
+                      }}
+                      onClick={() => setPanelShape?.('rectangle')}
+                    >
+                      <span style={{ width: 14, height: 14, display: 'inline-flex' }}>{ICONS.rectangle}</span>
+                      Prostokąt
+                    </button>
+                  </div>
+
+                  {/* Wybrane punkty */}
+                  {panelPoints.length > 0 && (
+                    <div
+                      className="card"
+                      style={{
+                        marginBottom: '10px',
+                        background: 'var(--surface)',
+                        padding: '8px 10px',
+                        borderColor: 'var(--input-border)',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          marginBottom: '4px',
+                        }}
+                      >
+                        <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent)' }}>
+                          Wybrane węzły:
+                        </span>
+                        <button
+                          className="mini"
+                          onClick={() => setPanelPoints?.([])}
+                          title="Zresetuj wybrane punkty"
+                        >
+                          Zresetuj
+                        </button>
+                      </div>
+                      <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        {panelPoints.map((ptId, idx) => {
+                          const n = getNode(ptId);
+                          return (
+                            <div key={idx} style={{ color: 'var(--text)' }}>
+                              <strong>Punkt {idx + 1}: W{ptId}</strong>
+                              {n && (
+                                <span className="muted" style={{ marginLeft: '4px' }}>
+                                  ({fmtSmart(n.x)}, {fmtSmart(n.y)}, {fmtSmart(n.z)})
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="muted" style={{ marginBottom: '10px', fontSize: '12px' }}>
+                    {panelShape === 'triangle'
+                      ? panelPoints.length === 0
+                        ? 'Wpisz współrzędne 1. węzła trójkąta:'
+                        : panelPoints.length === 1
+                        ? 'Wpisz współrzędne 2. węzła trójkąta:'
+                        : 'Wpisz współrzędne 3. węzła (domyka trójkąt):'
+                      : panelPoints.length === 0
+                      ? 'Wpisz współrzędne 1. węzła bazowego prostokąta:'
+                      : panelPoints.length === 1
+                      ? 'Wpisz współrzędne 2. węzła (wyznacza 1. bok prostokąta):'
+                      : 'Wpisz współrzędne 3. punktu (wyznacza kąt i szerokość):'}
+                  </div>
+
+                  <div className="checkline" style={{ marginBottom: '10px' }}>
+                    <input
+                      type="checkbox"
+                      id="chkAddPanelRel"
+                      checked={addBarRel}
+                      onChange={(e) => setAddBarRel(e.target.checked)}
+                    />
+                    <label htmlFor="chkAddPanelRel" style={{ cursor: 'pointer', userSelect: 'none' }}>
+                      Względnie (przyrosty ΔX, ΔY, ΔZ)
+                    </label>
+                  </div>
+
+                  <div className="row-triple" style={{ marginBottom: '10px' }}>
+                    <div className="third">
+                      <label>{addBarRel ? 'ΔX' : 'X'}</label>
+                      <div className="inp-unit">
+                        <SmartNumberInput
+                          step="0.5"
+                          value={addBarValX}
+                          onFocus={onInvalidateResults}
+                          onChange={(v) => setAddBarValX(v)}
+                        />
+                        <span className="unit">m</span>
+                      </div>
+                    </div>
+                    <div className="third">
+                      <label>{addBarRel ? 'ΔY' : 'Y'}</label>
+                      <div className="inp-unit">
+                        <SmartNumberInput
+                          step="0.5"
+                          value={addBarValY}
+                          onFocus={onInvalidateResults}
+                          onChange={(v) => setAddBarValY(v)}
+                        />
+                        <span className="unit">m</span>
+                      </div>
+                    </div>
+                    <div className="third">
+                      <label>{addBarRel ? 'ΔZ' : 'Z'}</label>
+                      <div className="inp-unit">
+                        <SmartNumberInput
+                          step="0.5"
+                          value={addBarValZ}
+                          onFocus={onInvalidateResults}
+                          onChange={(v) => setAddBarValZ(v)}
+                        />
+                        <span className="unit">m</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button className="primary-btn" onClick={confirmAddPanelCoords}>
+                    {panelShape === 'triangle' && panelPoints.length === 2
+                      ? 'Utwórz trójkąt'
+                      : panelShape === 'rectangle' && panelPoints.length === 2
+                      ? 'Utwórz prostokąt'
+                      : 'Dodaj punkt'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         ) : (
           <>
             {/* WŁAŚCIWOŚCI GÓRNY KOMUNIKAT */}
-            {selectedNodeIds.length === 0 && selectedElemIds.length === 0 ? (
+            {selectedNodeIds.length === 0 && selectedElemIds.length === 0 && selectedPanelIds.length === 0 ? (
               <div className="panel">
                 <h3>Właściwości</h3>
                 <div className="empty-state">
-                  Zaznacz węzeł lub pręt na rysunku 3D (tryb „Zaznacz”),<br />
-                  aby edytować jego właściwości: podpory, obciążenia, przekrój i materiał.
+                  Zaznacz węzeł, pręt lub okładzinę na rysunku 3D (tryb „Zaznacz”),<br />
+                  aby edytować ich właściwości lub wykonać operacje.
                 </div>
               </div>
             ) : (
@@ -1142,13 +1554,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
                   <h3 style={{ margin: 0 }}>Właściwości</h3>
                   <div className="muted" style={{ fontSize: '11px', fontWeight: 600 }}>
-                    {selectedNodeIds.length === 1 && selectedElemIds.length === 0
+                    {selectedNodeIds.length === 1 && selectedElemIds.length === 0 && selectedPanelIds.length === 0
                       ? `Węzeł W${selectedNodeIds[0]}`
-                      : selectedElemIds.length === 1 && selectedNodeIds.length === 0
+                      : selectedElemIds.length === 1 && selectedNodeIds.length === 0 && selectedPanelIds.length === 0
                       ? `Pręt P${selectedElemIds[0]} (W${selectedElements[0]?.n1}→W${selectedElements[0]?.n2})`
+                      : selectedPanelIds.length === 1 && selectedNodeIds.length === 0 && selectedElemIds.length === 0
+                      ? `Okładzina O${selectedPanelIds[0]} (${selectedPanels[0]?.shape === 'triangle' ? 'trójkątna' : 'prostokątna'}, W${selectedPanels[0]?.nodeIds.join(', W')})`
                       : [
                           selectedNodeIds.length ? pluralUnit(selectedNodeIds.length, 'węzeł', 'węzły', 'węzłów') : null,
                           selectedElemIds.length ? pluralUnit(selectedElemIds.length, 'pręt', 'pręty', 'prętów') : null,
+                          selectedPanelIds.length ? pluralUnit(selectedPanelIds.length, 'okładzina', 'okładziny', 'okładzin') : null,
                         ]
                           .filter(Boolean)
                           .join(', ')}
@@ -1161,7 +1576,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     className="mini danger"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '5px 10px', fontWeight: 600 }}
                     onClick={handleDeleteSelected}
-                    title="Usuń zaznaczone węzły i pręty"
+                    title="Usuń zaznaczone obiekty"
                   >
                     {ICONS.del}
                     <span>Usuń</span>
@@ -2438,6 +2853,38 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         </div>
                       );
                     })()}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* GRUPA OKŁADZINY (gdy zaznaczona przynajmniej jedna okładzina) */}
+            {selectedPanelIds.length > 0 && (
+              <div className="sidebar-group">
+                <div className="group-header" onClick={() => setPanelsGroupCollapsed(!panelsGroupCollapsed)}>
+                  <div className="group-title">
+                    <span>Okładziny 3D</span>
+                    <span className="group-tag">
+                      {selectedPanelIds.length > 1 ? `${selectedPanelIds.length} zaznaczone` : `O${selectedPanelIds[0]}`}
+                    </span>
+                  </div>
+                  <span className="subtle-icon">{panelsGroupCollapsed ? '▸' : '▾'}</span>
+                </div>
+                {!panelsGroupCollapsed && (
+                  <div className="group-body">
+                    <div className="panel">
+                      <h3>
+                        {selectedPanelIds.length > 1
+                          ? `Okładziny (${selectedPanelIds.length}): ${selectedPanelIds.map((id) => 'O' + id).join(', ')}`
+                          : `Okładzina O${selectedPanelIds[0]}`}
+                      </h3>
+                      {selectedPanels.map((pan) => (
+                        <div key={pan.id} style={{ marginBottom: '8px', fontSize: '12px' }}>
+                          <div style={{ fontWeight: 600 }}>O{pan.id} — kształt: {pan.shape === 'triangle' ? 'Trójkąt' : 'Prostokąt'}</div>
+                          <div className="muted">Węzły konturu: {pan.nodeIds.map((id) => 'W' + id).join(', ')}</div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>

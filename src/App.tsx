@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { RenderEngine3D, ViewCubeHit } from './render/engine3d';
-import { drawScene3D, SceneRenderOptions } from './render/scene3d';
+import { drawScene3D, SceneRenderOptions, getPanelCorners } from './render/scene3d';
 import {
   Node3D,
   Element3D,
@@ -8,6 +8,8 @@ import {
   Material,
   SolverResult3D,
   AnalysisSettings,
+  Panel3D,
+  PanelShape,
 } from './fem/types';
 import { INITIAL_SECTIONS, INITIAL_MATERIALS } from './fem/catalogs';
 import { generate3DPortalFrame } from './fem/templates';
@@ -109,6 +111,7 @@ const TOGGLE_ICONS = {
 interface HistoryState {
   nodes: Node3D[];
   elements: Element3D[];
+  panels: Panel3D[];
   sections: Section[];
   materials: Material[];
   analysisSettings: AnalysisSettings;
@@ -251,7 +254,10 @@ function drawTransientOverlays(
   engine: RenderEngine3D,
   nodes: Node3D[],
   elements: Element3D[],
-  mode: 'select' | 'addBar',
+  panels: Panel3D[],
+  mode: 'select' | 'addBar' | 'addPanel',
+  panelShape: PanelShape,
+  panelPoints: number[],
   barStartNodeId: number | null,
   lastPlacedNodeId: number | null,
   lastDrawnElemId: number | null,
@@ -289,8 +295,8 @@ function drawTransientOverlays(
     }
   }
 
-  // 3. Mode 'addBar' preview: guide line, dimension line, and target node tip (mouse only, disabled on touch)
-  if (mode === 'addBar' && !isTouch) {
+  // 3. Mode 'addBar' preview: guide line, dimension line, and target node tip
+  if (mode === 'addBar') {
     if (barStartNodeId != null) {
       const n1 = nodes.find((n) => n.id === barStartNodeId);
       if (n1) {
@@ -393,6 +399,141 @@ function drawTransientOverlays(
       drawNodeCoordTip(ctx, pb, tipLabel, '#2563eb');
     }
   }
+
+  // 4. Mode 'addPanel' preview
+  if (mode === 'addPanel' && mousePos) {
+    let targetPt: [number, number, number] = [0, 0, 0];
+    let targetNodeId: number | null = null;
+    if (hoverNodeId != null) {
+      const hn = nodes.find((n) => n.id === hoverNodeId);
+      if (hn) {
+        targetPt = [hn.x, hn.y, hn.z];
+        targetNodeId = hn.id;
+      }
+    } else {
+      const pt = engine.unprojectToPlane(mousePos.px, mousePos.py, gridPlane, gridOffset);
+      let x = pt[0];
+      let y = pt[1];
+      let z = pt[2];
+      if (snapEnabled) {
+        if (gridPlane === 'XY') {
+          x = Math.round(x / snapSize) * snapSize;
+          y = Math.round(y / snapSize) * snapSize;
+          z = gridOffset;
+        } else if (gridPlane === 'XZ') {
+          x = Math.round(x / snapSize) * snapSize;
+          y = gridOffset;
+          z = Math.round(z / snapSize) * snapSize;
+        } else if (gridPlane === 'YZ') {
+          x = gridOffset;
+          y = Math.round(y / snapSize) * snapSize;
+          z = Math.round(z / snapSize) * snapSize;
+        }
+      }
+      targetPt = [x, y, z];
+    }
+
+    const curPts = panelPoints || [];
+    const pb = engine.project(targetPt);
+
+    if (curPts.length === 0) {
+      const tipLabel = targetNodeId != null
+        ? `W${targetNodeId} (${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`
+        : `(${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`;
+      drawNodeCoordTip(ctx, pb, tipLabel, '#0891b2');
+    } else if (curPts.length === 1) {
+      const n1 = nodes.find((n) => n.id === curPts[0]);
+      if (n1) {
+        const pa = engine.project([n1.x, n1.y, n1.z]);
+        const dist3D = Math.hypot(targetPt[0] - n1.x, targetPt[1] - n1.y, targetPt[2] - n1.z);
+        if (dist3D >= 0.001) {
+          ctx.save();
+          ctx.strokeStyle = '#0891b2';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 4]);
+          ctx.beginPath();
+          ctx.moveTo(pa.x, pa.y);
+          ctx.lineTo(pb.x, pb.y);
+          ctx.stroke();
+          ctx.restore();
+
+          drawSegmentDimensionPoints(ctx, pa, pb, dist3D, '#0891b2');
+          const tipLabel = targetNodeId != null
+            ? `W${targetNodeId} (${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`
+            : `(${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`;
+          drawNodeCoordTip(ctx, pb, tipLabel, '#0891b2');
+        }
+      }
+    } else if (curPts.length >= 2) {
+      const n1 = nodes.find((n) => n.id === curPts[0]);
+      const n2 = nodes.find((n) => n.id === curPts[1]);
+      if (n1 && n2) {
+        const pa = engine.project([n1.x, n1.y, n1.z]);
+        const pb2 = engine.project([n2.x, n2.y, n2.z]);
+
+        if (panelShape === 'triangle') {
+          ctx.save();
+          ctx.fillStyle = 'rgba(8, 145, 178, 0.2)';
+          ctx.strokeStyle = '#0891b2';
+          ctx.lineWidth = 1.8;
+          ctx.setLineDash([5, 4]);
+          ctx.beginPath();
+          ctx.moveTo(pa.x, pa.y);
+          ctx.lineTo(pb2.x, pb2.y);
+          ctx.lineTo(pb.x, pb.y);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+
+          const tipLabel = targetNodeId != null
+            ? `W${targetNodeId} (${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`
+            : `(${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`;
+          drawNodeCoordTip(ctx, pb, tipLabel, '#0891b2');
+        } else {
+          // Rectangle
+          const ux = n2.x - n1.x;
+          const uy = n2.y - n1.y;
+          const uz = n2.z - n1.z;
+          const uLenSq = ux * ux + uy * uy + uz * uz;
+          if (uLenSq > 1e-8) {
+            const vx = targetPt[0] - n1.x;
+            const vy = targetPt[1] - n1.y;
+            const vz = targetPt[2] - n1.z;
+            const dot = (vx * ux + vy * uy + vz * uz) / uLenSq;
+            const wx = vx - dot * ux;
+            const wy = vy - dot * uy;
+            const wz = vz - dot * uz;
+
+            const v3 = [n2.x + wx, n2.y + wy, n2.z + wz] as [number, number, number];
+            const v4 = [n1.x + wx, n1.y + wy, n1.z + wz] as [number, number, number];
+            const pc = engine.project(v3);
+            const pd = engine.project(v4);
+
+            ctx.save();
+            ctx.fillStyle = 'rgba(8, 145, 178, 0.2)';
+            ctx.strokeStyle = '#0891b2';
+            ctx.lineWidth = 1.8;
+            ctx.setLineDash([5, 4]);
+            ctx.beginPath();
+            ctx.moveTo(pa.x, pa.y);
+            ctx.lineTo(pb2.x, pb2.y);
+            ctx.lineTo(pc.x, pc.y);
+            ctx.lineTo(pd.x, pd.y);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+
+            const tipLabel = targetNodeId != null
+              ? `W${targetNodeId} (${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`
+              : `(${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`;
+            drawNodeCoordTip(ctx, pb, tipLabel, '#0891b2');
+          }
+        }
+      }
+    }
+  }
 }
 
 export default function App() {
@@ -401,6 +542,9 @@ export default function App() {
 
   const [nodes, setNodes] = useState<Node3D[]>(initialData.nodes);
   const [elements, setElements] = useState<Element3D[]>(initialData.elements);
+  const [panels, setPanels] = useState<Panel3D[]>([]);
+  const [panelShape, setPanelShape] = useState<PanelShape>('triangle');
+  const [panelPoints, setPanelPoints] = useState<number[]>([]);
   const [sections, setSections] = useState<Section[]>(INITIAL_SECTIONS);
   const [materials, setMaterials] = useState<Material[]>(INITIAL_MATERIALS);
 
@@ -408,11 +552,12 @@ export default function App() {
   const [defaultMaterialId, setDefaultMaterialId] = useState<number>(1);
 
   // Interaction Mode & 3D Navigation Mode
-  const [mode, setMode] = useState<'select' | 'addBar'>('select');
+  const [mode, setMode] = useState<'select' | 'addBar' | 'addPanel'>('select');
   const [navMode, setNavMode] = useState<'orbit' | 'boxSelect' | 'pan' | 'zoom'>('orbit');
 
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const [selectedElemIds, setSelectedElemIds] = useState<number[]>([]);
+  const [selectedPanelIds, setSelectedPanelIds] = useState<number[]>([]);
   const [mobileSelMode, setMobileSelMode] = useState<SelectionModeType>('replace');
   const [keyModifiers, setKeyModifiers] = useState<{ ctrl: boolean; shift: boolean }>({ ctrl: false, shift: false });
   const keyModifiersRef = useRef<{ ctrl: boolean; shift: boolean }>({ ctrl: false, shift: false });
@@ -428,6 +573,7 @@ export default function App() {
   const hoverViewCubeRef = useRef<ViewCubeHit | null>(null);
   const hoverNodeIdRef = useRef<number | null>(null);
   const hoverElemIdRef = useRef<number | null>(null);
+  const hoverPanelIdRef = useRef<number | null>(null);
 
   // Status & Hint
   const [statusHint, setStatusHint] = useState<string>('Tryb: Zaznacz');
@@ -604,19 +750,21 @@ export default function App() {
     const state: HistoryState = {
       nodes: JSON.parse(JSON.stringify(nodes)),
       elements: JSON.parse(JSON.stringify(elements)),
+      panels: JSON.parse(JSON.stringify(panels)),
       sections: JSON.parse(JSON.stringify(sections)),
       materials: JSON.parse(JSON.stringify(materials)),
       analysisSettings: JSON.parse(JSON.stringify(analysisSettings)),
     };
     setHistory((prev) => [...prev.slice(0, historyIndex + 1), state]);
     setHistoryIndex((prev) => prev + 1);
-  }, [nodes, elements, sections, materials, analysisSettings, historyIndex]);
+  }, [nodes, elements, panels, sections, materials, analysisSettings, historyIndex]);
 
   const handleUndo = () => {
     if (historyIndex > 0) {
       const prevState = history[historyIndex - 1];
       setNodes(prevState.nodes);
       setElements(prevState.elements);
+      setPanels(prevState.panels || []);
       setSections(prevState.sections);
       setMaterials(prevState.materials);
       setAnalysisSettings(prevState.analysisSettings);
@@ -630,9 +778,9 @@ export default function App() {
       const nextState = history[historyIndex + 1];
       setNodes(nextState.nodes);
       setElements(nextState.elements);
+      setPanels(nextState.panels || []);
       setSections(nextState.sections);
       setMaterials(nextState.materials);
-      setAnalysisSettings(nextState.analysisSettings);
       setHistoryIndex(historyIndex + 1);
       setSolved(null);
     }
@@ -648,6 +796,8 @@ export default function App() {
   const handleNewModel = () => {
     setNodes([]);
     setElements([]);
+    setPanels([]);
+    setPanelPoints([]);
     setSolved(null);
     setSelectedNodeIds([]);
     setSelectedElemIds([]);
@@ -662,7 +812,7 @@ export default function App() {
     if (currentModelId) {
       const list = getStoredModelsList();
       const idx = list.findIndex((m) => m.id === currentModelId);
-      const data = { nodes, elements, sections, materials, analysisSettings };
+      const data = { nodes, elements, panels, sections, materials, analysisSettings };
       const now = new Date().toISOString();
       if (idx !== -1) {
         list[idx] = {
@@ -699,7 +849,7 @@ export default function App() {
       existingIdx >= 0
         ? list[existingIdx].id
         : 'model_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-    const data = { nodes, elements, sections, materials, analysisSettings };
+    const data = { nodes, elements, panels, sections, materials, analysisSettings };
     const now = new Date().toISOString();
     const record: StoredModelRecord = {
       id,
@@ -725,6 +875,8 @@ export default function App() {
     if (record.data) {
       if (record.data.nodes) setNodes(record.data.nodes);
       if (record.data.elements) setElements(record.data.elements);
+      if (record.data.panels) setPanels(record.data.panels);
+      else setPanels([]);
       if (record.data.sections) setSections(record.data.sections);
       if (record.data.materials) setMaterials(record.data.materials);
       if (record.data.analysisSettings) setAnalysisSettings(record.data.analysisSettings);
@@ -758,6 +910,8 @@ export default function App() {
         if (parsed.nodes && parsed.elements) {
           setNodes(parsed.nodes);
           setElements(parsed.elements);
+          if (parsed.panels) setPanels(parsed.panels);
+          else setPanels([]);
           if (parsed.sections) setSections(parsed.sections);
           if (parsed.materials) setMaterials(parsed.materials);
           if (parsed.analysisSettings) setAnalysisSettings(parsed.analysisSettings);
@@ -786,7 +940,7 @@ export default function App() {
 
   const handleConfirmExportJson = (filename: string) => {
     const cleanName = filename.trim().replace(/\.json$/i, '') || 'model-3d';
-    const data = { nodes, elements, sections, materials, analysisSettings };
+    const data = { nodes, elements, panels, sections, materials, analysisSettings };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -931,8 +1085,10 @@ export default function App() {
       diagramScaleMult,
       selectedNodeIds,
       selectedElemIds,
+      selectedPanelIds,
       hoverNodeId: hoverNodeIdRef.current,
       hoverElemId: hoverElemIdRef.current,
+      hoverPanelId: hoverPanelIdRef.current,
       mode,
       probe,
       theme,
@@ -942,7 +1098,7 @@ export default function App() {
     };
 
     // 1. Draw 3D Three.js WebGL Scene & 2D Text/Overlay Labels
-    drawScene3D(overlayCtx, engine, nodes, elements, sections, materials, solved, renderOpts);
+    drawScene3D(overlayCtx, engine, nodes, elements, sections, materials, solved, renderOpts, panels);
 
     // 2. Draw Interactive 3D ViewCube in Top-Right
     if (showCanvasUI) {
@@ -975,7 +1131,10 @@ export default function App() {
       engine,
       nodes,
       elements,
+      panels,
       mode,
+      panelShape,
+      panelPoints,
       barStartNodeId,
       lastPlacedNodeId,
       lastDrawnElemId,
@@ -991,11 +1150,15 @@ export default function App() {
   }, [
     nodes,
     elements,
+    panels,
+    panelShape,
+    panelPoints,
     sections,
     materials,
     solved,
     selectedNodeIds,
     selectedElemIds,
+    selectedPanelIds,
     mode,
     barStartNodeId,
     lastPlacedNodeId,
@@ -1172,6 +1335,46 @@ export default function App() {
     );
   };
 
+  const isPointInPolygon2D = (px: number, py: number, poly: { x: number; y: number }[]): boolean => {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i].x, yi = poly[i].y;
+      const xj = poly[j].x, yj = poly[j].y;
+      const intersect = ((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  };
+
+  const getHitPanelAt = (
+    px: number,
+    py: number,
+    panelsList: Panel3D[],
+    nodesList: Node3D[],
+    engine: RenderEngine3D
+  ): number | null => {
+    let bestPanelId: number | null = null;
+    let minDepth = Infinity;
+
+    for (const pan of panelsList) {
+      const corners = getPanelCorners(pan, nodesList);
+      if (corners.length < 3) continue;
+
+      const pts = corners.map((c) => engine.project(c));
+      if (!pts.every((p) => p.visible)) continue;
+
+      if (isPointInPolygon2D(px, py, pts)) {
+        const avgDepth = pts.reduce((sum, p) => sum + p.depth, 0) / pts.length;
+        if (avgDepth < minDepth) {
+          minDepth = avgDepth;
+          bestPanelId = pan.id;
+        }
+      }
+    }
+
+    return bestPanelId;
+  };
+
   const updateSelection = (
     currentIds: number[],
     newIds: number[],
@@ -1241,8 +1444,46 @@ export default function App() {
       }
     });
 
+    const hitPanelIds: number[] = [];
+    panels.forEach((pan) => {
+      const corners = getPanelCorners(pan, nodes);
+      if (corners.length < 3) return;
+      const pts = corners.map((c) => engine.project(c));
+
+      if (isWindow) {
+        if (pts.every((p) => rectContainsPoint(rect, p))) {
+          hitPanelIds.push(pan.id);
+        }
+      } else {
+        const anyNodeIn = pts.some((p) => rectContainsPoint(rect, p));
+        if (anyNodeIn) {
+          hitPanelIds.push(pan.id);
+          return;
+        }
+        let edgeIntersects = false;
+        for (let i = 0; i < pts.length; i++) {
+          const pA = pts[i];
+          const pB = pts[(i + 1) % pts.length];
+          if (segIntersectsRect(pA, pB, rect)) {
+            edgeIntersects = true;
+            break;
+          }
+        }
+        if (edgeIntersects) {
+          hitPanelIds.push(pan.id);
+          return;
+        }
+        const boxCenterX = (x0 + x1) / 2;
+        const boxCenterY = (y0 + y1) / 2;
+        if (isPointInPolygon2D(boxCenterX, boxCenterY, pts)) {
+          hitPanelIds.push(pan.id);
+        }
+      }
+    });
+
     setSelectedNodeIds((prev) => updateSelection(prev, hitNodeIds, selMode));
     setSelectedElemIds((prev) => updateSelection(prev, hitElemIds, selMode));
+    setSelectedPanelIds((prev) => updateSelection(prev, hitPanelIds, selMode));
 
     let actionLabel = '';
     if (selMode === 'add') actionLabel = 'Dodano do zaznaczenia';
@@ -1250,8 +1491,14 @@ export default function App() {
     else if (selMode === 'toggle') actionLabel = 'Przełączono zaznaczenie';
     else actionLabel = 'Zaznaczono ramką';
 
+    const parts = [
+      hitNodeIds.length ? pluralUnit(hitNodeIds.length, 'węzeł', 'węzły', 'węzłów') : null,
+      hitElemIds.length ? pluralUnit(hitElemIds.length, 'pręt', 'pręty', 'prętów') : null,
+      hitPanelIds.length ? pluralUnit(hitPanelIds.length, 'okładzina', 'okładziny', 'okładzin') : null,
+    ].filter(Boolean);
+
     setStatusHint(
-      `${actionLabel} (${isWindow ? 'okno' : 'przecięcie'}): ${pluralUnit(hitNodeIds.length, 'węzeł', 'węzły', 'węzłów')}, ${pluralUnit(hitElemIds.length, 'pręt', 'pręty', 'prętów')}.`
+      `${actionLabel} (${isWindow ? 'okno' : 'przecięcie'}): ` + (parts.join(', ') || 'brak obiektów') + '.'
     );
   };
 
@@ -1268,7 +1515,8 @@ export default function App() {
       const isHoverInteractive =
         hoverViewCubeRef.current != null ||
         hoverNodeIdRef.current != null ||
-        hoverElemIdRef.current != null;
+        hoverElemIdRef.current != null ||
+        hoverPanelIdRef.current != null;
 
       const isDraggingBox = boxSelectStateRef.current.isDragging;
       const isDraggingNav = dragRef.current.isDragging;
@@ -1572,21 +1820,29 @@ export default function App() {
       });
     }
 
+    // Hit testing on panels (cladding) when no node or element is hovered
+    let foundPanelId: number | null = null;
+    if (foundNodeId == null && foundElemId == null) {
+      foundPanelId = getHitPanelAt(px, py, panels, nodes, engine);
+    }
+
     // Direct hover refs update
     const hoverChanged =
       cubeHit !== hoverViewCubeRef.current ||
       foundNodeId !== hoverNodeIdRef.current ||
-      foundElemId !== hoverElemIdRef.current;
+      foundElemId !== hoverElemIdRef.current ||
+      foundPanelId !== hoverPanelIdRef.current;
 
     hoverViewCubeRef.current = cubeHit;
     hoverNodeIdRef.current = foundNodeId;
     hoverElemIdRef.current = foundElemId;
+    hoverPanelIdRef.current = foundPanelId;
 
     // Dynamic smart cursor update
     updateCanvasCursor({ ctrl, shift });
 
     // Redraw immediately during drawing mode for live preview or when hover state changes
-    if (mode === 'addBar' || hoverChanged) {
+    if (mode === 'addBar' || mode === 'addPanel' || hoverChanged) {
       redraw();
     }
   };
@@ -1596,7 +1852,7 @@ export default function App() {
     hoverViewCubeRef.current = null;
     hoverNodeIdRef.current = null;
     hoverElemIdRef.current = null;
-    if (mode === 'addBar') {
+    if (mode === 'addBar' || mode === 'addPanel') {
       redraw();
     }
   };
@@ -1790,12 +2046,178 @@ export default function App() {
           setShowCanvasUI((prev) => !prev);
         }
       }
+    } else if (mode === 'addPanel') {
+      const currentPts = panelPoints || [];
+
+      let targetNodeId: number | null = clickedNodeId;
+      let targetPt: [number, number, number] | null = null;
+
+      if (targetNodeId != null) {
+        const n = nodes.find((node) => node.id === targetNodeId);
+        if (n) targetPt = [n.x, n.y, n.z];
+      } else {
+        if (allowNewNodesInBarMode) {
+          const pt = engine.unprojectToPlane(px, py, gridPlane, gridOffset);
+          let x = pt[0];
+          let y = pt[1];
+          let z = pt[2];
+          if (snapEnabled) {
+            if (gridPlane === 'XY') {
+              x = Math.round(x / snapSize) * snapSize;
+              y = Math.round(y / snapSize) * snapSize;
+              z = gridOffset;
+            } else if (gridPlane === 'XZ') {
+              x = Math.round(x / snapSize) * snapSize;
+              y = gridOffset;
+              z = Math.round(z / snapSize) * snapSize;
+            } else if (gridPlane === 'YZ') {
+              x = gridOffset;
+              y = Math.round(y / snapSize) * snapSize;
+              z = Math.round(z / snapSize) * snapSize;
+            }
+          } else {
+            if (gridPlane === 'XY') z = gridOffset;
+            else if (gridPlane === 'XZ') y = gridOffset;
+            else if (gridPlane === 'YZ') x = gridOffset;
+          }
+
+          const existingNode = nodes.find(
+            (n) => Math.hypot(n.x - x, n.y - y, n.z - z) < 1e-3
+          );
+
+          if (existingNode) {
+            targetNodeId = existingNode.id;
+            targetPt = [existingNode.x, existingNode.y, existingNode.z];
+          } else {
+            targetPt = [x, y, z];
+            const nextNodeId = nodes.length > 0 ? Math.max(...nodes.map((n) => n.id)) + 1 : 1;
+            const newNode: Node3D = {
+              id: nextNodeId,
+              x,
+              y,
+              z,
+              support: null,
+              force: null,
+              moment: null,
+              mass: null,
+            };
+            setNodes((prev) => [...prev, newNode]);
+            targetNodeId = nextNodeId;
+            setLastPlacedNodeId(targetNodeId);
+          }
+          engine.setRotationCenter([x, y, z]);
+        } else {
+          setShowCanvasUI((prev) => !prev);
+          return;
+        }
+      }
+
+      if (!targetPt && targetNodeId == null) return;
+
+      if (panelShape === 'triangle') {
+        if (targetNodeId == null) return;
+        if (currentPts.length === 0) {
+          setPanelPoints([targetNodeId]);
+          setStatusHint(`Wybrano 1. punkt trójkąta (W${targetNodeId}). Wybierz 2. punkt.`);
+        } else if (currentPts.length === 1) {
+          if (currentPts[0] === targetNodeId) {
+            setStatusHint(`Wybierz inny węzeł dla 2. punktu trójkąta.`);
+          } else {
+            setPanelPoints([currentPts[0], targetNodeId]);
+            setStatusHint(`Wybrano 2. punkt trójkąta (W${targetNodeId}). Wybierz 3. punkt.`);
+          }
+        } else if (currentPts.length >= 2) {
+          const n1Id = currentPts[0];
+          const n2Id = currentPts[1];
+          if (targetNodeId === n1Id || targetNodeId === n2Id) {
+            setStatusHint(`3. punkt musi być inny niż punkty 1 i 2.`);
+            return;
+          }
+          const nextPanelId = panels.length > 0 ? Math.max(...panels.map((p) => p.id)) + 1 : 1;
+          const newPanel: Panel3D = {
+            id: nextPanelId,
+            shape: 'triangle',
+            nodeIds: [n1Id, n2Id, targetNodeId],
+          };
+          setPanels((prev) => [...prev, newPanel]);
+          setPanelPoints([]);
+          setStatusHint(`Utworzono okładzinę trójkątną O${nextPanelId} (W${n1Id}, W${n2Id}, W${targetNodeId}).`);
+          handleInvalidateResults();
+        }
+      } else {
+        // panelShape === 'rectangle'
+        if (currentPts.length === 0) {
+          if (targetNodeId == null) return;
+          setPanelPoints([targetNodeId]);
+          setStatusHint(`Wybrano 1. punkt boku prostokąta (W${targetNodeId}). Wybierz 2. punkt.`);
+        } else if (currentPts.length === 1) {
+          if (targetNodeId == null) return;
+          if (currentPts[0] === targetNodeId) {
+            setStatusHint(`Wybierz inny węzeł dla 2. punktu boku prostokąta.`);
+          } else {
+            setPanelPoints([currentPts[0], targetNodeId]);
+            setStatusHint(`Wybrano 2. punkt boku prostokąta (W${targetNodeId}). Wybierz 3. punkt (przez który przechodzi przeciwległy bok).`);
+          }
+        } else if (currentPts.length >= 2) {
+          const p1 = nodes.find((n) => n.id === currentPts[0]);
+          const p2 = nodes.find((n) => n.id === currentPts[1]);
+          if (!p1 || !p2 || targetNodeId == null) return;
+
+          if (targetNodeId === p1.id || targetNodeId === p2.id) {
+            setStatusHint(`3. punkt musi być inny niż punkty 1 i 2.`);
+            return;
+          }
+
+          const n3 = nodes.find((n) => n.id === targetNodeId) || (targetPt ? { x: targetPt[0], y: targetPt[1], z: targetPt[2] } : null);
+          if (!n3) return;
+
+          // Base vector u = p2 - p1
+          const ux = p2.x - p1.x;
+          const uy = p2.y - p1.y;
+          const uz = p2.z - p1.z;
+          const uLenSq = ux * ux + uy * uy + uz * uz;
+          if (uLenSq < 1e-8) {
+            setStatusHint(`Punkty 1 i 2 nakładają się – nie można wyznaczyć prostokąta.`);
+            return;
+          }
+
+          // Vector v = n3 - p1
+          const vx = n3.x - p1.x;
+          const vy = n3.y - p1.y;
+          const vz = n3.z - p1.z;
+
+          // Projection dot product
+          const dot = (vx * ux + vy * uy + vz * uz) / uLenSq;
+          const wx = vx - dot * ux;
+          const wy = vy - dot * uy;
+          const wz = vz - dot * uz;
+          const wLen = Math.hypot(wx, wy, wz);
+
+          if (wLen < 1e-4) {
+            setStatusHint(`3. punkt leży na prostej wyznaczonej przez krawędź – wybierz punkt obok.`);
+            return;
+          }
+
+          const nextPanelId = panels.length > 0 ? Math.max(...panels.map((p) => p.id)) + 1 : 1;
+          const newPanel: Panel3D = {
+            id: nextPanelId,
+            shape: 'rectangle',
+            nodeIds: [p1.id, p2.id, targetNodeId],
+          };
+
+          setPanels((prev) => [...prev, newPanel]);
+          setPanelPoints([]);
+          setStatusHint(`Utworzono okładzinę prostokątną O${newPanel.id} (W${p1.id}, W${p2.id}, W${targetNodeId}).`);
+          handleInvalidateResults();
+        }
+      }
     } else {
       // Selection Mode
       if (clickedNodeId != null) {
         setSelectedNodeIds((prev) => updateSelection(prev, [clickedNodeId!], selMode));
         if (selMode === 'replace') {
           setSelectedElemIds([]);
+          setSelectedPanelIds([]);
         }
       } else {
         // Check element hit
@@ -1838,20 +2260,42 @@ export default function App() {
           setSelectedElemIds((prev) => updateSelection(prev, [clickedElemId!], selMode));
           if (selMode === 'replace') {
             setSelectedNodeIds([]);
+            setSelectedPanelIds([]);
           }
         } else {
-          // Clicked on empty space
-          if (selMode === 'replace') {
-            if (selectedNodeIds.length > 0 || selectedElemIds.length > 0) {
+          // Check panel hit
+          const clickedPanelId = getHitPanelAt(px, py, panels, nodes, engine);
+          if (clickedPanelId != null) {
+            const pan = panels.find((p) => p.id === clickedPanelId);
+            if (pan) {
+              const corners = getPanelCorners(pan, nodes);
+              if (corners.length >= 3) {
+                const cx = corners.reduce((sum, c) => sum + c[0], 0) / corners.length;
+                const cy = corners.reduce((sum, c) => sum + c[1], 0) / corners.length;
+                const cz = corners.reduce((sum, c) => sum + c[2], 0) / corners.length;
+                engine.setRotationCenter([cx, cy, cz]);
+              }
+            }
+            setSelectedPanelIds((prev) => updateSelection(prev, [clickedPanelId], selMode));
+            if (selMode === 'replace') {
               setSelectedNodeIds([]);
               setSelectedElemIds([]);
+            }
+          } else {
+            // Clicked on empty space
+            if (selMode === 'replace') {
+              if (selectedNodeIds.length > 0 || selectedElemIds.length > 0 || selectedPanelIds.length > 0) {
+                setSelectedNodeIds([]);
+                setSelectedElemIds([]);
+                setSelectedPanelIds([]);
+              } else {
+                setShowCanvasUI((prev) => !prev);
+              }
+              setLastPlacedNodeId(null);
+              setLastDrawnElemId(null);
             } else {
               setShowCanvasUI((prev) => !prev);
             }
-            setLastPlacedNodeId(null);
-            setLastDrawnElemId(null);
-          } else {
-            setShowCanvasUI((prev) => !prev);
           }
         }
       }
@@ -2212,13 +2656,51 @@ export default function App() {
         setMode('select');
         setNavMode('select');
       } else if (e.key === 'o' || e.key === 'O') {
-        setNavMode('orbit');
+        setMode('addPanel');
+        setPanelPoints([]);
       } else if (e.key === 'p' || e.key === 'P') {
         setNavMode('pan');
       } else if (e.key === 'f' || e.key === 'F') {
         handleFitView();
       } else if (e.key === 'r' || e.key === 'R' || e.key === 'b' || e.key === 'B') {
         setMode('addBar');
+        setBarStartNodeId(null);
+      } else if (e.key === 'Escape') {
+        setBarStartNodeId(null);
+        setPanelPoints([]);
+        setSelectedNodeIds([]);
+        setSelectedElemIds([]);
+        setSelectedPanelIds([]);
+        if (mode === 'addBar' || mode === 'addPanel') {
+          setMode('select');
+        }
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedNodeIds.length > 0 || selectedElemIds.length > 0 || selectedPanelIds.length > 0) {
+          const nodeIdsToDelete = new Set(selectedNodeIds);
+          const elemIdsToDelete = new Set(selectedElemIds);
+          const panelIdsToDelete = new Set(selectedPanelIds);
+
+          setElements((prev) =>
+            prev.filter(
+              (el) =>
+                !elemIdsToDelete.has(el.id) &&
+                !nodeIdsToDelete.has(el.n1) &&
+                !nodeIdsToDelete.has(el.n2)
+            )
+          );
+          setPanels((prev) =>
+            prev.filter(
+              (p) =>
+                !panelIdsToDelete.has(p.id) &&
+                p.nodeIds.every((nid) => !nodeIdsToDelete.has(nid))
+            )
+          );
+          setNodes((prev) => prev.filter((n) => !nodeIdsToDelete.has(n.id)));
+          setSelectedNodeIds([]);
+          setSelectedElemIds([]);
+          setSelectedPanelIds([]);
+          handleInvalidateResults();
+        }
       }
     };
 
@@ -2260,6 +2742,12 @@ export default function App() {
           setBarStartNodeId(null);
           setLastPlacedNodeId(null);
           setLastDrawnElemId(null);
+          setPanelPoints([]);
+        }}
+        panelShape={panelShape}
+        setPanelShape={(shape) => {
+          setPanelShape(shape);
+          setPanelPoints([]);
         }}
         navMode={navMode}
         setNavMode={setNavMode}
@@ -2412,6 +2900,45 @@ export default function App() {
                 </button>
               </>
             )}
+
+            {mode === 'addPanel' && (
+              <>
+                <button
+                  className={`zbtn ${panelShape === 'triangle' ? 'active' : ''}`}
+                  onClick={() => {
+                    setPanelShape('triangle');
+                    setPanelPoints([]);
+                  }}
+                  title="Okładzina trójkątna (3 węzły)"
+                >
+                  {ICONS.triangle}
+                </button>
+                <button
+                  className={`zbtn ${panelShape === 'rectangle' ? 'active' : ''}`}
+                  onClick={() => {
+                    setPanelShape('rectangle');
+                    setPanelPoints([]);
+                  }}
+                  title="Okładzina prostokątna (2 węzły boku + 3. węzeł szerokości)"
+                >
+                  {ICONS.rectangle}
+                </button>
+                <button
+                  className={`zbtn ${snapEnabled ? 'active' : ''}`}
+                  onClick={() => setSnapEnabled(!snapEnabled)}
+                  title={`Przyciąganie do siatki (${snapSize} m)`}
+                >
+                  {ICONS.grid}
+                </button>
+                <button
+                  className={`zbtn ${allowNewNodesInBarMode ? 'active' : ''}`}
+                  onClick={() => setAllowNewNodesInBarMode(!allowNewNodesInBarMode)}
+                  title="Twórz nowe węzły podczas rysowania obrysu (Autowęzły)"
+                >
+                  {ICONS.node}
+                </button>
+              </>
+            )}
           </div>
 
           {/* Bottom Overlay containing:
@@ -2530,6 +3057,12 @@ export default function App() {
           setNodes={setNodes}
           elements={elements}
           setElements={setElements}
+          panels={panels}
+          setPanels={setPanels}
+          panelShape={panelShape}
+          setPanelShape={setPanelShape}
+          panelPoints={panelPoints}
+          setPanelPoints={setPanelPoints}
           sections={sections}
           setSections={setSections}
           materials={materials}
@@ -2538,6 +3071,8 @@ export default function App() {
           setSelectedNodeIds={setSelectedNodeIds}
           selectedElemIds={selectedElemIds}
           setSelectedElemIds={setSelectedElemIds}
+          selectedPanelIds={selectedPanelIds}
+          setSelectedPanelIds={setSelectedPanelIds}
           mode={mode}
           setMode={setMode}
           barStartNodeId={barStartNodeId}

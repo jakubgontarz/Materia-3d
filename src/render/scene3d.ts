@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RenderEngine3D } from './engine3d';
 import { Vec3 } from '../fem/matrix';
-import { Node3D, Element3D, SolverResult3D, Section, Material, MemberHinges3D } from '../fem/types';
+import { Node3D, Element3D, SolverResult3D, Section, Material, MemberHinges3D, Panel3D } from '../fem/types';
 import { computeLocalAxes } from '../fem/solver3d';
 
 export interface SceneRenderOptions {
@@ -35,9 +35,11 @@ export interface SceneRenderOptions {
   diagramScaleMult: number;
   selectedNodeIds: number[];
   selectedElemIds: number[];
+  selectedPanelIds?: number[];
   hoverNodeId: number | null;
   hoverElemId: number | null;
-  mode?: 'select' | 'addBar';
+  hoverPanelId?: number | null;
+  mode?: 'select' | 'addBar' | 'addPanel';
   probe: { elId: number | null; t: number };
   theme: 'light' | 'dark';
   accentColor: string;
@@ -52,7 +54,8 @@ function computeGeometryKey(
   sections: Section[],
   materials: Material[],
   solved: SolverResult3D | null,
-  options: SceneRenderOptions
+  options: SceneRenderOptions,
+  panels: Panel3D[] = []
 ): string {
   // Fast signature generation
   let nSig = `${nodes.length}_`;
@@ -78,17 +81,24 @@ function computeGeometryKey(
     eSig += `${e.id}:${e.n1}-${e.n2}:${e.sectionId}:${e.rollAngle || 0}:${qKey}:${JSON.stringify(e.hinges || {})};`;
   }
 
+  let pSig = `${panels.length}_`;
+  for (let i = 0; i < panels.length; i++) {
+    const p = panels[i];
+    pSig += `${p.id}:${p.shape}:${p.nodeIds.join('-')};`;
+  }
+
   const optSig = `g:${options.showGrid ? 1 : 0}_gp:${options.gridPlane || 'XY'}_go:${options.gridOffset || 0}_a:${options.showAxes ? 1 : 0}_la:${options.showLocalAxes ? 1 : 0}_supp:${options.showSupports ? 1 : 0}_prof:${options.showProfileSketches ? 1 : 0}_loads:${options.showLoads ? 1 : 0}_def:${options.showDeform ? 1 : 0}_my:${options.showMy ? 1 : 0}_mz:${options.showMz ? 1 : 0}_mx:${options.showMx ? 1 : 0}_vy:${options.showVy ? 1 : 0}_vz:${options.showVz ? 1 : 0}_n:${options.showN ? 1 : 0}_str:${options.showStress ? 1 : 0}_r:${options.showReactions ? 1 : 0}_hl:${options.hideLoadsInResults ? 1 : 0}_hs:${options.hideSupportsInResults ? 1 : 0}_ds:${options.deformScaleMult}_dgs:${options.diagramScaleMult}_t:${options.theme}_ac:${options.accentColor}`;
 
   const solvedSig = solved ? `${solved.type}_${(solved as any).currentMode || 0}` : 'none';
 
-  return `${nSig}|${eSig}|${optSig}|${solvedSig}`;
+  return `${nSig}|${eSig}|${pSig}|${optSig}|${solvedSig}`;
 }
 
 // Ultra-fast in-place Three.js material & scale updates for selection & hover (0.01ms, never discards geometries)
 function updateVisualStates(engine: RenderEngine3D, options: SceneRenderOptions, isDark: boolean) {
   const selectedNodeSet = new Set(options.selectedNodeIds);
   const selectedElemSet = new Set(options.selectedElemIds);
+  const selectedPanelSet = new Set(options.selectedPanelIds || []);
   const accentColorObj = new THREE.Color(options.accentColor);
   const hoverColorObj = new THREE.Color('#38bdf8');
   const nodeDefaultColorObj = new THREE.Color(isDark ? '#cbd5e1' : '#0f172a');
@@ -132,6 +142,38 @@ function updateVisualStates(engine: RenderEngine3D, options: SceneRenderOptions,
           }
         }
       }
+    } else if (obj.userData.type === 'panel') {
+      const isSel = selectedPanelSet.has(obj.userData.id);
+      const isHov = options.hoverPanelId === obj.userData.id;
+      const mesh = obj as THREE.Mesh;
+      if (mesh.material) {
+        const mat = mesh.material as THREE.MeshBasicMaterial;
+        if (isSel) {
+          mat.color.copy(accentColorObj);
+          mat.opacity = isDark ? 0.65 : 0.55;
+        } else if (isHov) {
+          mat.color.copy(hoverColorObj);
+          mat.opacity = isDark ? 0.55 : 0.45;
+        } else {
+          const origHex = obj.userData.defaultColorHex ?? (isDark ? 0x0284c7 : 0x0ea5e9);
+          mat.color.setHex(origHex);
+          mat.opacity = isDark ? 0.35 : 0.25;
+        }
+      }
+    } else if (obj.userData.type === 'panel_edge') {
+      const isSel = selectedPanelSet.has(obj.userData.id);
+      const isHov = options.hoverPanelId === obj.userData.id;
+      const line = obj as THREE.Line;
+      if (line.material) {
+        const mat = line.material as THREE.LineBasicMaterial;
+        if (isSel) {
+          mat.color.copy(accentColorObj);
+        } else if (isHov) {
+          mat.color.copy(hoverColorObj);
+        } else {
+          mat.color.setHex(isDark ? 0x38bdf8 : 0x0284c7);
+        }
+      }
     }
   });
 }
@@ -144,15 +186,16 @@ export function drawScene3D(
   sections: Section[],
   materials: Material[],
   solved: SolverResult3D | null,
-  options: SceneRenderOptions
+  options: SceneRenderOptions,
+  panels: Panel3D[] = []
 ) {
   const isDark = options.theme === 'dark';
 
-  // 1. Check if 3D structural geometry needs rebuild (only when model structure, sections, materials, loads, or results change)
-  const currentKey = computeGeometryKey(nodes, elements, sections, materials, solved, options);
+  // 1. Check if 3D structural geometry needs rebuild (only when model structure, sections, materials, loads, panels, or results change)
+  const currentKey = computeGeometryKey(nodes, elements, sections, materials, solved, options, panels);
   if (currentKey !== lastGeometryKey) {
     lastGeometryKey = currentKey;
-    rebuild3DModelGroup(engine, nodes, elements, sections, materials, solved, options, isDark);
+    rebuild3DModelGroup(engine, nodes, elements, sections, materials, solved, options, isDark, panels);
   }
 
   // 2. Fast sub-millisecond in-place Three.js highlight and selection update (< 0.05ms)
@@ -165,7 +208,7 @@ export function drawScene3D(
   overlayCtx.clearRect(0, 0, engine.width, engine.height);
 
   // Instant 2D Hover & Focus highlight overlay
-  drawHoverAndSelection2DOverlay(overlayCtx, engine, nodes, elements, sections, options, isDark);
+  drawHoverAndSelection2DOverlay(overlayCtx, engine, nodes, elements, sections, options, isDark, panels);
 
   if (
     options.showNodeNumbers ||
@@ -318,7 +361,8 @@ function rebuild3DModelGroup(
   materials: Material[],
   solved: SolverResult3D | null,
   options: SceneRenderOptions,
-  isDark: boolean
+  isDark: boolean,
+  panels: Panel3D[] = []
 ) {
   // Clear previous Three.js 3D model geometry
   engine.clearModelGroup();
@@ -328,6 +372,11 @@ function rebuild3DModelGroup(
 
   // Origin Axes
   if (options.showAxes) build3DOriginTriad(engine);
+
+  // Panels / Claddings (Obrysy / Okładziny powierzchniowe)
+  panels.forEach((p) => {
+    build3DSinglePanel(engine, p, nodes, options, isDark);
+  });
 
   // Deformed Shape
   if (options.showDeform && solved) {
@@ -516,6 +565,146 @@ function rebuild3DModelGroup(
 }
 
 // === THREE.JS BUILDERS ===
+
+export function getPanelCorners(panel: Panel3D, nodes: Node3D[]): [number, number, number][] {
+  const pNodes = panel.nodeIds.map((id) => nodes.find((n) => n.id === id)).filter(Boolean) as Node3D[];
+
+  if (panel.shape === 'triangle') {
+    if (pNodes.length < 3) return [];
+    return [
+      [pNodes[0].x, pNodes[0].y, pNodes[0].z],
+      [pNodes[1].x, pNodes[1].y, pNodes[1].z],
+      [pNodes[2].x, pNodes[2].y, pNodes[2].z],
+    ];
+  }
+
+  if (panel.shape === 'rectangle') {
+    if (pNodes.length < 3) return [];
+    const n1 = pNodes[0];
+    const n2 = pNodes[1];
+    const n3 = pNodes[2];
+
+    const ux = n2.x - n1.x;
+    const uy = n2.y - n1.y;
+    const uz = n2.z - n1.z;
+    const uLenSq = ux * ux + uy * uy + uz * uz;
+
+    if (uLenSq < 1e-12) {
+      return [
+        [n1.x, n1.y, n1.z],
+        [n2.x, n2.y, n2.z],
+        [n3.x, n3.y, n3.z],
+        [n3.x, n3.y, n3.z],
+      ];
+    }
+
+    const vx = n3.x - n1.x;
+    const vy = n3.y - n1.y;
+    const vz = n3.z - n1.z;
+
+    const dot = (vx * ux + vy * uy + vz * uz) / uLenSq;
+
+    const wx = vx - dot * ux;
+    const wy = vy - dot * uy;
+    const wz = vz - dot * uz;
+
+    const c1: [number, number, number] = [n1.x, n1.y, n1.z];
+    const c2: [number, number, number] = [n2.x, n2.y, n2.z];
+    const c3: [number, number, number] = [n2.x + wx, n2.y + wy, n2.z + wz];
+    const c4: [number, number, number] = [n1.x + wx, n1.y + wy, n1.z + wz];
+
+    return [c1, c2, c3, c4];
+  }
+
+  return [];
+}
+
+function build3DSinglePanel(
+  engine: RenderEngine3D,
+  panel: Panel3D,
+  nodes: Node3D[],
+  options: SceneRenderOptions,
+  isDark: boolean
+) {
+  const corners = getPanelCorners(panel, nodes);
+  if (corners.length < 3) return;
+
+  const colorHex = panel.color
+    ? parseInt(panel.color.replace('#', '0x'))
+    : (isDark ? 0x0284c7 : 0x0ea5e9);
+
+  const fillMat = new THREE.MeshBasicMaterial({
+    color: colorHex,
+    transparent: true,
+    opacity: isDark ? 0.35 : 0.25,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+
+  const geom = new THREE.BufferGeometry();
+  if (corners.length === 3) {
+    const [c1, c2, c3] = corners;
+    const positions = new Float32Array([
+      c1[0], c1[1], c1[2],
+      c2[0], c2[1], c2[2],
+      c3[0], c3[1], c3[2],
+    ]);
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.computeVertexNormals();
+
+    const mesh = new THREE.Mesh(geom, fillMat);
+    mesh.userData = { type: 'panel', id: panel.id, defaultColorHex: colorHex };
+    engine.modelGroup.add(mesh);
+
+    const borderPoints = [
+      new THREE.Vector3(c1[0], c1[1], c1[2]),
+      new THREE.Vector3(c2[0], c2[1], c2[2]),
+      new THREE.Vector3(c3[0], c3[1], c3[2]),
+      new THREE.Vector3(c1[0], c1[1], c1[2]),
+    ];
+    const lineGeom = new THREE.BufferGeometry().setFromPoints(borderPoints);
+    const lineMat = new THREE.LineBasicMaterial({
+      color: isDark ? 0x38bdf8 : 0x0284c7,
+      linewidth: 1.5,
+    });
+    const line = new THREE.Line(lineGeom, lineMat);
+    line.userData = { type: 'panel_edge', id: panel.id };
+    engine.modelGroup.add(line);
+  } else if (corners.length === 4) {
+    const [c1, c2, c3, c4] = corners;
+    const positions = new Float32Array([
+      c1[0], c1[1], c1[2],
+      c2[0], c2[1], c2[2],
+      c3[0], c3[1], c3[2],
+
+      c1[0], c1[1], c1[2],
+      c3[0], c3[1], c3[2],
+      c4[0], c4[1], c4[2],
+    ]);
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.computeVertexNormals();
+
+    const mesh = new THREE.Mesh(geom, fillMat);
+    mesh.userData = { type: 'panel', id: panel.id, defaultColorHex: colorHex };
+    engine.modelGroup.add(mesh);
+
+    const borderPoints = [
+      new THREE.Vector3(c1[0], c1[1], c1[2]),
+      new THREE.Vector3(c2[0], c2[1], c2[2]),
+      new THREE.Vector3(c3[0], c3[1], c3[2]),
+      new THREE.Vector3(c4[0], c4[1], c4[2]),
+      new THREE.Vector3(c1[0], c1[1], c1[2]),
+    ];
+    const lineGeom = new THREE.BufferGeometry().setFromPoints(borderPoints);
+    const lineMat = new THREE.LineBasicMaterial({
+      color: isDark ? 0x38bdf8 : 0x0284c7,
+      linewidth: 1.5,
+    });
+    const line = new THREE.Line(lineGeom, lineMat);
+    line.userData = { type: 'panel_edge', id: panel.id };
+    engine.modelGroup.add(line);
+  }
+}
 
 function build3DGrid(
   engine: RenderEngine3D,
@@ -2118,7 +2307,8 @@ function drawHoverAndSelection2DOverlay(
   elements: Element3D[],
   sections: Section[],
   options: SceneRenderOptions,
-  isDark: boolean
+  isDark: boolean,
+  panels: Panel3D[] = []
 ) {
   // 1. Hovered Element (Bar) highlight beam & floating tag
   if (options.hoverElemId != null) {
@@ -2186,6 +2376,35 @@ function drawHoverAndSelection2DOverlay(
           const tag = `W${n.id} (${n.x.toFixed(2)}, ${n.y.toFixed(2)}, ${n.z.toFixed(2)})`;
           drawPillTag(ctx, p.x, p.y - 18, tag, isDark ? '#38bdf8' : '#0284c7', '#38bdf8', isDark, 11);
         }
+        ctx.restore();
+      }
+    }
+  }
+
+  // 3. Hovered Panel highlight polygon & tag
+  if (options.hoverPanelId != null && panels.length > 0) {
+    const pan = panels.find((p) => p.id === options.hoverPanelId);
+    if (pan) {
+      const corners = getPanelCorners(pan, nodes);
+      if (corners.length >= 3) {
+        const pts = corners.map((c) => engine.project(c));
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) {
+          ctx.lineTo(pts[i].x, pts[i].y);
+        }
+        ctx.closePath();
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = '#38bdf8';
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.18)';
+        ctx.fill();
+        ctx.stroke();
+
+        const cx = pts.reduce((sum, p) => sum + p.x, 0) / pts.length;
+        const cy = pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
+        const tag = `O${pan.id}` + (pan.name ? `: ${pan.name}` : '');
+        drawPillTag(ctx, cx, cy - 10, tag, isDark ? '#38bdf8' : '#0284c7', '#38bdf8', isDark, 11);
         ctx.restore();
       }
     }

@@ -278,11 +278,31 @@ export const ICONS = {
       <line x1="17" y1="18" x2="22" y2="18" strokeWidth="2.2" />
     </svg>
   ),
+  panel: (
+    <svg viewBox="0 0 24 24">
+      <polygon points="3 17 8 5 21 8 16 20" fill="currentColor" fillOpacity="0.2" />
+      <polygon points="3 17 8 5 21 8 16 20" fill="none" strokeWidth="2" />
+    </svg>
+  ),
+  triangle: (
+    <svg viewBox="0 0 24 24">
+      <polygon points="12 4 21 19 3 19" fill="currentColor" fillOpacity="0.2" />
+      <polygon points="12 4 21 19 3 19" fill="none" strokeWidth="2" />
+    </svg>
+  ),
+  rectangle: (
+    <svg viewBox="0 0 24 24">
+      <rect x="4" y="5" width="16" height="14" rx="1.5" fill="currentColor" fillOpacity="0.2" />
+      <rect x="4" y="5" width="16" height="14" rx="1.5" fill="none" strokeWidth="2" />
+    </svg>
+  ),
 };
 
 interface ToolbarProps {
-  mode: 'select' | 'addBar';
-  setMode: (m: 'select' | 'addBar') => void;
+  mode: 'select' | 'addBar' | 'addPanel';
+  setMode: (m: 'select' | 'addBar' | 'addPanel') => void;
+  panelShape?: 'triangle' | 'rectangle';
+  setPanelShape?: (s: 'triangle' | 'rectangle') => void;
   navMode?: string;
   setNavMode?: (m: any) => void;
   effectiveSelMode?: 'replace' | 'add' | 'subtract' | 'toggle';
@@ -319,6 +339,8 @@ interface ToolbarProps {
 export const Toolbar: React.FC<ToolbarProps> = ({
   mode,
   setMode,
+  panelShape = 'triangle',
+  setPanelShape,
   navMode = 'orbit',
   setNavMode,
   effectiveSelMode = 'replace',
@@ -552,6 +574,15 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           {ICONS.bar}
           <span>Rysuj</span>
         </button>
+        <button
+          className={`tb-btn ${mode === 'addPanel' ? 'active' : ''}`}
+          id="btnModePanel"
+          onClick={() => setMode('addPanel')}
+          title="Rysuj obrys / okładzinę (O)"
+        >
+          {ICONS.panel}
+          <span>Obrys</span>
+        </button>
       </div>
 
       {/* Kontekstowa grupa narzędzi dla aktywnego trybu (wyświetlana w toolbarze na ekranach poziomych) */}
@@ -653,6 +684,47 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             id="newNodesToggleBtn"
             onClick={() => setAllowNewNodesInBarMode(!allowNewNodesInBarMode)}
             title="Twórz nowe węzły podczas rysowania pręta (Autowęzły)"
+          >
+            {ICONS.node}
+            <span>Autowęzły</span>
+          </button>
+        </div>
+      )}
+
+      {mode === 'addPanel' && (
+        <div className="tb-group tb-group-contextual">
+          <span className="tb-label">Kształt</span>
+          <button
+            className={`tb-btn ${panelShape === 'triangle' ? 'active' : ''}`}
+            id="btnPanelTriangle"
+            onClick={() => setPanelShape?.('triangle')}
+            title="Okładzina trójkątna (3 węzły)"
+          >
+            {ICONS.triangle}
+            <span>Trójkąt</span>
+          </button>
+          <button
+            className={`tb-btn ${panelShape === 'rectangle' ? 'active' : ''}`}
+            id="btnPanelRectangle"
+            onClick={() => setPanelShape?.('rectangle')}
+            title="Okładzina prostokątna (2 węzły boku + 3. węzeł szerokości)"
+          >
+            {ICONS.rectangle}
+            <span>Prostokąt</span>
+          </button>
+          <div className="tb-sep" />
+          <button
+            className={`tb-btn ${snapEnabled ? 'active' : ''}`}
+            onClick={() => setSnapEnabled(!snapEnabled)}
+            title={`Przyciąganie do siatki (${snapSize} m)`}
+          >
+            {ICONS.grid}
+            <span>Przyciągaj</span>
+          </button>
+          <button
+            className={`tb-btn ${allowNewNodesInBarMode ? 'active' : ''}`}
+            onClick={() => setAllowNewNodesInBarMode(!allowNewNodesInBarMode)}
+            title="Twórz nowe węzły podczas rysowania obrysu (Autowęzły)"
           >
             {ICONS.node}
             <span>Autowęzły</span>
