@@ -28,8 +28,10 @@ import {
   BucklingMode3D,
   ModalResult3D,
   ModalMode3D,
-  AnalysisSettings
+  AnalysisSettings,
+  Panel3D
 } from './types';
+import { distributePanelLoads } from './panels';
 
 // Constants for unit conversion
 // Internal units: kN, m, kNm, kN/m, kPa (kN/m^2), degrees C, radians.
@@ -50,6 +52,7 @@ export interface SolverModel3D {
   elements: Element3D[];
   materials: Material[];
   sections: Section[];
+  panels?: Panel3D[];
   settings?: AnalysisSettings;
 }
 
@@ -311,8 +314,7 @@ export function distributedLoadLocalVector3D(
 }
 
 export function solveLinearStatic3D(model: SolverModel3D): LinearStaticResult3D {
-  const nodes = model.nodes;
-  const elements = model.elements;
+  const { nodes, elements } = distributePanelLoads(model.nodes, model.elements, model.panels);
   const materials = model.materials;
   const sections = model.sections;
 
@@ -834,8 +836,7 @@ export function solveStability3D(model: SolverModel3D, maxModes = 4): StabilityR
     };
   }
 
-  const nodes = model.nodes;
-  const elements = model.elements;
+  const { nodes, elements } = distributePanelLoads(model.nodes, model.elements, model.panels);
   const nDof = 6 * nodes.length;
   const nodeIndex: Record<number, number> = {};
   nodes.forEach((n, i) => (nodeIndex[n.id] = i));
@@ -1179,8 +1180,7 @@ export function localConsistentMass3D(mTotal: number, L: number): number[][] {
 }
 
 export function solveModal3D(model: SolverModel3D, maxModes = 4): ModalResult3D {
-  const nodes = model.nodes;
-  const elements = model.elements;
+  const { nodes, elements } = distributePanelLoads(model.nodes, model.elements, model.panels);
   const nDof = 6 * nodes.length;
   const nodeIndex: Record<number, number> = {};
   nodes.forEach((n, i) => (nodeIndex[n.id] = i));

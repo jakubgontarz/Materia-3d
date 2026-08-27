@@ -122,6 +122,79 @@ interface HistoryState {
   analysisSettings: AnalysisSettings;
 }
 
+interface UserPreferences {
+  theme?: 'light' | 'dark';
+  accent?: string;
+  showAxes?: boolean;
+  includeSelfWeight?: boolean;
+
+  showNodeNumbers?: boolean;
+  showElementNumbers?: boolean;
+  showSectionNames?: boolean;
+  showMaterialNames?: boolean;
+  showSupports?: boolean;
+  showPanels?: boolean;
+  showProfileSketches?: boolean;
+  showLocalAxes?: boolean;
+  showHingeLabels?: boolean;
+  showLoads?: boolean;
+  showLoadValues?: boolean;
+  showDimensions?: boolean;
+
+  showDeform?: boolean;
+  showMy?: boolean;
+  showMz?: boolean;
+  showMx?: boolean;
+  showVy?: boolean;
+  showVz?: boolean;
+  showN?: boolean;
+  showStress?: boolean;
+  showReactions?: boolean;
+  deformScaleMult?: number;
+  diagramScaleMult?: number;
+
+  snapSize?: number;
+  snapEnabled?: boolean;
+  showGrid?: boolean;
+  mergeTolerance?: number;
+
+  allowNewNodesInBarMode?: boolean;
+}
+
+const PREFS_KEY = 'materia3d_user_preferences';
+
+function loadUserPreferences(): UserPreferences {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch (err) {
+    console.warn('Failed to load user preferences from localStorage', err);
+  }
+  return {};
+}
+
+function saveUserPreferences(prefs: UserPreferences) {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  } catch (err) {
+    console.warn('Failed to save user preferences to localStorage', err);
+  }
+}
+
+function isTextEditingElement(el: Element | null): boolean {
+  if (!el) return false;
+  const tagName = el.tagName.toUpperCase();
+  if (tagName === 'TEXTAREA') return true;
+  if (tagName === 'INPUT') {
+    const inputEl = el as HTMLInputElement;
+    const type = (inputEl.type || 'text').toLowerCase();
+    return ['text', 'number', 'password', 'search', 'tel', 'url'].includes(type);
+  }
+  return false;
+}
+
 function roundRect(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -260,7 +333,7 @@ function drawTransientOverlays(
   nodes: Node3D[],
   elements: Element3D[],
   panels: Panel3D[],
-  mode: 'select' | 'addBar' | 'addPanel',
+  mode: 'select' | 'addBar' | 'addPanel' | 'grid',
   panelShape: PanelShape,
   panelPoints: number[],
   barStartNodeId: number | null,
@@ -273,8 +346,60 @@ function drawTransientOverlays(
   snapSize: number,
   hoverNodeId: number | null,
   accentColor: string,
-  isTouch: boolean
+  isTouch: boolean,
+  selectedNodeIds: number[] = [],
+  selectedElemIds: number[] = [],
+  selectedPanelIds: number[] = [],
+  activeTransformMode: 'none' | 'move' | 'rotate' | 'mirror' | 'scale' = 'none',
+  transformWithCopy = false,
+  transformConnect = false,
+  transformRepeat = 1,
+  moveDx = 0,
+  moveDy = 0,
+  moveDz = 0,
+  rotateCenter: [number, number, number] = [0, 0, 0],
+  rotateAxis: 'X' | 'Y' | 'Z' = 'Z',
+  rotateAngleDeg = 90,
+  mirrorPoint: [number, number, number] = [0, 0, 0],
+  mirrorPlane: 'XY' | 'YZ' | 'XZ' = 'XZ',
+  scaleCenter: [number, number, number] = [0, 0, 0],
+  scaleFactor = 1.5,
+  pickMoveVector: { active: boolean; step: 1 | 2; p1: [number, number, number] | null } = { active: false, step: 1, p1: null },
+  pickTransformPoint: { active: boolean; target: 'rotateCenter' | 'mirrorPoint' | 'scaleCenter' | null } = { active: false, target: null }
 ) {
+  // 0. Draw Transform Ghosts, Vector & Point Picking Guide Line
+  drawTransformPreviewAndGuide(
+    ctx,
+    engine,
+    nodes,
+    elements,
+    panels,
+    selectedNodeIds,
+    selectedElemIds,
+    selectedPanelIds,
+    activeTransformMode,
+    transformWithCopy,
+    transformConnect,
+    transformRepeat,
+    moveDx,
+    moveDy,
+    moveDz,
+    rotateCenter,
+    rotateAxis,
+    rotateAngleDeg,
+    mirrorPoint,
+    mirrorPlane,
+    scaleCenter,
+    scaleFactor,
+    pickMoveVector,
+    pickTransformPoint,
+    mousePos,
+    gridPlane,
+    gridOffset,
+    snapEnabled,
+    snapSize,
+    hoverNodeId
+  );
   // 1. Draw dimension line for last drawn element if exists
   if (lastDrawnElemId != null) {
     const el = elements.find((e) => e.id === lastDrawnElemId);
@@ -539,7 +664,542 @@ function drawTransientOverlays(
       }
     }
   }
+
+  // 5. Mode 'grid' tip preview
+  if (mode === 'grid' && mousePos) {
+    if (hoverNodeId != null) {
+      const hn = nodes.find((n) => n.id === hoverNodeId);
+      if (hn) {
+        const pb = engine.project([hn.x, hn.y, hn.z]);
+        const lvl = gridPlane === 'XY' ? hn.z : gridPlane === 'XZ' ? hn.y : hn.x;
+        const coordName = gridPlane === 'XY' ? 'Z' : gridPlane === 'XZ' ? 'Y' : 'X';
+        drawNodeCoordTip(ctx, pb, `W${hn.id} (${hn.x.toFixed(2)}, ${hn.y.toFixed(2)}, ${hn.z.toFixed(2)}) m`, '#8b5cf6');
+      }
+    } else {
+      const pt = engine.unprojectToPlane(mousePos.px, mousePos.py, gridPlane, gridOffset);
+      let x = pt[0];
+      let y = pt[1];
+      let z = pt[2];
+      if (snapEnabled) {
+        if (gridPlane === 'XY') {
+          x = Math.round(x / snapSize) * snapSize;
+          y = Math.round(y / snapSize) * snapSize;
+          z = gridOffset;
+        } else if (gridPlane === 'XZ') {
+          x = Math.round(x / snapSize) * snapSize;
+          y = gridOffset;
+          z = Math.round(z / snapSize) * snapSize;
+        } else if (gridPlane === 'YZ') {
+          x = gridOffset;
+          y = Math.round(y / snapSize) * snapSize;
+          z = Math.round(z / snapSize) * snapSize;
+        }
+      }
+      const pb = engine.project([x, y, z]);
+      const coordName = gridPlane === 'XY' ? 'Z' : gridPlane === 'XZ' ? 'Y' : 'X';
+      drawNodeCoordTip(ctx, pb, `Siatka ${gridPlane} (${coordName} = ${gridOffset.toFixed(2)} m)`, '#8b5cf6');
+    }
+  }
 }
+
+function transformPoint(
+  p: [number, number, number],
+  mode: 'move' | 'rotate' | 'mirror' | 'scale',
+  params: {
+    moveDx: number; moveDy: number; moveDz: number;
+    rotateCenter: [number, number, number]; rotateAxis: 'X' | 'Y' | 'Z'; rotateAngleDeg: number;
+    mirrorPoint: [number, number, number]; mirrorPlane: 'XY' | 'YZ' | 'XZ';
+    scaleCenter: [number, number, number]; scaleFactor: number;
+  },
+  step: number
+): [number, number, number] {
+  let [x, y, z] = p;
+  if (mode === 'move') {
+    return [x + params.moveDx * step, y + params.moveDy * step, z + params.moveDz * step];
+  } else if (mode === 'rotate') {
+    const [cx, cy, cz] = params.rotateCenter;
+    const rad = (params.rotateAngleDeg * step * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    let dx = x - cx;
+    let dy = y - cy;
+    let dz = z - cz;
+    let dx1 = dx, dy1 = dy, dz1 = dz;
+    if (params.rotateAxis === 'X') {
+      dy1 = dy * cos - dz * sin;
+      dz1 = dy * sin + dz * cos;
+    } else if (params.rotateAxis === 'Y') {
+      dx1 = dx * cos + dz * sin;
+      dz1 = -dx * sin + dz * cos;
+    } else if (params.rotateAxis === 'Z') {
+      dx1 = dx * cos - dy * sin;
+      dy1 = dx * sin + dy * cos;
+    }
+    return [cx + dx1, cy + dy1, cz + dz1];
+  } else if (mode === 'mirror') {
+    const [px, py, pz] = params.mirrorPoint;
+    if (params.mirrorPlane === 'XY') {
+      return [x, y, 2 * pz - z];
+    } else if (params.mirrorPlane === 'YZ') {
+      return [2 * px - x, y, z];
+    } else { // XZ
+      return [x, 2 * py - y, z];
+    }
+  } else if (mode === 'scale') {
+    const [cx, cy, cz] = params.scaleCenter;
+    const factor = Math.pow(params.scaleFactor, step);
+    return [cx + (x - cx) * factor, cy + (y - cy) * factor, cz + (z - cz) * factor];
+  }
+  return [x, y, z];
+}
+
+function drawTransformPreviewAndGuide(
+  ctx: CanvasRenderingContext2D,
+  engine: RenderEngine3D,
+  nodes: Node3D[],
+  elements: Element3D[],
+  panels: Panel3D[],
+  selectedNodeIds: number[],
+  selectedElemIds: number[],
+  selectedPanelIds: number[],
+  activeTransformMode: 'none' | 'move' | 'rotate' | 'mirror' | 'scale',
+  transformWithCopy: boolean,
+  transformConnect: boolean,
+  transformRepeat: number,
+  moveDx: number, moveDy: number, moveDz: number,
+  rotateCenter: [number, number, number], rotateAxis: 'X' | 'Y' | 'Z', rotateAngleDeg: number,
+  mirrorPoint: [number, number, number], mirrorPlane: 'XY' | 'YZ' | 'XZ',
+  scaleCenter: [number, number, number], scaleFactor: number,
+  pickMoveVector: { active: boolean; step: 1 | 2; p1: [number, number, number] | null },
+  pickTransformPoint: { active: boolean; target: 'rotateCenter' | 'mirrorPoint' | 'scaleCenter' | null },
+  mousePos: { px: number; py: number } | null,
+  gridPlane: 'XY' | 'XZ' | 'YZ',
+  gridOffset: number,
+  snapEnabled: boolean,
+  snapSize: number,
+  hoverNodeId: number | null
+) {
+  let effectiveDx = moveDx;
+  let effectiveDy = moveDy;
+  let effectiveDz = moveDz;
+
+  // 1. Vector Picking Active (Step 1 or Step 2)
+  if (pickMoveVector.active) {
+    if (pickMoveVector.step === 2 && pickMoveVector.p1) {
+      const p1 = pickMoveVector.p1;
+      let targetPt: [number, number, number] = [p1[0], p1[1], p1[2]];
+
+      if (hoverNodeId != null) {
+        const hn = nodes.find((n) => n.id === hoverNodeId);
+        if (hn) targetPt = [hn.x, hn.y, hn.z];
+      } else if (mousePos) {
+        const pt = engine.unprojectToPlane(mousePos.px, mousePos.py, gridPlane, gridOffset);
+        let x = pt[0], y = pt[1], z = pt[2];
+        if (snapEnabled) {
+          if (gridPlane === 'XY') {
+            x = Math.round(x / snapSize) * snapSize;
+            y = Math.round(y / snapSize) * snapSize;
+            z = gridOffset;
+          } else if (gridPlane === 'XZ') {
+            x = Math.round(x / snapSize) * snapSize;
+            y = gridOffset;
+            z = Math.round(z / snapSize) * snapSize;
+          } else if (gridPlane === 'YZ') {
+            x = gridOffset;
+            y = Math.round(y / snapSize) * snapSize;
+            z = Math.round(z / snapSize) * snapSize;
+          }
+        }
+        targetPt = [x, y, z];
+      }
+
+      effectiveDx = Math.round((targetPt[0] - p1[0]) * 1000) / 1000;
+      effectiveDy = Math.round((targetPt[1] - p1[1]) * 1000) / 1000;
+      effectiveDz = Math.round((targetPt[2] - p1[2]) * 1000) / 1000;
+
+      const sp1 = engine.project(p1);
+      const sp2 = engine.project(targetPt);
+      const dist3D = Math.hypot(targetPt[0] - p1[0], targetPt[1] - p1[1], targetPt[2] - p1[2]);
+      const pixDist = Math.hypot(sp2.x - sp1.x, sp2.y - sp1.y);
+
+      ctx.save();
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = 2.2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(sp1.x, sp1.y);
+      ctx.lineTo(sp2.x, sp2.y);
+      ctx.stroke();
+
+      ctx.fillStyle = '#2563eb';
+      ctx.beginPath();
+      ctx.arc(sp1.x, sp1.y, 5, 0, 2 * Math.PI);
+      ctx.fill();
+
+      if (pixDist >= 12) {
+        const ang = Math.atan2(sp2.y - sp1.y, sp2.x - sp1.x);
+        const ah = 9;
+        ctx.fillStyle = '#2563eb';
+        ctx.beginPath();
+        ctx.moveTo(sp2.x, sp2.y);
+        ctx.lineTo(sp2.x - ah * Math.cos(ang - Math.PI / 6), sp2.y - ah * Math.sin(ang - Math.PI / 6));
+        ctx.lineTo(sp2.x - ah * Math.cos(ang + Math.PI / 6), sp2.y - ah * Math.sin(ang + Math.PI / 6));
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      ctx.restore();
+
+      if (pixDist >= 15 && dist3D >= 0.001) {
+        drawSegmentDimensionPoints(ctx, sp1, sp2, dist3D, '#2563eb');
+      }
+
+      const deltaLabel = `Δ (${effectiveDx.toFixed(2)}, ${effectiveDy.toFixed(2)}, ${effectiveDz.toFixed(2)}) m`;
+      drawNodeCoordTip(ctx, sp2, deltaLabel, '#2563eb');
+    } else if (pickMoveVector.step === 1 && mousePos) {
+      let targetPt: [number, number, number] = [0, 0, 0];
+      if (hoverNodeId != null) {
+        const hn = nodes.find((n) => n.id === hoverNodeId);
+        if (hn) targetPt = [hn.x, hn.y, hn.z];
+      } else {
+        const pt = engine.unprojectToPlane(mousePos.px, mousePos.py, gridPlane, gridOffset);
+        let x = pt[0], y = pt[1], z = pt[2];
+        if (snapEnabled) {
+          if (gridPlane === 'XY') {
+            x = Math.round(x / snapSize) * snapSize;
+            y = Math.round(y / snapSize) * snapSize;
+            z = gridOffset;
+          } else if (gridPlane === 'XZ') {
+            x = Math.round(x / snapSize) * snapSize;
+            y = gridOffset;
+            z = Math.round(z / snapSize) * snapSize;
+          } else if (gridPlane === 'YZ') {
+            x = gridOffset;
+            y = Math.round(y / snapSize) * snapSize;
+            z = Math.round(z / snapSize) * snapSize;
+          }
+        }
+        targetPt = [x, y, z];
+      }
+      const sp = engine.project(targetPt);
+      drawNodeCoordTip(ctx, sp, `Wskaż P1 (${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`, '#2563eb');
+    }
+  }
+
+  // 2. Point Picking Active for Rotate/Mirror/Scale
+  if (pickTransformPoint.active && pickTransformPoint.target && mousePos) {
+    let targetPt: [number, number, number] = [0, 0, 0];
+    if (hoverNodeId != null) {
+      const hn = nodes.find((n) => n.id === hoverNodeId);
+      if (hn) targetPt = [hn.x, hn.y, hn.z];
+    } else {
+      const pt = engine.unprojectToPlane(mousePos.px, mousePos.py, gridPlane, gridOffset);
+      let x = pt[0], y = pt[1], z = pt[2];
+      if (snapEnabled) {
+        if (gridPlane === 'XY') {
+          x = Math.round(x / snapSize) * snapSize;
+          y = Math.round(y / snapSize) * snapSize;
+          z = gridOffset;
+        } else if (gridPlane === 'XZ') {
+          x = Math.round(x / snapSize) * snapSize;
+          y = gridOffset;
+          z = Math.round(z / snapSize) * snapSize;
+        } else if (gridPlane === 'YZ') {
+          x = gridOffset;
+          y = Math.round(y / snapSize) * snapSize;
+          z = Math.round(z / snapSize) * snapSize;
+        }
+      }
+      targetPt = [x, y, z];
+    }
+    const sp = engine.project(targetPt);
+    let label = '';
+    if (pickTransformPoint.target === 'rotateCenter') {
+      label = `Środek obrotu (${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`;
+    } else if (pickTransformPoint.target === 'mirrorPoint') {
+      label = `Punkt płaszczyzny (${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`;
+    } else if (pickTransformPoint.target === 'scaleCenter') {
+      label = `Środek skalowania (${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`;
+    }
+    drawNodeCoordTip(ctx, sp, label, '#2563eb');
+  }
+
+  // 3. Draw Live Ghost Model Preview
+  if (activeTransformMode !== 'none' || pickMoveVector.active || pickTransformPoint.active) {
+    const baseNodeIds = new Set<number>(selectedNodeIds);
+    selectedElemIds.forEach((eid) => {
+      const el = elements.find((e) => e.id === eid);
+      if (el) {
+        baseNodeIds.add(el.n1);
+        baseNodeIds.add(el.n2);
+      }
+    });
+    selectedPanelIds.forEach((pid) => {
+      const p = panels.find((pan) => pan.id === pid);
+      if (p) p.nodeIds.forEach((nid) => baseNodeIds.add(nid));
+    });
+
+    const baseNodes = Array.from(baseNodeIds)
+      .map((id) => nodes.find((n) => n.id === id))
+      .filter((n): n is Node3D => !!n);
+
+    const baseElements = selectedElemIds
+      .map((id) => elements.find((e) => e.id === id))
+      .filter((e): e is Element3D => !!e);
+
+    const basePanels = selectedPanelIds
+      .map((id) => panels.find((p) => p.id === id))
+      .filter((p): p is Panel3D => !!p);
+
+    if (baseNodes.length > 0 || baseElements.length > 0 || basePanels.length > 0) {
+      const currentMode = activeTransformMode === 'none' ? 'move' : activeTransformMode;
+      const repeat = (currentMode === 'mirror')
+        ? 1
+        : (transformWithCopy ? Math.max(1, Math.min(50, Math.round(transformRepeat || 1))) : 1);
+
+      const params = {
+        moveDx: effectiveDx,
+        moveDy: effectiveDy,
+        moveDz: effectiveDz,
+        rotateCenter,
+        rotateAxis,
+        rotateAngleDeg,
+        mirrorPoint,
+        mirrorPlane,
+        scaleCenter,
+        scaleFactor,
+      };
+
+      ctx.save();
+
+      for (let step = 1; step <= repeat; step++) {
+        // Ghost Panels
+        basePanels.forEach((pan) => {
+          const corners = getPanelCorners(pan, nodes);
+          if (corners.length >= 3) {
+            const transformedCorners = corners.map(
+              (c) => transformPoint(c, currentMode, params, step)
+            );
+            const pts = transformedCorners.map((c) => engine.project(c));
+            if (pts.length >= 3) {
+              ctx.fillStyle = 'rgba(8, 145, 178, 0.12)';
+              ctx.strokeStyle = '#0891b2';
+              ctx.lineWidth = 1.5;
+              ctx.setLineDash([5, 3]);
+              ctx.beginPath();
+              ctx.moveTo(pts[0].x, pts[0].y);
+              for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+            }
+          }
+        });
+
+        // Ghost Elements
+        baseElements.forEach((el) => {
+          const n1 = nodes.find((n) => n.id === el.n1);
+          const n2 = nodes.find((n) => n.id === el.n2);
+          if (n1 && n2) {
+            const t1 = transformPoint([n1.x, n1.y, n1.z], currentMode, params, step);
+            const t2 = transformPoint([n2.x, n2.y, n2.z], currentMode, params, step);
+            const p1 = engine.project(t1);
+            const p2 = engine.project(t2);
+            ctx.strokeStyle = '#2563eb';
+            ctx.lineWidth = 2.2;
+            ctx.setLineDash([6, 4]);
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.stroke();
+          }
+        });
+
+        // Ghost Connecting Lines if transformWithCopy AND transformConnect
+        if (transformWithCopy && transformConnect) {
+          baseNodes.forEach((n) => {
+            const tPrev = transformPoint([n.x, n.y, n.z], currentMode, params, step - 1);
+            const tCurr = transformPoint([n.x, n.y, n.z], currentMode, params, step);
+            const pPrev = engine.project(tPrev);
+            const pCurr = engine.project(tCurr);
+            ctx.strokeStyle = '#16a34a';
+            ctx.lineWidth = 1.8;
+            ctx.setLineDash([4, 3]);
+            ctx.beginPath();
+            ctx.moveTo(pPrev.x, pPrev.y);
+            ctx.lineTo(pCurr.x, pCurr.y);
+            ctx.stroke();
+          });
+        }
+
+        // Ghost Nodes
+        baseNodes.forEach((n) => {
+          const tn = transformPoint([n.x, n.y, n.z], currentMode, params, step);
+          const p = engine.project(tn);
+          ctx.fillStyle = 'rgba(37, 99, 235, 0.2)';
+          ctx.strokeStyle = '#2563eb';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([3, 2]);
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 5.5, 0, 2 * Math.PI);
+          ctx.fill();
+          ctx.stroke();
+        });
+      }
+
+      ctx.restore();
+    }
+
+    // 4. Draw Center / Plane Markers on Canvas
+    if (activeTransformMode === 'rotate') {
+      const sp = engine.project(rotateCenter);
+      ctx.save();
+      ctx.fillStyle = '#d97706';
+      ctx.strokeStyle = '#d97706';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, 6, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, 14, 0, 2 * Math.PI);
+      ctx.setLineDash([3, 3]);
+      ctx.stroke();
+      drawNodeCoordTip(ctx, { x: sp.x, y: sp.y }, `Środek obrotu (${rotateAxis})`, '#d97706');
+      ctx.restore();
+    } else if (activeTransformMode === 'mirror') {
+      const sp = engine.project(mirrorPoint);
+      ctx.save();
+      ctx.fillStyle = '#9333ea';
+      ctx.strokeStyle = '#9333ea';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, 6, 0, 2 * Math.PI);
+      ctx.fill();
+      drawNodeCoordTip(ctx, { x: sp.x, y: sp.y }, `Płaszczyzna ${mirrorPlane}`, '#9333ea');
+      ctx.restore();
+    } else if (activeTransformMode === 'scale') {
+      const sp = engine.project(scaleCenter);
+      ctx.save();
+      ctx.fillStyle = '#059669';
+      ctx.strokeStyle = '#059669';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, 6, 0, 2 * Math.PI);
+      ctx.fill();
+      drawNodeCoordTip(ctx, { x: sp.x, y: sp.y }, `Środek S=${scaleFactor}`, '#059669');
+      ctx.restore();
+    }
+  }
+}
+
+// --- Rotation Center Calculation ---
+const calculateRotationCenter = (
+  selectedNodeIds: number[],
+  selectedElemIds: number[],
+  selectedPanelIds: number[],
+  nodes: Node3D[],
+  elements: Element3D[],
+  panels: Panel3D[]
+): [number, number, number] => {
+  const nodeMap = new Map<number, Node3D>();
+  for (const n of nodes) {
+    nodeMap.set(n.id, n);
+  }
+
+  const hasSelection =
+    selectedNodeIds.length > 0 || selectedElemIds.length > 0 || selectedPanelIds.length > 0;
+
+  let totalX = 0;
+  let totalY = 0;
+  let totalZ = 0;
+  let count = 0;
+
+  if (hasSelection) {
+    // 1. Selected Nodes
+    for (const id of selectedNodeIds) {
+      const n = nodeMap.get(id);
+      if (n) {
+        totalX += n.x;
+        totalY += n.y;
+        totalZ += n.z;
+        count++;
+      }
+    }
+
+    // 2. Selected Elements (Bars)
+    for (const id of selectedElemIds) {
+      const el = elements.find((e) => e.id === id);
+      if (el) {
+        const n1 = nodeMap.get(el.n1);
+        const n2 = nodeMap.get(el.n2);
+        if (n1 && n2) {
+          totalX += (n1.x + n2.x) / 2;
+          totalY += (n1.y + n2.y) / 2;
+          totalZ += (n1.z + n2.z) / 2;
+          count++;
+        }
+      }
+    }
+
+    // 3. Selected Panels
+    for (const id of selectedPanelIds) {
+      const pan = panels.find((p) => p.id === id);
+      if (pan) {
+        const corners = getPanelCorners(pan, nodes);
+        if (corners.length > 0) {
+          const cx = corners.reduce((sum, c) => sum + c[0], 0) / corners.length;
+          const cy = corners.reduce((sum, c) => sum + c[1], 0) / corners.length;
+          const cz = corners.reduce((sum, c) => sum + c[2], 0) / corners.length;
+          totalX += cx;
+          totalY += cy;
+          totalZ += cz;
+          count++;
+        }
+      }
+    }
+  } else {
+    // Nothing selected: centroid of all elements in the model
+    // 1. All nodes
+    for (const n of nodes) {
+      totalX += n.x;
+      totalY += n.y;
+      totalZ += n.z;
+      count++;
+    }
+
+    // 2. All elements (bars)
+    for (const el of elements) {
+      const n1 = nodeMap.get(el.n1);
+      const n2 = nodeMap.get(el.n2);
+      if (n1 && n2) {
+        totalX += (n1.x + n2.x) / 2;
+        totalY += (n1.y + n2.y) / 2;
+        totalZ += (n1.z + n2.z) / 2;
+        count++;
+      }
+    }
+
+    // 3. All panels
+    for (const pan of panels) {
+      const corners = getPanelCorners(pan, nodes);
+      if (corners.length > 0) {
+        const cx = corners.reduce((sum, c) => sum + c[0], 0) / corners.length;
+        const cy = corners.reduce((sum, c) => sum + c[1], 0) / corners.length;
+        const cz = corners.reduce((sum, c) => sum + c[2], 0) / corners.length;
+        totalX += cx;
+        totalY += cy;
+        totalZ += cz;
+        count++;
+      }
+    }
+  }
+
+  if (count > 0) {
+    return [totalX / count, totalY / count, totalZ / count];
+  }
+
+  return [0, 0, 0];
+};
 
 export default function App() {
   // Initial 3D structure: 3D Portal Frame
@@ -557,7 +1217,7 @@ export default function App() {
   const [defaultMaterialId, setDefaultMaterialId] = useState<number>(1);
 
   // Interaction Mode & 3D Navigation Mode
-  const [mode, setMode] = useState<'select' | 'addBar' | 'addPanel'>('select');
+  const [mode, setMode] = useState<'select' | 'addBar' | 'addPanel' | 'grid'>('select');
   const [navMode, setNavMode] = useState<'orbit' | 'boxSelect' | 'pan' | 'zoom'>('orbit');
 
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
@@ -601,37 +1261,138 @@ export default function App() {
     hasMoved: false,
   });
 
-  // Settings & Display Options
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
-  const [accent, setAccent] = useState<string>('blue');
-  const [showGrid, setShowGrid] = useState<boolean>(true);
-  const [showAxes, setShowAxes] = useState<boolean>(true);
-  const [showLocalAxes, setShowLocalAxes] = useState<boolean>(false);
-  const [showNodeNumbers, setShowNodeNumbers] = useState<boolean>(false);
-  const [showElementNumbers, setShowElementNumbers] = useState<boolean>(false);
-  const [showSectionNames, setShowSectionNames] = useState<boolean>(false);
-  const [showMaterialNames, setShowMaterialNames] = useState<boolean>(false);
-  const [showSupports, setShowSupports] = useState<boolean>(true);
-  const [showProfileSketches, setShowProfileSketches] = useState<boolean>(true);
-  const [showPanels, setShowPanels] = useState<boolean>(true);
-  const [showLoads, setShowLoads] = useState<boolean>(true);
-  const [showLoadValues, setShowLoadValues] = useState<boolean>(true);
-  const [showHingeLabels, setShowHingeLabels] = useState<boolean>(true);
-  const [showDimensions, setShowDimensions] = useState<boolean>(false);
+  // Settings & Display Options (loaded from localStorage preferences)
+  const initialPrefsRef = useRef<UserPreferences>(loadUserPreferences());
+  const initialPrefs = initialPrefsRef.current;
+
+  const [theme, setTheme] = useState<'light' | 'dark'>(initialPrefs.theme ?? 'light');
+  const [accent, setAccent] = useState<string>(initialPrefs.accent ?? 'blue');
+  const [showGrid, setShowGrid] = useState<boolean>(initialPrefs.showGrid ?? true);
+  const [showAxes, setShowAxes] = useState<boolean>(initialPrefs.showAxes ?? true);
+  const [showLocalAxes, setShowLocalAxes] = useState<boolean>(initialPrefs.showLocalAxes ?? false);
+  const [showNodeNumbers, setShowNodeNumbers] = useState<boolean>(initialPrefs.showNodeNumbers ?? false);
+  const [showElementNumbers, setShowElementNumbers] = useState<boolean>(initialPrefs.showElementNumbers ?? false);
+  const [showSectionNames, setShowSectionNames] = useState<boolean>(initialPrefs.showSectionNames ?? false);
+  const [showMaterialNames, setShowMaterialNames] = useState<boolean>(initialPrefs.showMaterialNames ?? false);
+  const [showSupports, setShowSupports] = useState<boolean>(initialPrefs.showSupports ?? true);
+  const [showProfileSketches, setShowProfileSketches] = useState<boolean>(initialPrefs.showProfileSketches ?? true);
+  const [showPanels, setShowPanels] = useState<boolean>(initialPrefs.showPanels ?? true);
+  const [showLoads, setShowLoads] = useState<boolean>(initialPrefs.showLoads ?? true);
+  const [showLoadValues, setShowLoadValues] = useState<boolean>(initialPrefs.showLoadValues ?? true);
+  const [showHingeLabels, setShowHingeLabels] = useState<boolean>(initialPrefs.showHingeLabels ?? true);
+  const [showDimensions, setShowDimensions] = useState<boolean>(initialPrefs.showDimensions ?? false);
   const [gridPlane, setGridPlane] = useState<'XY' | 'XZ' | 'YZ'>('XY');
   const [gridOffset, setGridOffset] = useState<number>(0);
+
+  useEffect(() => {
+    if (mode === 'select') {
+      setStatusHint('Tryb: Zaznacz');
+    } else if (mode === 'addBar') {
+      setStatusHint('Tryb: Rysuj pręt – kliknij na węzeł lub siatkę, aby utworzyć węzeł.');
+    } else if (mode === 'addPanel') {
+      setStatusHint(`Tryb: Obrys (${panelShape === 'triangle' ? 'Trójkąt' : 'Prostokąt'}) – kliknij węzły, aby zdefiniować obrys.`);
+    } else if (mode === 'grid') {
+      const coordName = gridPlane === 'XY' ? 'Z' : gridPlane === 'XZ' ? 'Y' : 'X';
+      setStatusHint(`Tryb: Siatka (${gridPlane}, ${coordName} = ${gridOffset.toFixed(2)} m) – kliknij na węzeł, aby przenieść siatkę.`);
+    }
+  }, [mode, gridPlane, gridOffset, panelShape]);
 
   const handleNodeCoordinateSet = useCallback((coord: { x: number; y: number; z: number }) => {
     if (gridPlane === 'XY') setGridOffset(coord.z);
     else if (gridPlane === 'XZ') setGridOffset(coord.y);
     else if (gridPlane === 'YZ') setGridOffset(coord.x);
   }, [gridPlane]);
-  const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
-  const [allowNewNodesInBarMode, setAllowNewNodesInBarMode] = useState<boolean>(true);
-  const [snapSize, setSnapSize] = useState<number>(0.5);
+  const [snapEnabled, setSnapEnabled] = useState<boolean>(initialPrefs.snapEnabled ?? true);
+  const [allowNewNodesInBarMode, setAllowNewNodesInBarMode] = useState<boolean>(initialPrefs.allowNewNodesInBarMode ?? true);
+  const [snapSize, setSnapSize] = useState<number>(initialPrefs.snapSize ?? 0.5);
+  const [mergeTolerance, setMergeTolerance] = useState<number>(initialPrefs.mergeTolerance ?? 0.001);
   const [showCanvasUI, setShowCanvasUI] = useState<boolean>(true);
 
-  const [includeSelfWeight, setIncludeSelfWeight] = useState<boolean>(false);
+  const [includeSelfWeight, setIncludeSelfWeight] = useState<boolean>(initialPrefs.includeSelfWeight ?? false);
+
+  // Transform Tools (Przenieś, Obróć, Lustro, Skaluj) & Vector/Point Picking State
+  const [activeTransformMode, setActiveTransformMode] = useState<'none' | 'move' | 'rotate' | 'mirror' | 'scale'>('none');
+  const [transformWithCopy, setTransformWithCopy] = useState(false);
+  const [transformConnect, setTransformConnect] = useState(false);
+  const [transformRepeat, setTransformRepeat] = useState(1);
+
+  const [moveDx, setMoveDx] = useState(2);
+  const [moveDy, setMoveDy] = useState(0);
+  const [moveDz, setMoveDz] = useState(0);
+
+  const [rotateCx, setRotateCx] = useState(0);
+  const [rotateCy, setRotateCy] = useState(0);
+  const [rotateCz, setRotateCz] = useState(0);
+  const [rotateAxis, setRotateAxis] = useState<'X' | 'Y' | 'Z'>('Z');
+  const [rotateAngle, setRotateAngle] = useState(90);
+
+  const [mirrorPx, setMirrorPx] = useState(0);
+  const [mirrorPy, setMirrorPy] = useState(0);
+  const [mirrorPz, setMirrorPz] = useState(0);
+  const [mirrorPlane, setMirrorPlane] = useState<'XY' | 'YZ' | 'XZ'>('XZ');
+
+  const [scaleCx, setScaleCx] = useState(0);
+  const [scaleCy, setScaleCy] = useState(0);
+  const [scaleCz, setScaleCz] = useState(0);
+  const [scaleFactor, setScaleFactor] = useState(1.5);
+
+  const [pickMoveVector, setPickMoveVector] = useState<{
+    active: boolean;
+    step: 1 | 2;
+    p1: [number, number, number] | null;
+  }>({
+    active: false,
+    step: 1,
+    p1: null,
+  });
+
+  const [pickTransformPoint, setPickTransformPoint] = useState<{
+    active: boolean;
+    target: 'rotateCenter' | 'mirrorPoint' | 'scaleCenter' | null;
+  }>({
+    active: false,
+    target: null,
+  });
+
+  const handleStartPickMoveVector = useCallback(() => {
+    setPickTransformPoint({ active: false, target: null });
+    setPickMoveVector({ active: true, step: 1, p1: null });
+    setStatusHint('Tryb wskazywania: Kliknij na modelu punkt początkowy P1 (1/2) wektora [Esc = anuluj].');
+  }, []);
+
+  const handleStartPickPoint = useCallback((target: 'rotateCenter' | 'mirrorPoint' | 'scaleCenter') => {
+    setPickMoveVector({ active: false, step: 1, p1: null });
+    setPickTransformPoint({ active: true, target });
+    let msg = '';
+    if (target === 'rotateCenter') msg = 'Tryb wskazywania: Kliknij na modelu lub siatce środek obrotu [Esc = anuluj].';
+    else if (target === 'mirrorPoint') msg = 'Tryb wskazywania: Kliknij na modelu lub siatce punkt płaszczyzny odbicia [Esc = anuluj].';
+    else if (target === 'scaleCenter') msg = 'Tryb wskazywania: Kliknij na modelu lub siatce środek skalowania [Esc = anuluj].';
+    setStatusHint(msg);
+  }, []);
+
+  const handleCancelPickMode = useCallback(() => {
+    setPickMoveVector({ active: false, step: 1, p1: null });
+    setPickTransformPoint({ active: false, target: null });
+  }, []);
+
+  const handleOpenTransformMode = useCallback((tMode: 'none' | 'move' | 'rotate' | 'mirror' | 'scale') => {
+    setActiveTransformMode(tMode);
+    handleCancelPickMode();
+  }, [handleCancelPickMode]);
+
+  useEffect(() => {
+    if (selectedNodeIds.length === 0 && selectedElemIds.length === 0 && selectedPanelIds.length === 0) {
+      if (activeTransformMode !== 'none') setActiveTransformMode('none');
+      handleCancelPickMode();
+    }
+  }, [selectedNodeIds, selectedElemIds, selectedPanelIds, activeTransformMode, handleCancelPickMode]);
+
+  useEffect(() => {
+    if (mode !== 'select') {
+      if (activeTransformMode !== 'none') setActiveTransformMode('none');
+      handleCancelPickMode();
+    }
+  }, [mode, activeTransformMode, handleCancelPickMode]);
 
   // Analysis & Results
   const [analysisSettings, setAnalysisSettings] = useState<AnalysisSettings>({
@@ -648,20 +1409,91 @@ export default function App() {
   const [solveWarning, setSolveWarning] = useState<string | null>(null);
 
   // Result Toggles
-  const [showDeform, setShowDeform] = useState<boolean>(true);
-  const [showMy, setShowMy] = useState<boolean>(false);
-  const [showMz, setShowMz] = useState<boolean>(false);
-  const [showMx, setShowMx] = useState<boolean>(false);
-  const [showVy, setShowVy] = useState<boolean>(false);
-  const [showVz, setShowVz] = useState<boolean>(false);
-  const [showN, setShowN] = useState<boolean>(false);
-  const [showStress, setShowStress] = useState<boolean>(false);
-  const [showReactions, setShowReactions] = useState<boolean>(true);
+  const [showDeform, setShowDeform] = useState<boolean>(initialPrefs.showDeform ?? true);
+  const [showMy, setShowMy] = useState<boolean>(initialPrefs.showMy ?? false);
+  const [showMz, setShowMz] = useState<boolean>(initialPrefs.showMz ?? false);
+  const [showMx, setShowMx] = useState<boolean>(initialPrefs.showMx ?? false);
+  const [showVy, setShowVy] = useState<boolean>(initialPrefs.showVy ?? false);
+  const [showVz, setShowVz] = useState<boolean>(initialPrefs.showVz ?? false);
+  const [showN, setShowN] = useState<boolean>(initialPrefs.showN ?? false);
+  const [showStress, setShowStress] = useState<boolean>(initialPrefs.showStress ?? false);
+  const [showReactions, setShowReactions] = useState<boolean>(initialPrefs.showReactions ?? true);
   const [hideLoadsInResults, setHideLoadsInResults] = useState<boolean>(false);
   const [hideSupportsInResults, setHideSupportsInResults] = useState<boolean>(false);
 
-  const [deformScaleMult, setDeformScaleMult] = useState<number>(1.0);
-  const [diagramScaleMult, setDiagramScaleMult] = useState<number>(1.0);
+  const [deformScaleMult, setDeformScaleMult] = useState<number>(initialPrefs.deformScaleMult ?? 1.0);
+  const [diagramScaleMult, setDiagramScaleMult] = useState<number>(initialPrefs.diagramScaleMult ?? 1.0);
+
+  // Save preferences to localStorage automatically whenever any preference changes
+  useEffect(() => {
+    saveUserPreferences({
+      theme,
+      accent,
+      showAxes,
+      includeSelfWeight,
+      showNodeNumbers,
+      showElementNumbers,
+      showSectionNames,
+      showMaterialNames,
+      showSupports,
+      showPanels,
+      showProfileSketches,
+      showLocalAxes,
+      showHingeLabels,
+      showLoads,
+      showLoadValues,
+      showDimensions,
+      showDeform,
+      showMy,
+      showMz,
+      showMx,
+      showVy,
+      showVz,
+      showN,
+      showStress,
+      showReactions,
+      deformScaleMult,
+      diagramScaleMult,
+      snapSize,
+      snapEnabled,
+      showGrid,
+      mergeTolerance,
+      allowNewNodesInBarMode,
+    });
+  }, [
+    theme,
+    accent,
+    showAxes,
+    includeSelfWeight,
+    showNodeNumbers,
+    showElementNumbers,
+    showSectionNames,
+    showMaterialNames,
+    showSupports,
+    showPanels,
+    showProfileSketches,
+    showLocalAxes,
+    showHingeLabels,
+    showLoads,
+    showLoadValues,
+    showDimensions,
+    showDeform,
+    showMy,
+    showMz,
+    showMx,
+    showVy,
+    showVz,
+    showN,
+    showStress,
+    showReactions,
+    deformScaleMult,
+    diagramScaleMult,
+    snapSize,
+    snapEnabled,
+    showGrid,
+    mergeTolerance,
+    allowNewNodesInBarMode,
+  ]);
   const [probe, setProbe] = useState<{ elId: number | null; t: number }>({ elId: null, t: 0.5 });
 
   // Modals
@@ -678,6 +1510,11 @@ export default function App() {
   // Undo / Redo Stack
   const [history, setHistory] = useState<HistoryState[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
+  const historyRef = useRef<HistoryState[]>([]);
+  historyRef.current = history;
+  const historyIndexRef = useRef<number>(-1);
+  historyIndexRef.current = historyIndex;
+  const isUndoingOrRedoingRef = useRef<boolean>(false);
 
   // Canvas and 3D Engine Ref
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -752,45 +1589,179 @@ export default function App() {
   }, [theme, accent]);
 
   // Push state to undo/redo history
-  const pushHistory = useCallback(() => {
-    const state: HistoryState = {
-      nodes: JSON.parse(JSON.stringify(nodes)),
-      elements: JSON.parse(JSON.stringify(elements)),
-      panels: JSON.parse(JSON.stringify(panels)),
-      sections: JSON.parse(JSON.stringify(sections)),
-      materials: JSON.parse(JSON.stringify(materials)),
-      analysisSettings: JSON.parse(JSON.stringify(analysisSettings)),
+  const commitHistory = useCallback(() => {
+    if (isUndoingOrRedoingRef.current) return;
+
+    const currentSnap: HistoryState = {
+      nodes,
+      elements,
+      panels,
+      sections,
+      materials,
+      analysisSettings,
     };
-    setHistory((prev) => [...prev.slice(0, historyIndex + 1), state]);
-    setHistoryIndex((prev) => prev + 1);
-  }, [nodes, elements, panels, sections, materials, analysisSettings, historyIndex]);
 
-  const handleUndo = () => {
-    if (historyIndex > 0) {
-      const prevState = history[historyIndex - 1];
-      setNodes(prevState.nodes);
-      setElements(prevState.elements);
-      setPanels(prevState.panels || []);
-      setSections(prevState.sections);
-      setMaterials(prevState.materials);
-      setAnalysisSettings(prevState.analysisSettings);
-      setHistoryIndex(historyIndex - 1);
-      setSolved(null);
-    }
-  };
+    const currHistory = historyRef.current;
+    const currIdx = historyIndexRef.current;
 
-  const handleRedo = () => {
-    if (historyIndex < history.length - 1) {
-      const nextState = history[historyIndex + 1];
-      setNodes(nextState.nodes);
-      setElements(nextState.elements);
-      setPanels(nextState.panels || []);
-      setSections(nextState.sections);
-      setMaterials(nextState.materials);
-      setHistoryIndex(historyIndex + 1);
-      setSolved(null);
+    if (currIdx >= 0 && currHistory[currIdx]) {
+      const lastSnapStr = JSON.stringify(currHistory[currIdx]);
+      const newSnapStr = JSON.stringify(currentSnap);
+      if (lastSnapStr === newSnapStr) {
+        return;
+      }
     }
-  };
+
+    const snapCopy: HistoryState = JSON.parse(JSON.stringify(currentSnap));
+    const newHistory = [...currHistory.slice(0, currIdx + 1), snapCopy];
+
+    if (newHistory.length > 100) {
+      newHistory.shift();
+    }
+
+    setHistory(newHistory);
+    setHistoryIndex(newHistory.length - 1);
+  }, [nodes, elements, panels, sections, materials, analysisSettings]);
+
+  const resetHistoryWithModel = useCallback(
+    (
+      n: Node3D[],
+      el: Element3D[],
+      p: Panel3D[],
+      sec: Section[],
+      mat: Material[],
+      ans: AnalysisSettings
+    ) => {
+      isUndoingOrRedoingRef.current = true;
+      const initialSnap: HistoryState = {
+        nodes: JSON.parse(JSON.stringify(n)),
+        elements: JSON.parse(JSON.stringify(el)),
+        panels: JSON.parse(JSON.stringify(p)),
+        sections: JSON.parse(JSON.stringify(sec)),
+        materials: JSON.parse(JSON.stringify(mat)),
+        analysisSettings: JSON.parse(JSON.stringify(ans)),
+      };
+      setHistory([initialSnap]);
+      setHistoryIndex(0);
+    },
+    []
+  );
+
+  // Automatically track model state changes in history (deferring while actively typing in text/number fields)
+  useEffect(() => {
+    if (isUndoingOrRedoingRef.current) {
+      isUndoingOrRedoingRef.current = false;
+      return;
+    }
+
+    if (historyRef.current.length === 0) {
+      const initialSnap: HistoryState = {
+        nodes,
+        elements,
+        panels,
+        sections,
+        materials,
+        analysisSettings,
+      };
+      setHistory([JSON.parse(JSON.stringify(initialSnap))]);
+      setHistoryIndex(0);
+      return;
+    }
+
+    if (isTextEditingElement(document.activeElement)) {
+      return;
+    }
+
+    commitHistory();
+  }, [nodes, elements, panels, sections, materials, analysisSettings, commitHistory]);
+
+  // Commit history when focus leaves input fields (finish typing edit)
+  useEffect(() => {
+    const handleFocusOut = () => {
+      setTimeout(() => {
+        if (!isTextEditingElement(document.activeElement)) {
+          commitHistory();
+        }
+      }, 10);
+    };
+
+    window.addEventListener('focusout', handleFocusOut);
+    return () => {
+      window.removeEventListener('focusout', handleFocusOut);
+    };
+  }, [commitHistory]);
+
+  const handleUndo = useCallback(() => {
+    const currIdx = historyIndexRef.current;
+    const currHist = historyRef.current;
+
+    if (currIdx > 0 && currHist[currIdx - 1]) {
+      if (isTextEditingElement(document.activeElement)) {
+        (document.activeElement as HTMLElement)?.blur();
+      }
+
+      isUndoingOrRedoingRef.current = true;
+      const prevState = currHist[currIdx - 1];
+
+      const restoredNodes = JSON.parse(JSON.stringify(prevState.nodes));
+      const restoredElems = JSON.parse(JSON.stringify(prevState.elements));
+      const restoredPanels = JSON.parse(JSON.stringify(prevState.panels || []));
+
+      setNodes(restoredNodes);
+      setElements(restoredElems);
+      setPanels(restoredPanels);
+      setSections(JSON.parse(JSON.stringify(prevState.sections)));
+      setMaterials(JSON.parse(JSON.stringify(prevState.materials)));
+      setAnalysisSettings(JSON.parse(JSON.stringify(prevState.analysisSettings)));
+      setHistoryIndex(currIdx - 1);
+      setSolved(null);
+      setSolveWarning(null);
+
+      const validNodeIds = new Set(restoredNodes.map((n: Node3D) => n.id));
+      const validElemIds = new Set(restoredElems.map((e: Element3D) => e.id));
+      const validPanelIds = new Set(restoredPanels.map((p: Panel3D) => p.id));
+
+      setSelectedNodeIds((prev) => prev.filter((id) => validNodeIds.has(id)));
+      setSelectedElemIds((prev) => prev.filter((id) => validElemIds.has(id)));
+      setSelectedPanelIds((prev) => prev.filter((id) => validPanelIds.has(id)));
+    }
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    const currIdx = historyIndexRef.current;
+    const currHist = historyRef.current;
+
+    if (currIdx < currHist.length - 1 && currHist[currIdx + 1]) {
+      if (isTextEditingElement(document.activeElement)) {
+        (document.activeElement as HTMLElement)?.blur();
+      }
+
+      isUndoingOrRedoingRef.current = true;
+      const nextState = currHist[currIdx + 1];
+
+      const restoredNodes = JSON.parse(JSON.stringify(nextState.nodes));
+      const restoredElems = JSON.parse(JSON.stringify(nextState.elements));
+      const restoredPanels = JSON.parse(JSON.stringify(nextState.panels || []));
+
+      setNodes(restoredNodes);
+      setElements(restoredElems);
+      setPanels(restoredPanels);
+      setSections(JSON.parse(JSON.stringify(nextState.sections)));
+      setMaterials(JSON.parse(JSON.stringify(nextState.materials)));
+      setAnalysisSettings(JSON.parse(JSON.stringify(nextState.analysisSettings)));
+      setHistoryIndex(currIdx + 1);
+      setSolved(null);
+      setSolveWarning(null);
+
+      const validNodeIds = new Set(restoredNodes.map((n: Node3D) => n.id));
+      const validElemIds = new Set(restoredElems.map((e: Element3D) => e.id));
+      const validPanelIds = new Set(restoredPanels.map((p: Panel3D) => p.id));
+
+      setSelectedNodeIds((prev) => prev.filter((id) => validNodeIds.has(id)));
+      setSelectedElemIds((prev) => prev.filter((id) => validElemIds.has(id)));
+      setSelectedPanelIds((prev) => prev.filter((id) => validPanelIds.has(id)));
+    }
+  }, []);
 
   const handleInvalidateResults = () => {
     setSolved(null);
@@ -807,10 +1778,10 @@ export default function App() {
     setSolved(null);
     setSelectedNodeIds([]);
     setSelectedElemIds([]);
+    setSelectedPanelIds([]);
     setCurrentModelName('Projekt konstrukcji 3D');
     setCurrentModelId(null);
-    setHistory([]);
-    setHistoryIndex(-1);
+    resetHistoryWithModel([], [], [], sections, materials, analysisSettings);
     setStatusHint('Utworzono nowy czysty model 3D.');
   };
 
@@ -879,18 +1850,35 @@ export default function App() {
 
   const handleSelectLocalModel = (record: StoredModelRecord) => {
     if (record.data) {
-      if (record.data.nodes) setNodes(record.data.nodes);
-      if (record.data.elements) setElements(record.data.elements);
-      if (record.data.panels) setPanels(record.data.panels);
-      else setPanels([]);
-      if (record.data.sections) setSections(record.data.sections);
-      if (record.data.materials) setMaterials(record.data.materials);
-      if (record.data.analysisSettings) setAnalysisSettings(record.data.analysisSettings);
+      const loadedNodes = record.data.nodes || [];
+      const loadedElems = record.data.elements || [];
+      const loadedPanels = record.data.panels || [];
+      const loadedSections = record.data.sections || sections;
+      const loadedMaterials = record.data.materials || materials;
+      const loadedAnalysis = record.data.analysisSettings || analysisSettings;
+
+      setNodes(loadedNodes);
+      setElements(loadedElems);
+      setPanels(loadedPanels);
+      setSections(loadedSections);
+      setMaterials(loadedMaterials);
+      setAnalysisSettings(loadedAnalysis);
       setSolved(null);
       setSelectedNodeIds([]);
       setSelectedElemIds([]);
-      if (record.data.nodes && record.data.nodes.length > 0) {
-        engineRef.current.fitView(record.data.nodes);
+      setSelectedPanelIds([]);
+
+      resetHistoryWithModel(
+        loadedNodes,
+        loadedElems,
+        loadedPanels,
+        loadedSections,
+        loadedMaterials,
+        loadedAnalysis
+      );
+
+      if (loadedNodes.length > 0) {
+        engineRef.current.fitView(loadedNodes);
       }
       setCurrentModelName(record.name);
       setCurrentModelId(record.id);
@@ -914,17 +1902,36 @@ export default function App() {
       try {
         const parsed = JSON.parse(reader.result as string);
         if (parsed.nodes && parsed.elements) {
-          setNodes(parsed.nodes);
-          setElements(parsed.elements);
-          if (parsed.panels) setPanels(parsed.panels);
-          else setPanels([]);
-          if (parsed.sections) setSections(parsed.sections);
-          if (parsed.materials) setMaterials(parsed.materials);
-          if (parsed.analysisSettings) setAnalysisSettings(parsed.analysisSettings);
+          const loadedNodes = parsed.nodes || [];
+          const loadedElems = parsed.elements || [];
+          const loadedPanels = parsed.panels || [];
+          const loadedSections = parsed.sections || sections;
+          const loadedMaterials = parsed.materials || materials;
+          const loadedAnalysis = parsed.analysisSettings || analysisSettings;
+
+          setNodes(loadedNodes);
+          setElements(loadedElems);
+          setPanels(loadedPanels);
+          setSections(loadedSections);
+          setMaterials(loadedMaterials);
+          setAnalysisSettings(loadedAnalysis);
           setSolved(null);
           setSelectedNodeIds([]);
           setSelectedElemIds([]);
-          engineRef.current.fitView(parsed.nodes);
+          setSelectedPanelIds([]);
+
+          resetHistoryWithModel(
+            loadedNodes,
+            loadedElems,
+            loadedPanels,
+            loadedSections,
+            loadedMaterials,
+            loadedAnalysis
+          );
+
+          if (loadedNodes.length > 0) {
+            engineRef.current.fitView(loadedNodes);
+          }
           const baseName = file.name.replace(/\.json$/i, '');
           setCurrentModelName(baseName);
           setCurrentModelId(null);
@@ -995,6 +2002,7 @@ export default function App() {
     const solverModel = {
       nodes,
       elements,
+      panels,
       materials,
       sections,
       settings: {
@@ -1152,7 +2160,26 @@ export default function App() {
       snapSize,
       hoverNodeIdRef.current,
       accentDef.hex,
-      isTouch
+      isTouch,
+      selectedNodeIds,
+      selectedElemIds,
+      selectedPanelIds,
+      activeTransformMode,
+      transformWithCopy,
+      transformConnect,
+      transformRepeat,
+      moveDx,
+      moveDy,
+      moveDz,
+      [rotateCx, rotateCy, rotateCz],
+      rotateAxis,
+      rotateAngle,
+      [mirrorPx, mirrorPy, mirrorPz],
+      mirrorPlane,
+      [scaleCx, scaleCy, scaleCz],
+      scaleFactor,
+      pickMoveVector,
+      pickTransformPoint
     );
   }, [
     nodes,
@@ -1205,6 +2232,28 @@ export default function App() {
     showCanvasUI,
     gridPlane,
     gridOffset,
+    activeTransformMode,
+    transformWithCopy,
+    transformConnect,
+    transformRepeat,
+    moveDx,
+    moveDy,
+    moveDz,
+    rotateCx,
+    rotateCy,
+    rotateCz,
+    rotateAxis,
+    rotateAngle,
+    mirrorPx,
+    mirrorPy,
+    mirrorPz,
+    mirrorPlane,
+    scaleCx,
+    scaleCy,
+    scaleCz,
+    scaleFactor,
+    pickMoveVector,
+    pickTransformPoint,
   ]);
 
   useEffect(() => {
@@ -1285,6 +2334,23 @@ export default function App() {
     }, 100);
     return () => clearTimeout(timer);
   }, []);
+
+  // Dynamically update rotation center to centroid of selection (or model centroid if nothing selected)
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+
+    const center = calculateRotationCenter(
+      selectedNodeIds,
+      selectedElemIds,
+      selectedPanelIds,
+      nodes,
+      elements,
+      panels
+    );
+    engine.setRotationCenter(center);
+    redraw();
+  }, [selectedNodeIds, selectedElemIds, selectedPanelIds, nodes, elements, panels, redraw]);
 
   // --- Camera & Selection Actions ---
   const handleFitView = () => {
@@ -1576,18 +2642,6 @@ export default function App() {
           300,
           () => {
             redraw();
-          },
-          () => {
-            if (cubeHit === 'FRONT' || cubeHit === 'BACK') {
-              setGridPlane('XZ');
-              setStatusHint('Zmieniono płaszczyznę siatki na XZ (y=0).');
-            } else if (cubeHit === 'LEFT' || cubeHit === 'RIGHT') {
-              setGridPlane('YZ');
-              setStatusHint('Zmieniono płaszczyznę siatki na YZ (x=0).');
-            } else if (cubeHit === 'TOP' || cubeHit === 'BOTTOM') {
-              setGridPlane('XY');
-              setStatusHint('Zmieniono płaszczyznę siatki na XY (z=0).');
-            }
           }
         );
       }
@@ -1898,7 +2952,7 @@ export default function App() {
     let foundElemId: number | null = null;
     let foundPanelId: number | null = null;
 
-    if (mode === 'addBar' || mode === 'addPanel') {
+    if (mode === 'addBar' || mode === 'addPanel' || mode === 'grid') {
       const closestNode = getClosestEntityAt(px, py, { includeNodes: true, includeElements: false, includePanels: false });
       if (closestNode && closestNode.type === 'node') {
         foundNodeId = closestNode.id;
@@ -1927,8 +2981,16 @@ export default function App() {
     // Dynamic smart cursor update
     updateCanvasCursor({ ctrl, shift });
 
-    // Redraw immediately during drawing mode for live preview or when hover state changes
-    if (mode === 'addBar' || mode === 'addPanel' || hoverChanged) {
+    // Redraw immediately during drawing mode, live vector/point picking, transform preview, or when hover state changes
+    if (
+      mode === 'addBar' ||
+      mode === 'addPanel' ||
+      mode === 'grid' ||
+      pickMoveVector.active ||
+      pickTransformPoint.active ||
+      activeTransformMode !== 'none' ||
+      hoverChanged
+    ) {
       redraw();
     }
   };
@@ -1938,7 +3000,14 @@ export default function App() {
     hoverViewCubeRef.current = null;
     hoverNodeIdRef.current = null;
     hoverElemIdRef.current = null;
-    if (mode === 'addBar' || mode === 'addPanel') {
+    if (
+      mode === 'addBar' ||
+      mode === 'addPanel' ||
+      mode === 'grid' ||
+      pickMoveVector.active ||
+      pickTransformPoint.active ||
+      activeTransformMode !== 'none'
+    ) {
       redraw();
     }
   };
@@ -1954,20 +3023,113 @@ export default function App() {
     if (showCanvasUI && engine.hitTestViewCube(px, py) != null) {
       return;
     }
+
+    if (pickTransformPoint.active && pickTransformPoint.target) {
+      const closestNodeCandidate = getClosestEntityAt(px, py, { includeNodes: true, includeElements: false, includePanels: false });
+      let pt: [number, number, number];
+      if (closestNodeCandidate && closestNodeCandidate.type === 'node') {
+        const n = nodes.find((node) => node.id === closestNodeCandidate.id);
+        pt = n ? [n.x, n.y, n.z] : [0, 0, 0];
+      } else {
+        const unproj = engine.unprojectToPlane(px, py, gridPlane, gridOffset);
+        let x = unproj[0], y = unproj[1], z = unproj[2];
+        if (snapEnabled) {
+          if (gridPlane === 'XY') {
+            x = Math.round(x / snapSize) * snapSize;
+            y = Math.round(y / snapSize) * snapSize;
+            z = gridOffset;
+          } else if (gridPlane === 'XZ') {
+            x = Math.round(x / snapSize) * snapSize;
+            y = gridOffset;
+            z = Math.round(z / snapSize) * snapSize;
+          } else if (gridPlane === 'YZ') {
+            x = gridOffset;
+            y = Math.round(y / snapSize) * snapSize;
+            z = Math.round(z / snapSize) * snapSize;
+          }
+        }
+        pt = [x, y, z];
+      }
+
+      const rx = Math.round(pt[0] * 1000) / 1000;
+      const ry = Math.round(pt[1] * 1000) / 1000;
+      const rz = Math.round(pt[2] * 1000) / 1000;
+
+      if (pickTransformPoint.target === 'rotateCenter') {
+        setRotateCx(rx);
+        setRotateCy(ry);
+        setRotateCz(rz);
+        setStatusHint(`Ustawiono środek obrotu: (${rx}, ${ry}, ${rz}) m.`);
+      } else if (pickTransformPoint.target === 'mirrorPoint') {
+        setMirrorPx(rx);
+        setMirrorPy(ry);
+        setMirrorPz(rz);
+        setStatusHint(`Ustawiono punkt płaszczyzny odbicia: (${rx}, ${ry}, ${rz}) m.`);
+      } else if (pickTransformPoint.target === 'scaleCenter') {
+        setScaleCx(rx);
+        setScaleCy(ry);
+        setScaleCz(rz);
+        setStatusHint(`Ustawiono środek skalowania: (${rx}, ${ry}, ${rz}) m.`);
+      }
+
+      setPickTransformPoint({ active: false, target: null });
+      redraw();
+      return;
+    }
+
+    if (pickMoveVector.active) {
+      const closestNodeCandidate = getClosestEntityAt(px, py, { includeNodes: true, includeElements: false, includePanels: false });
+      let pt: [number, number, number];
+      if (closestNodeCandidate && closestNodeCandidate.type === 'node') {
+        const n = nodes.find((node) => node.id === closestNodeCandidate.id);
+        pt = n ? [n.x, n.y, n.z] : [0, 0, 0];
+      } else {
+        const unproj = engine.unprojectToPlane(px, py, gridPlane, gridOffset);
+        let x = unproj[0], y = unproj[1], z = unproj[2];
+        if (snapEnabled) {
+          if (gridPlane === 'XY') {
+            x = Math.round(x / snapSize) * snapSize;
+            y = Math.round(y / snapSize) * snapSize;
+            z = gridOffset;
+          } else if (gridPlane === 'XZ') {
+            x = Math.round(x / snapSize) * snapSize;
+            y = gridOffset;
+            z = Math.round(z / snapSize) * snapSize;
+          } else if (gridPlane === 'YZ') {
+            x = gridOffset;
+            y = Math.round(y / snapSize) * snapSize;
+            z = Math.round(z / snapSize) * snapSize;
+          }
+        }
+        pt = [x, y, z];
+      }
+
+      if (pickMoveVector.step === 1) {
+        setPickMoveVector({
+          active: true,
+          step: 2,
+          p1: pt,
+        });
+        setStatusHint(`Wskazano P1 (${pt[0].toFixed(2)}, ${pt[1].toFixed(2)}, ${pt[2].toFixed(2)}) m. Wskaż punkt końcowy P2 (2/2) wektora.`);
+      } else if (pickMoveVector.step === 2 && pickMoveVector.p1) {
+        const p1 = pickMoveVector.p1;
+        const dx = Math.round((pt[0] - p1[0]) * 1000) / 1000;
+        const dy = Math.round((pt[1] - p1[1]) * 1000) / 1000;
+        const dz = Math.round((pt[2] - p1[2]) * 1000) / 1000;
+        setMoveDx(dx);
+        setMoveDy(dy);
+        setMoveDz(dz);
+        setPickMoveVector({ active: false, step: 1, p1: null });
+        setStatusHint(`Ustawiono wektor przeniesienia: Δx = ${dx} m, Δy = ${dy} m, Δz = ${dz} m.`);
+      }
+      redraw();
+      return;
+    }
   
     // Check node hit (sorted by depth to pick closest node first)
     const closestNodeCandidate = getClosestEntityAt(px, py, { includeNodes: true, includeElements: false, includePanels: false });
     const clickedNodeId = closestNodeCandidate && closestNodeCandidate.type === 'node' ? closestNodeCandidate.id : null;
 
-    if (clickedNodeId != null) {
-      const clickedNode = nodes.find((n) => n.id === clickedNodeId);
-      if (clickedNode) {
-        const offset = gridPlane === 'XY' ? clickedNode.z : gridPlane === 'XZ' ? clickedNode.y : clickedNode.x;
-        setGridOffset(offset);
-        engine.setRotationCenter([clickedNode.x, clickedNode.y, clickedNode.z]);
-      }
-    }
-  
     if (mode === 'addBar') {
       if (clickedNodeId != null) {
         if (barStartNodeId == null) {
@@ -2069,7 +3231,6 @@ export default function App() {
             targetNodeId = nextNodeId;
             setLastPlacedNodeId(targetNodeId);
           }
-          engine.setRotationCenter([x, y, z]);
 
           if (barStartNodeId == null) {
             setBarStartNodeId(targetNodeId);
@@ -2183,7 +3344,6 @@ export default function App() {
             targetNodeId = nextNodeId;
             setLastPlacedNodeId(targetNodeId);
           }
-          engine.setRotationCenter([x, y, z]);
         } else {
           setShowCanvasUI((prev) => !prev);
           return;
@@ -2289,6 +3449,20 @@ export default function App() {
           handleInvalidateResults();
         }
       }
+    } else if (mode === 'grid') {
+      if (clickedNodeId != null) {
+        const clickedNode = nodes.find((n) => n.id === clickedNodeId);
+        if (clickedNode) {
+          const offset = gridPlane === 'XY' ? clickedNode.z : gridPlane === 'XZ' ? clickedNode.y : clickedNode.x;
+          setGridOffset(offset);
+          const coordName = gridPlane === 'XY' ? 'Z' : gridPlane === 'XZ' ? 'Y' : 'X';
+          setStatusHint(`Przeniesiono siatkę ${gridPlane} na poziom ${coordName} = ${offset.toFixed(2)} m (węzeł W${clickedNode.id}).`);
+          redraw();
+        }
+      } else {
+        const coordName = gridPlane === 'XY' ? 'Z' : gridPlane === 'XZ' ? 'Y' : 'X';
+        setStatusHint(`Siatka robocza ${gridPlane} (${coordName} = ${gridOffset.toFixed(2)} m) – kliknij na węzeł, aby przenieść siatkę.`);
+      }
     } else {
       // Selection Mode
       const closest = getClosestEntityAt(px, py);
@@ -2302,17 +3476,6 @@ export default function App() {
           }
         } else if (closest.type === 'element') {
           const clickedElemId = closest.id;
-          const el = elements.find((e) => e.id === clickedElemId);
-          if (el) {
-            const n1 = nodes.find((n) => n.id === el.n1);
-            const n2 = nodes.find((n) => n.id === el.n2);
-            if (n1 && n2) {
-              const midX = (n1.x + n2.x) / 2;
-              const midY = (n1.y + n2.y) / 2;
-              const midZ = (n1.z + n2.z) / 2;
-              engine.setRotationCenter([midX, midY, midZ]);
-            }
-          }
           setProbe({ elId: clickedElemId, t: closest.t ?? 0.5 });
           setSelectedElemIds((prev) => updateSelection(prev, [clickedElemId], selMode));
           if (selMode === 'replace') {
@@ -2321,16 +3484,6 @@ export default function App() {
           }
         } else if (closest.type === 'panel') {
           const clickedPanelId = closest.id;
-          const pan = panels.find((p) => p.id === clickedPanelId);
-          if (pan) {
-            const corners = getPanelCorners(pan, nodes);
-            if (corners.length >= 3) {
-              const cx = corners.reduce((sum, c) => sum + c[0], 0) / corners.length;
-              const cy = corners.reduce((sum, c) => sum + c[1], 0) / corners.length;
-              const cz = corners.reduce((sum, c) => sum + c[2], 0) / corners.length;
-              engine.setRotationCenter([cx, cy, cz]);
-            }
-          }
           setSelectedPanelIds((prev) => updateSelection(prev, [clickedPanelId], selMode));
           if (selMode === 'replace') {
             setSelectedNodeIds([]);
@@ -2697,10 +3850,14 @@ export default function App() {
       const targetTag = (e.target as HTMLElement)?.tagName?.toUpperCase();
       if (targetTag === 'INPUT' || targetTag === 'SELECT' || targetTag === 'TEXTAREA') return;
 
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault();
-        handleUndo();
-      } else if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+        if (e.shiftKey) {
+          handleRedo();
+        } else {
+          handleUndo();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
         e.preventDefault();
         handleRedo();
       } else if (e.key === 'Enter') {
@@ -2719,13 +3876,20 @@ export default function App() {
       } else if (e.key === 'r' || e.key === 'R' || e.key === 'b' || e.key === 'B') {
         setMode('addBar');
         setBarStartNodeId(null);
+      } else if (e.key === 'g' || e.key === 'G') {
+        setMode('grid');
       } else if (e.key === 'Escape') {
+        if (pickMoveVector.active || pickTransformPoint.active) {
+          handleCancelPickMode();
+          setStatusHint('Anulowano wskazywanie punktu/wektora.');
+          return;
+        }
         setBarStartNodeId(null);
         setPanelPoints([]);
         setSelectedNodeIds([]);
         setSelectedElemIds([]);
         setSelectedPanelIds([]);
-        if (mode === 'addBar' || mode === 'addPanel') {
+        if (mode === 'addBar' || mode === 'addPanel' || mode === 'grid') {
           setMode('select');
         }
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -2803,6 +3967,10 @@ export default function App() {
           setPanelShape(shape);
           setPanelPoints([]);
         }}
+        gridPlane={gridPlane}
+        setGridPlane={setGridPlane}
+        gridOffset={gridOffset}
+        setGridOffset={setGridOffset}
         navMode={navMode}
         setNavMode={setNavMode}
         effectiveSelMode={effectiveSelMode}
@@ -2993,6 +4161,39 @@ export default function App() {
                 </button>
               </>
             )}
+
+            {mode === 'grid' && (
+              <>
+                <button
+                  className={`zbtn ${gridPlane === 'XY' ? 'active' : ''}`}
+                  onClick={() => setGridPlane('XY')}
+                  title="Siatka pozioma XY (z=const)"
+                >
+                  XY
+                </button>
+                <button
+                  className={`zbtn ${gridPlane === 'YZ' ? 'active' : ''}`}
+                  onClick={() => setGridPlane('YZ')}
+                  title="Siatka pionowa YZ (x=const)"
+                >
+                  YZ
+                </button>
+                <button
+                  className={`zbtn ${gridPlane === 'XZ' ? 'active' : ''}`}
+                  onClick={() => setGridPlane('XZ')}
+                  title="Siatka pionowa XZ (y=const)"
+                >
+                  XZ
+                </button>
+                <button
+                  className={`zbtn ${snapEnabled ? 'active' : ''}`}
+                  onClick={() => setSnapEnabled(!snapEnabled)}
+                  title={`Przyciąganie do siatki (${snapSize} m)`}
+                >
+                  {ICONS.grid}
+                </button>
+              </>
+            )}
           </div>
 
           {/* Bottom Overlay containing:
@@ -3173,8 +4374,66 @@ export default function App() {
           onElemDrawn={(id) => setLastDrawnElemId(id)}
           defaultSectionId={defaultSectionId}
           defaultMaterialId={defaultMaterialId}
+          gridPlane={gridPlane}
+          setGridPlane={setGridPlane}
+          gridOffset={gridOffset}
+          setGridOffset={setGridOffset}
+          snapEnabled={snapEnabled}
+          setSnapEnabled={setSnapEnabled}
+          snapSize={snapSize}
+          setSnapSize={setSnapSize}
+          showGrid={showGrid}
+          setShowGrid={setShowGrid}
           panelHeight={panelHeight}
           onPanelHandleStart={handlePanelResizeStart}
+          activeTransformMode={activeTransformMode}
+          setActiveTransformMode={handleOpenTransformMode}
+          transformWithCopy={transformWithCopy}
+          setTransformWithCopy={setTransformWithCopy}
+          transformConnect={transformConnect}
+          setTransformConnect={setTransformConnect}
+          transformRepeat={transformRepeat}
+          setTransformRepeat={setTransformRepeat}
+          moveDx={moveDx}
+          setMoveDx={setMoveDx}
+          moveDy={moveDy}
+          setMoveDy={setMoveDy}
+          moveDz={moveDz}
+          setMoveDz={setMoveDz}
+          rotateCx={rotateCx}
+          setRotateCx={setRotateCx}
+          rotateCy={rotateCy}
+          setRotateCy={setRotateCy}
+          rotateCz={rotateCz}
+          setRotateCz={setRotateCz}
+          rotateAxis={rotateAxis}
+          setRotateAxis={setRotateAxis}
+          rotateAngle={rotateAngle}
+          setRotateAngle={setRotateAngle}
+          mirrorPx={mirrorPx}
+          setMirrorPx={setMirrorPx}
+          mirrorPy={mirrorPy}
+          setMirrorPy={setMirrorPy}
+          mirrorPz={mirrorPz}
+          setMirrorPz={setMirrorPz}
+          mirrorPlane={mirrorPlane}
+          setMirrorPlane={setMirrorPlane}
+          scaleCx={scaleCx}
+          setScaleCx={setScaleCx}
+          scaleCy={scaleCy}
+          setScaleCy={setScaleCy}
+          scaleCz={scaleCz}
+          setScaleCz={setScaleCz}
+          scaleFactor={scaleFactor}
+          setScaleFactor={setScaleFactor}
+          pickMoveVectorActive={pickMoveVector.active}
+          pickMoveVectorStep={pickMoveVector.step}
+          onStartPickMoveVector={handleStartPickMoveVector}
+          pickTransformPointActive={pickTransformPoint.active}
+          pickTransformPointTarget={pickTransformPoint.target}
+          onStartPickPoint={handleStartPickPoint}
+          onCancelPickMode={handleCancelPickMode}
+          mergeTolerance={mergeTolerance}
         />
       </div>
 
@@ -3194,6 +4453,8 @@ export default function App() {
         setIncludeSelfWeight={setIncludeSelfWeight}
         snapSize={snapSize}
         setSnapSize={setSnapSize}
+        mergeTolerance={mergeTolerance}
+        setMergeTolerance={setMergeTolerance}
       />
 
       <AboutModal isOpen={aboutOpen} onClose={() => setAboutOpen(false)} />

@@ -449,76 +449,36 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
               </div>
 
               {/* Tryb filtrowania długości */}
-              <div style={{ display: 'flex', gap: '6px' }}>
+              <div className="btnrow">
                 <button
                   type="button"
+                  className={`mini ${lengthMode === 'range' ? 'on' : ''}`}
+                  style={{ flex: 1 }}
                   onClick={() => setLengthMode('range')}
-                  style={{
-                    flex: 1,
-                    padding: '6px 8px',
-                    fontSize: '11.5px',
-                    borderRadius: '6px',
-                    border: '1px solid',
-                    borderColor: lengthMode === 'range' ? 'var(--accent)' : 'var(--input-border)',
-                    background: lengthMode === 'range' ? 'var(--accent-soft)' : 'var(--surface)',
-                    color: lengthMode === 'range' ? 'var(--accent)' : 'var(--text)',
-                    cursor: 'pointer',
-                    fontWeight: lengthMode === 'range' ? 600 : 400,
-                  }}
                 >
                   Przedział [Min - Max]
                 </button>
                 <button
                   type="button"
+                  className={`mini ${lengthMode === 'exact' ? 'on' : ''}`}
+                  style={{ flex: 1 }}
                   onClick={() => setLengthMode('exact')}
-                  style={{
-                    flex: 1,
-                    padding: '6px 8px',
-                    fontSize: '11.5px',
-                    borderRadius: '6px',
-                    border: '1px solid',
-                    borderColor: lengthMode === 'exact' ? 'var(--accent)' : 'var(--input-border)',
-                    background: lengthMode === 'exact' ? 'var(--accent-soft)' : 'var(--surface)',
-                    color: lengthMode === 'exact' ? 'var(--accent)' : 'var(--text)',
-                    cursor: 'pointer',
-                    fontWeight: lengthMode === 'exact' ? 600 : 400,
-                  }}
                 >
                   Dokładna wartość
                 </button>
                 <button
                   type="button"
+                  className={`mini ${lengthMode === 'greater' ? 'on' : ''}`}
+                  style={{ flex: 1 }}
                   onClick={() => setLengthMode('greater')}
-                  style={{
-                    flex: 1,
-                    padding: '6px 8px',
-                    fontSize: '11.5px',
-                    borderRadius: '6px',
-                    border: '1px solid',
-                    borderColor: lengthMode === 'greater' ? 'var(--accent)' : 'var(--input-border)',
-                    background: lengthMode === 'greater' ? 'var(--accent-soft)' : 'var(--surface)',
-                    color: lengthMode === 'greater' ? 'var(--accent)' : 'var(--text)',
-                    cursor: 'pointer',
-                    fontWeight: lengthMode === 'greater' ? 600 : 400,
-                  }}
                 >
                   Dłuższe niż &ge;
                 </button>
                 <button
                   type="button"
+                  className={`mini ${lengthMode === 'less' ? 'on' : ''}`}
+                  style={{ flex: 1 }}
                   onClick={() => setLengthMode('less')}
-                  style={{
-                    flex: 1,
-                    padding: '6px 8px',
-                    fontSize: '11.5px',
-                    borderRadius: '6px',
-                    border: '1px solid',
-                    borderColor: lengthMode === 'less' ? 'var(--accent)' : 'var(--input-border)',
-                    background: lengthMode === 'less' ? 'var(--accent-soft)' : 'var(--surface)',
-                    color: lengthMode === 'less' ? 'var(--accent)' : 'var(--text)',
-                    cursor: 'pointer',
-                    fontWeight: lengthMode === 'less' ? 600 : 400,
-                  }}
                 >
                   Krótsze niż &le;
                 </button>
@@ -528,34 +488,38 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
               {lengthMode === 'range' && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   <div>
-                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '5px' }}>
-                      Długość minimalna (L_min) [m]
+                    <label style={{ display: 'block', fontSize: '11.5px', color: 'var(--text-dim)', fontWeight: 600, marginBottom: '4px' }}>
+                      Długość minimalna (L_min)
                     </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={minLen}
-                      onChange={(e) => setMinLen(e.target.value)}
-                      placeholder="np. 2.0"
-                      className="tb-input"
-                      style={{ width: '100%', padding: '8px 10px', fontSize: '13px' }}
-                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={minLen}
+                        onChange={(e) => setMinLen(e.target.value)}
+                        placeholder="np. 2.0"
+                        className="tb-input"
+                      />
+                      <span style={{ fontSize: '11px', color: 'var(--text-dim)', minWidth: '14px' }}>m</span>
+                    </div>
                   </div>
                   <div>
-                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '5px' }}>
-                      Długość maksymalna (L_max) [m]
+                    <label style={{ display: 'block', fontSize: '11.5px', color: 'var(--text-dim)', fontWeight: 600, marginBottom: '4px' }}>
+                      Długość maksymalna (L_max)
                     </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={maxLen}
-                      onChange={(e) => setMaxLen(e.target.value)}
-                      placeholder="np. 6.0"
-                      className="tb-input"
-                      style={{ width: '100%', padding: '8px 10px', fontSize: '13px' }}
-                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={maxLen}
+                        onChange={(e) => setMaxLen(e.target.value)}
+                        placeholder="np. 6.0"
+                        className="tb-input"
+                      />
+                      <span style={{ fontSize: '11px', color: 'var(--text-dim)', minWidth: '14px' }}>m</span>
+                    </div>
                   </div>
                 </div>
               )}
@@ -563,71 +527,79 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
               {lengthMode === 'exact' && (
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
                   <div>
-                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '5px' }}>
-                      Szukana długość (L) [m]
+                    <label style={{ display: 'block', fontSize: '11.5px', color: 'var(--text-dim)', fontWeight: 600, marginBottom: '4px' }}>
+                      Szukana długość (L)
                     </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={exactLen}
-                      onChange={(e) => setExactLen(e.target.value)}
-                      placeholder="np. 4.0"
-                      className="tb-input"
-                      style={{ width: '100%', padding: '8px 10px', fontSize: '13px' }}
-                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={exactLen}
+                        onChange={(e) => setExactLen(e.target.value)}
+                        placeholder="np. 4.0"
+                        className="tb-input"
+                      />
+                      <span style={{ fontSize: '11px', color: 'var(--text-dim)', minWidth: '14px' }}>m</span>
+                    </div>
                   </div>
                   <div>
-                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '5px' }}>
-                      Tolerancja &plusmn; [m]
+                    <label style={{ display: 'block', fontSize: '11.5px', color: 'var(--text-dim)', fontWeight: 600, marginBottom: '4px' }}>
+                      Tolerancja &plusmn;
                     </label>
-                    <input
-                      type="number"
-                      step="0.001"
-                      min="0"
-                      value={tolerance}
-                      onChange={(e) => setTolerance(e.target.value)}
-                      placeholder="np. 0.01"
-                      className="tb-input"
-                      style={{ width: '100%', padding: '8px 10px', fontSize: '13px' }}
-                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <input
+                        type="number"
+                        step="0.001"
+                        min="0"
+                        value={tolerance}
+                        onChange={(e) => setTolerance(e.target.value)}
+                        placeholder="np. 0.01"
+                        className="tb-input"
+                      />
+                      <span style={{ fontSize: '11px', color: 'var(--text-dim)', minWidth: '14px' }}>m</span>
+                    </div>
                   </div>
                 </div>
               )}
 
               {lengthMode === 'greater' && (
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '5px' }}>
-                    Długość większa lub równa niż (&ge;) [m]
+                  <label style={{ display: 'block', fontSize: '11.5px', color: 'var(--text-dim)', fontWeight: 600, marginBottom: '4px' }}>
+                    Długość większa lub równa niż (&ge;)
                   </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={minLen}
-                    onChange={(e) => setMinLen(e.target.value)}
-                    placeholder="np. 4.0"
-                    className="tb-input"
-                    style={{ width: '100%', padding: '8px 10px', fontSize: '13px' }}
-                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={minLen}
+                      onChange={(e) => setMinLen(e.target.value)}
+                      placeholder="np. 4.0"
+                      className="tb-input"
+                    />
+                    <span style={{ fontSize: '11px', color: 'var(--text-dim)', minWidth: '14px' }}>m</span>
+                  </div>
                 </div>
               )}
 
               {lengthMode === 'less' && (
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '5px' }}>
-                    Długość mniejsza lub równa niż (&le;) [m]
+                  <label style={{ display: 'block', fontSize: '11.5px', color: 'var(--text-dim)', fontWeight: 600, marginBottom: '4px' }}>
+                    Długość mniejsza lub równa niż (&le;)
                   </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={maxLen}
-                    onChange={(e) => setMaxLen(e.target.value)}
-                    placeholder="np. 3.0"
-                    className="tb-input"
-                    style={{ width: '100%', padding: '8px 10px', fontSize: '13px' }}
-                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={maxLen}
+                      onChange={(e) => setMaxLen(e.target.value)}
+                      placeholder="np. 3.0"
+                      className="tb-input"
+                    />
+                    <span style={{ fontSize: '11px', color: 'var(--text-dim)', minWidth: '14px' }}>m</span>
+                  </div>
                 </div>
               )}
 

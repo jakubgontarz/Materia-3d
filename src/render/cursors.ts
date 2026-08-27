@@ -151,8 +151,9 @@ export function getCanvasCursor(params: {
     isDraggingNav,
   } = params;
 
-  // 1. Drawing / Adding elements
-  if (mode === 'addBar') {
+  // 1. Drawing / Adding elements / Grid tool
+  if (mode === 'addBar' || mode === 'addPanel' || mode === 'grid') {
+    if (isHoverInteractive) return 'pointer';
     return 'crosshair';
   }
 

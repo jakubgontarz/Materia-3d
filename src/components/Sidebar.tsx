@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import {
   Node3D,
   Element3D,
@@ -17,6 +17,214 @@ import {
 import { ICONS } from './Toolbar';
 import { CATALOG_DEFS, CATALOG_ORDER } from '../fem/catalogs';
 import { SmartNumberInput } from './SmartNumberInput';
+import { mergeOverlapping } from '../utils/merge';
+
+function transformPoint(
+  p: [number, number, number],
+  mode: 'move' | 'rotate' | 'mirror' | 'scale',
+  params: {
+    moveDx: number; moveDy: number; moveDz: number;
+    rotateCenter: [number, number, number]; rotateAxis: 'X' | 'Y' | 'Z'; rotateAngleDeg: number;
+    mirrorPoint: [number, number, number]; mirrorPlane: 'XY' | 'YZ' | 'XZ';
+    scaleCenter: [number, number, number]; scaleFactor: number;
+  },
+  step: number
+): [number, number, number] {
+  let [x, y, z] = p;
+  if (mode === 'move') {
+    return [x + params.moveDx * step, y + params.moveDy * step, z + params.moveDz * step];
+  } else if (mode === 'rotate') {
+    const [cx, cy, cz] = params.rotateCenter;
+    const rad = (params.rotateAngleDeg * step * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    let dx = x - cx;
+    let dy = y - cy;
+    let dz = z - cz;
+    let dx1 = dx, dy1 = dy, dz1 = dz;
+    if (params.rotateAxis === 'X') {
+      dy1 = dy * cos - dz * sin;
+      dz1 = dy * sin + dz * cos;
+    } else if (params.rotateAxis === 'Y') {
+      dx1 = dx * cos + dz * sin;
+      dz1 = -dx * sin + dz * cos;
+    } else if (params.rotateAxis === 'Z') {
+      dx1 = dx * cos - dy * sin;
+      dy1 = dx * sin + dy * cos;
+    }
+    return [cx + dx1, cy + dy1, cz + dz1];
+  } else if (mode === 'mirror') {
+    const [px, py, pz] = params.mirrorPoint;
+    if (params.mirrorPlane === 'XY') {
+      return [x, y, 2 * pz - z];
+    } else if (params.mirrorPlane === 'YZ') {
+      return [2 * px - x, y, z];
+    } else { // XZ
+      return [x, 2 * py - y, z];
+    }
+  } else if (mode === 'scale') {
+    const [cx, cy, cz] = params.scaleCenter;
+    const factor = Math.pow(params.scaleFactor, step);
+    return [cx + (x - cx) * factor, cy + (y - cy) * factor, cz + (z - cz) * factor];
+  }
+  return p;
+}
+
+function transformVector(
+  v: [number, number, number],
+  mode: 'move' | 'rotate' | 'mirror' | 'scale',
+  params: {
+    moveDx: number; moveDy: number; moveDz: number;
+    rotateCenter: [number, number, number]; rotateAxis: 'X' | 'Y' | 'Z'; rotateAngleDeg: number;
+    mirrorPoint: [number, number, number]; mirrorPlane: 'XY' | 'YZ' | 'XZ';
+    scaleCenter: [number, number, number]; scaleFactor: number;
+  },
+  step: number
+): [number, number, number] {
+  let [x, y, z] = v;
+  if (mode === 'move') {
+    return [x, y, z];
+  } else if (mode === 'rotate') {
+    const rad = (params.rotateAngleDeg * step * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    let x1 = x, y1 = y, z1 = z;
+    if (params.rotateAxis === 'X') {
+      y1 = y * cos - z * sin;
+      z1 = y * sin + z * cos;
+    } else if (params.rotateAxis === 'Y') {
+      x1 = x * cos + z * sin;
+      z1 = -x * sin + z * cos;
+    } else if (params.rotateAxis === 'Z') {
+      x1 = x * cos - y * sin;
+      y1 = x * sin + y * cos;
+    }
+    return [x1, y1, z1];
+  } else if (mode === 'mirror') {
+    if (params.mirrorPlane === 'XY') {
+      return [x, y, -z];
+    } else if (params.mirrorPlane === 'YZ') {
+      return [-x, y, z];
+    } else { // XZ
+      return [x, -y, z];
+    }
+  } else if (mode === 'scale') {
+    return [x, y, z];
+  }
+  return v;
+}
+
+function cross3D(a: [number, number, number], b: [number, number, number]): [number, number, number] {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0]
+  ];
+}
+
+function dot3D(a: [number, number, number], b: [number, number, number]): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function norm3D(a: [number, number, number]): number {
+  return Math.hypot(a[0], a[1], a[2]);
+}
+
+function normalize3D(a: [number, number, number]): [number, number, number] {
+  const n = Math.hypot(a[0], a[1], a[2]) || 1e-6;
+  return [a[0] / n, a[1] / n, a[2] / n];
+}
+
+function computeLocalAxesForNodes(
+  n1: { x: number; y: number; z: number },
+  n2: { x: number; y: number; z: number },
+  rollAngleDeg = 0
+): { vx: [number, number, number]; vy: [number, number, number]; vz: [number, number, number] } {
+  const dx = n2.x - n1.x;
+  const dy = n2.y - n1.y;
+  const dz = n2.z - n1.z;
+  const L = Math.hypot(dx, dy, dz) || 1e-6;
+
+  const vx: [number, number, number] = [dx / L, dy / L, dz / L];
+
+  let vRef: [number, number, number] = [0, 0, 1];
+  if (Math.abs(vx[2]) > 0.999) {
+    vRef = [0, 1, 0];
+  }
+
+  let vy0 = cross3D(vRef, vx);
+  if (norm3D(vy0) < 1e-6) {
+    vRef = [1, 0, 0];
+    vy0 = cross3D(vRef, vx);
+  }
+  vy0 = normalize3D(vy0);
+
+  const vz0 = normalize3D(cross3D(vx, vy0));
+
+  const beta = rollAngleDeg * (Math.PI / 180);
+  const cosB = Math.cos(beta);
+  const sinB = Math.sin(beta);
+
+  const vy: [number, number, number] = [
+    vy0[0] * cosB + vz0[0] * sinB,
+    vy0[1] * cosB + vz0[1] * sinB,
+    vy0[2] * cosB + vz0[2] * sinB,
+  ];
+
+  const vz: [number, number, number] = [
+    -vy0[0] * sinB + vz0[0] * cosB,
+    -vy0[1] * sinB + vz0[1] * cosB,
+    -vy0[2] * sinB + vz0[2] * cosB,
+  ];
+
+  return { vx, vy, vz };
+}
+
+function getTransformedRollAngle(
+  n1: { x: number; y: number; z: number },
+  n2: { x: number; y: number; z: number },
+  rollAngleDeg: number,
+  mode: 'move' | 'rotate' | 'mirror' | 'scale',
+  params: any,
+  step: number
+): number {
+  if (mode === 'move' || mode === 'scale') {
+    return rollAngleDeg;
+  }
+
+  const origAxes = computeLocalAxesForNodes(n1, n2, rollAngleDeg);
+
+  const t_n1 = {
+    x: transformPoint([n1.x, n1.y, n1.z], mode, params, step)[0],
+    y: transformPoint([n1.x, n1.y, n1.z], mode, params, step)[1],
+    z: transformPoint([n1.x, n1.y, n1.z], mode, params, step)[2],
+  };
+  const t_n2 = {
+    x: transformPoint([n2.x, n2.y, n2.z], mode, params, step)[0],
+    y: transformPoint([n2.x, n2.y, n2.z], mode, params, step)[1],
+    z: transformPoint([n2.x, n2.y, n2.z], mode, params, step)[2],
+  };
+
+  const t_vy = transformVector(origAxes.vy, mode, params, step);
+
+  const defaultNewAxes = computeLocalAxesForNodes(t_n1, t_n2, 0);
+
+  const vy0_new = defaultNewAxes.vy;
+  const vz0_new = defaultNewAxes.vz;
+
+  const cosBeta = dot3D(t_vy, vy0_new);
+  const sinBeta = dot3D(t_vy, vz0_new);
+
+  const newBetaRad = Math.atan2(sinBeta, cosBeta);
+  let newBetaDeg = (newBetaRad * 180) / Math.PI;
+
+  newBetaDeg = Math.round(newBetaDeg * 100) / 100;
+
+  if (newBetaDeg < -180) newBetaDeg += 360;
+  if (newBetaDeg > 180) newBetaDeg -= 360;
+
+  return newBetaDeg;
+}
 
 interface SidebarProps {
   nodes: Node3D[];
@@ -35,12 +243,22 @@ interface SidebarProps {
   setSelectedElemIds: React.Dispatch<React.SetStateAction<number[]>>;
   selectedPanelIds?: number[];
   setSelectedPanelIds?: React.Dispatch<React.SetStateAction<number[]>>;
-  mode: 'select' | 'addBar' | 'addPanel';
-  setMode: (m: 'select' | 'addBar' | 'addPanel') => void;
+  mode: 'select' | 'addBar' | 'addPanel' | 'grid';
+  setMode: (m: 'select' | 'addBar' | 'addPanel' | 'grid') => void;
   panelShape?: PanelShape;
   setPanelShape?: (s: PanelShape) => void;
   panelPoints?: number[];
   setPanelPoints?: React.Dispatch<React.SetStateAction<number[]>>;
+  gridPlane?: 'XY' | 'XZ' | 'YZ';
+  setGridPlane?: (p: 'XY' | 'XZ' | 'YZ') => void;
+  gridOffset?: number;
+  setGridOffset?: (o: number) => void;
+  snapEnabled?: boolean;
+  setSnapEnabled?: (v: boolean) => void;
+  snapSize?: number;
+  setSnapSize?: (v: number) => void;
+  showGrid?: boolean;
+  setShowGrid?: (v: boolean) => void;
   barStartNodeId: number | null;
   setBarStartNodeId: (id: number | null) => void;
   analysisSettings: AnalysisSettings;
@@ -81,6 +299,54 @@ interface SidebarProps {
   isVertical?: boolean;
   panelHeight?: number | null;
   onPanelHandleStart?: (e: React.MouseEvent | React.TouchEvent) => void;
+  activeTransformMode?: 'none' | 'move' | 'rotate' | 'mirror' | 'scale';
+  setActiveTransformMode?: (mode: 'none' | 'move' | 'rotate' | 'mirror' | 'scale') => void;
+  transformWithCopy?: boolean;
+  setTransformWithCopy?: React.Dispatch<React.SetStateAction<boolean>>;
+  transformConnect?: boolean;
+  setTransformConnect?: React.Dispatch<React.SetStateAction<boolean>>;
+  transformRepeat?: number;
+  setTransformRepeat?: React.Dispatch<React.SetStateAction<number>>;
+  moveDx?: number;
+  setMoveDx?: React.Dispatch<React.SetStateAction<number>>;
+  moveDy?: number;
+  setMoveDy?: React.Dispatch<React.SetStateAction<number>>;
+  moveDz?: number;
+  setMoveDz?: React.Dispatch<React.SetStateAction<number>>;
+  rotateCx?: number;
+  setRotateCx?: React.Dispatch<React.SetStateAction<number>>;
+  rotateCy?: number;
+  setRotateCy?: React.Dispatch<React.SetStateAction<number>>;
+  rotateCz?: number;
+  setRotateCz?: React.Dispatch<React.SetStateAction<number>>;
+  rotateAxis?: 'X' | 'Y' | 'Z';
+  setRotateAxis?: React.Dispatch<React.SetStateAction<'X' | 'Y' | 'Z'>>;
+  rotateAngle?: number;
+  setRotateAngle?: React.Dispatch<React.SetStateAction<number>>;
+  mirrorPx?: number;
+  setMirrorPx?: React.Dispatch<React.SetStateAction<number>>;
+  mirrorPy?: number;
+  setMirrorPy?: React.Dispatch<React.SetStateAction<number>>;
+  mirrorPz?: number;
+  setMirrorPz?: React.Dispatch<React.SetStateAction<number>>;
+  mirrorPlane?: 'XY' | 'YZ' | 'XZ';
+  setMirrorPlane?: React.Dispatch<React.SetStateAction<'XY' | 'YZ' | 'XZ'>>;
+  scaleCx?: number;
+  setScaleCx?: React.Dispatch<React.SetStateAction<number>>;
+  scaleCy?: number;
+  setScaleCy?: React.Dispatch<React.SetStateAction<number>>;
+  scaleCz?: number;
+  setScaleCz?: React.Dispatch<React.SetStateAction<number>>;
+  scaleFactor?: number;
+  setScaleFactor?: React.Dispatch<React.SetStateAction<number>>;
+  pickMoveVectorActive?: boolean;
+  pickMoveVectorStep?: 1 | 2;
+  onStartPickMoveVector?: () => void;
+  pickTransformPointActive?: boolean;
+  pickTransformPointTarget?: 'rotateCenter' | 'mirrorPoint' | 'scaleCenter' | null;
+  onStartPickPoint?: (target: 'rotateCenter' | 'mirrorPoint' | 'scaleCenter') => void;
+  onCancelPickMode?: () => void;
+  mergeTolerance?: number;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -106,6 +372,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setPanelShape,
   panelPoints = [],
   setPanelPoints,
+  gridPlane = 'XY',
+  setGridPlane,
+  gridOffset = 0,
+  setGridOffset,
+  snapEnabled = true,
+  setSnapEnabled,
+  snapSize = 0.5,
+  setSnapSize,
+  showGrid = true,
+  setShowGrid,
   barStartNodeId,
   setBarStartNodeId,
   analysisSettings,
@@ -145,6 +421,54 @@ export const Sidebar: React.FC<SidebarProps> = ({
   defaultMaterialId,
   panelHeight,
   onPanelHandleStart,
+  activeTransformMode = 'none',
+  setActiveTransformMode = (_mode: 'none' | 'move' | 'rotate' | 'mirror' | 'scale') => {},
+  transformWithCopy: propTransformWithCopy,
+  setTransformWithCopy: propSetTransformWithCopy,
+  transformConnect: propTransformConnect,
+  setTransformConnect: propSetTransformConnect,
+  transformRepeat: propTransformRepeat,
+  setTransformRepeat: propSetTransformRepeat,
+  moveDx: propMoveDx,
+  setMoveDx: propSetMoveDx,
+  moveDy: propMoveDy,
+  setMoveDy: propSetMoveDy,
+  moveDz: propMoveDz,
+  setMoveDz: propSetMoveDz,
+  rotateCx = 0,
+  setRotateCx = (_v: React.SetStateAction<number>) => {},
+  rotateCy = 0,
+  setRotateCy = (_v: React.SetStateAction<number>) => {},
+  rotateCz = 0,
+  setRotateCz = (_v: React.SetStateAction<number>) => {},
+  rotateAxis = 'Z',
+  setRotateAxis = (_v: React.SetStateAction<'X' | 'Y' | 'Z'>) => {},
+  rotateAngle = 90,
+  setRotateAngle = (_v: React.SetStateAction<number>) => {},
+  mirrorPx = 0,
+  setMirrorPx = (_v: React.SetStateAction<number>) => {},
+  mirrorPy = 0,
+  setMirrorPy = (_v: React.SetStateAction<number>) => {},
+  mirrorPz = 0,
+  setMirrorPz = (_v: React.SetStateAction<number>) => {},
+  mirrorPlane = 'XZ',
+  setMirrorPlane = (_v: React.SetStateAction<'XY' | 'YZ' | 'XZ'>) => {},
+  scaleCx = 0,
+  setScaleCx = (_v: React.SetStateAction<number>) => {},
+  scaleCy = 0,
+  setScaleCy = (_v: React.SetStateAction<number>) => {},
+  scaleCz = 0,
+  setScaleCz = (_v: React.SetStateAction<number>) => {},
+  scaleFactor = 1.5,
+  setScaleFactor = (_v: React.SetStateAction<number>) => {},
+  pickMoveVectorActive = false,
+  pickMoveVectorStep = 1,
+  onStartPickMoveVector = () => {},
+  pickTransformPointActive = false,
+  pickTransformPointTarget = null,
+  onStartPickPoint = (_target: 'rotateCenter' | 'mirrorPoint' | 'scaleCenter') => {},
+  onCancelPickMode = () => {},
+  mergeTolerance = 0.001,
 }) => {
   const [addBarCoordsCollapsed, setAddBarCoordsCollapsed] = useState(false);
   const [nodesGroupCollapsed, setNodesGroupCollapsed] = useState(false);
@@ -154,14 +478,52 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [analysisCollapsed, setAnalysisCollapsed] = useState(false);
   const [libraryCollapsed, setLibraryCollapsed] = useState(false);
 
-  // Form states for unified operations in Properties (Move, Copy, Split)
-  const [moveFormOpen, setMoveFormOpen] = useState(false);
-  const [moveWithCopy, setMoveWithCopy] = useState(false);
-  const [moveConnect, setMoveConnect] = useState(false);
-  const [moveRepeat, setMoveRepeat] = useState(1);
-  const [moveDx, setMoveDx] = useState(2);
-  const [moveDy, setMoveDy] = useState(0);
-  const [moveDz, setMoveDz] = useState(0);
+  // Internal Form states fallback for unified operations in Properties (Move, Rotate, Mirror, Scale)
+  const [internalTransformWithCopy, setInternalTransformWithCopy] = useState(false);
+  const [internalTransformConnect, setInternalTransformConnect] = useState(false);
+  const [internalTransformRepeat, setInternalTransformRepeat] = useState(1);
+  const [internalMoveDx, setInternalMoveDx] = useState(2);
+  const [internalMoveDy, setInternalMoveDy] = useState(0);
+  const [internalMoveDz, setInternalMoveDz] = useState(0);
+
+  const transformWithCopy = propTransformWithCopy !== undefined ? propTransformWithCopy : internalTransformWithCopy;
+  const setTransformWithCopy = propSetTransformWithCopy || setInternalTransformWithCopy;
+
+  const transformConnect = propTransformConnect !== undefined ? propTransformConnect : internalTransformConnect;
+  const setTransformConnect = propSetTransformConnect || setInternalTransformConnect;
+
+  const transformRepeat = propTransformRepeat !== undefined ? propTransformRepeat : internalTransformRepeat;
+  const setTransformRepeat = propSetTransformRepeat || setInternalTransformRepeat;
+
+  const moveDx = propMoveDx !== undefined ? propMoveDx : internalMoveDx;
+  const setMoveDx = propSetMoveDx || setInternalMoveDx;
+
+  const moveDy = propMoveDy !== undefined ? propMoveDy : internalMoveDy;
+  const setMoveDy = propSetMoveDy || setInternalMoveDy;
+
+  const moveDz = propMoveDz !== undefined ? propMoveDz : internalMoveDz;
+  const setMoveDz = propSetMoveDz || setInternalMoveDz;
+
+  const transformCardRef = useRef<HTMLDivElement | null>(null);
+  const transformBtnRef = useRef<HTMLDivElement | null>(null);
+
+  const handleSidebarInteractionCapture = useCallback(
+    (e: React.SyntheticEvent) => {
+      if (activeTransformMode === 'none' && !pickMoveVectorActive && !pickTransformPointActive) return;
+
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+
+      const isInsideCard = transformCardRef.current && transformCardRef.current.contains(target);
+      const isInsideBtn = transformBtnRef.current && transformBtnRef.current.contains(target);
+
+      if (!isInsideCard && !isInsideBtn) {
+        if (setActiveTransformMode) setActiveTransformMode('none');
+        if (onCancelPickMode) onCancelPickMode();
+      }
+    },
+    [activeTransformMode, pickMoveVectorActive, pickTransformPointActive, setActiveTransformMode, onCancelPickMode]
+  );
 
   const [splitFormOpen, setSplitFormOpen] = useState(false);
   const [splitMode, setSplitMode] = useState<'single' | 'multi'>('single');
@@ -246,17 +608,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }
 
   // Node editing handlers
-  const updateNodeCoord = (axis: 'x' | 'y' | 'z', v: number) => {
-    setNodes((prev) =>
-      prev.map((n) => {
-        if (!selectedNodeIds.includes(n.id)) return n;
-        const updated = { ...n, [axis]: v };
-        if (onNodeCoordinateSet && selectedNodeIds.length === 1) {
-          onNodeCoordinateSet(updated);
-        }
-        return updated;
-      })
-    );
+  const updateNodeCoord = (axis: 'x' | 'y' | 'z', v: number, commit = false) => {
+    const nextNodes = nodes.map((n) => {
+      if (!selectedNodeIds.includes(n.id)) return n;
+      const updated = { ...n, [axis]: v };
+      return updated;
+    });
+    
+    if (!commit) {
+      setNodes(nextNodes);
+      onInvalidateResults();
+      return;
+    }
+    
+    const { mergedNodes, mergedElements, mergedPanels, nodeMap } = mergeOverlapping(nextNodes, elements, panels || [], mergeTolerance ?? 0.001);
+    
+    setNodes(mergedNodes);
+    setElements(mergedElements);
+    if (setPanels) setPanels(mergedPanels);
+
+    const newSelectedNodes = selectedNodeIds.map(id => nodeMap.get(id) ?? id);
+    setSelectedNodeIds([...new Set(newSelectedNodes)]);
+
+    if (onNodeCoordinateSet && newSelectedNodes.length === 1) {
+      const mergedNode = mergedNodes.find(n => n.id === newSelectedNodes[0]);
+      if (mergedNode) {
+        onNodeCoordinateSet(mergedNode);
+      }
+    }
+    
     onInvalidateResults();
   };
 
@@ -287,184 +667,365 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setSelectedNodeIds([]);
     setSelectedElemIds([]);
     setSelectedPanelIds([]);
-    setMoveFormOpen(false);
+    if (setActiveTransformMode) setActiveTransformMode('none');
     setSplitFormOpen(false);
     onInvalidateResults();
   };
 
-  // Unified Move / Copy action
-  const confirmMoveOrCopy = () => {
+  // Unified Transformation Action (Move, Rotate, Mirror, Scale)
+  const confirmTransform = (tMode: 'move' | 'rotate' | 'mirror' | 'scale') => {
+    if (onCancelPickMode) onCancelPickMode();
     const hasNodes = selectedNodeIds.length > 0;
     const hasElements = selectedElemIds.length > 0;
     const hasPanels = selectedPanelIds.length > 0;
     if (!hasNodes && !hasElements && !hasPanels) {
-      setMoveFormOpen(false);
+      if (setActiveTransformMode) setActiveTransformMode('none');
       return;
     }
 
-    const repeat = Math.max(1, Math.min(50, Math.round(moveRepeat || 1)));
+    const repeat = (tMode === 'mirror')
+      ? 1
+      : (transformWithCopy ? Math.max(1, Math.min(50, Math.round(transformRepeat || 1))) : 1);
 
-    // Pure Move (without copying)
-    if (!moveWithCopy) {
-      const allNodeIdsToMove = new Set<number>(selectedNodeIds);
+    const params = {
+      moveDx,
+      moveDy,
+      moveDz,
+      rotateCenter: [rotateCx, rotateCy, rotateCz] as [number, number, number],
+      rotateAxis: rotateAxis as 'X' | 'Y' | 'Z',
+      rotateAngleDeg: rotateAngle,
+      mirrorPoint: [mirrorPx, mirrorPy, mirrorPz] as [number, number, number],
+      mirrorPlane: mirrorPlane as 'XY' | 'YZ' | 'XZ',
+      scaleCenter: [scaleCx, scaleCy, scaleCz] as [number, number, number],
+      scaleFactor,
+    };
+
+    let nextNodes = [...nodes];
+    let nextElements = [...elements];
+    let nextPanels = panels ? [...panels] : [];
+    
+    let allCreatedElemIds: number[] = [];
+    let allCreatedNodeIds: number[] = [];
+    let allCreatedPanelIds: number[] = [];
+
+    // Pure Transformation (without copying)
+    if (!transformWithCopy) {
+      const allNodeIdsToTransform = new Set<number>(selectedNodeIds);
       selectedElements.forEach((el) => {
-        allNodeIdsToMove.add(el.n1);
-        allNodeIdsToMove.add(el.n2);
+        allNodeIdsToTransform.add(el.n1);
+        allNodeIdsToTransform.add(el.n2);
       });
       selectedPanels.forEach((p) => {
-        p.nodeIds.forEach((nid) => allNodeIdsToMove.add(nid));
+        p.nodeIds.forEach((nid) => allNodeIdsToTransform.add(nid));
       });
 
-      const totalDx = moveDx * repeat;
-      const totalDy = moveDy * repeat;
-      const totalDz = moveDz * repeat;
+      nextNodes = nextNodes.map((n) => {
+        if (!allNodeIdsToTransform.has(n.id)) return n;
+        const [tx, ty, tz] = transformPoint([n.x, n.y, n.z], tMode, params, 1);
+        
+        let transformedForce = n.force;
+        if (n.force) {
+          const [fx, fy, fz] = transformVector([n.force.Fx, n.force.Fy, n.force.Fz], tMode, params, 1);
+          transformedForce = { Fx: fx, Fy: fy, Fz: fz };
+        }
+        let transformedMoment = n.moment;
+        if (n.moment) {
+          const [mx, my, mz] = transformVector([n.moment.Mx, n.moment.My, n.moment.Mz], tMode, params, 1);
+          transformedMoment = { Mx: mx, My: my, Mz: mz };
+        }
 
-      setNodes((prev) =>
-        prev.map((n) =>
-          allNodeIdsToMove.has(n.id)
-            ? {
-                ...n,
-                x: Math.round((n.x + totalDx) * 1e6) / 1e6,
-                y: Math.round((n.y + totalDy) * 1e6) / 1e6,
-                z: Math.round((n.z + totalDz) * 1e6) / 1e6,
-              }
-            : n
-        )
-      );
-      setMoveFormOpen(false);
-      onInvalidateResults();
-      return;
-    }
-
-    // Move With Copy (Multi-step repetition and optional connecting members)
-    const baseNodeIds = new Set<number>(selectedNodeIds);
-    selectedElements.forEach((el) => {
-      baseNodeIds.add(el.n1);
-      baseNodeIds.add(el.n2);
-    });
-    selectedPanels.forEach((p) => {
-      p.nodeIds.forEach((nid) => baseNodeIds.add(nid));
-    });
-
-    const baseNodes = Array.from(baseNodeIds)
-      .map((id) => getNode(id))
-      .filter((n): n is Node3D => !!n);
-
-    let nextNId = nodes.length > 0 ? Math.max(...nodes.map((n) => n.id)) + 1 : 1;
-    let nextEId = elements.length > 0 ? Math.max(...elements.map((e) => e.id)) + 1 : 1;
-    let nextPanId = (panels && panels.length > 0) ? Math.max(...panels.map((p) => p.id)) + 1 : 1;
-
-    const newNodes: Node3D[] = [];
-    const newElements: Element3D[] = [];
-    const newPanels: Panel3D[] = [];
-    const connectingElements: Element3D[] = [];
-
-    let prevStepNodeMap = new Map<number, number>();
-    baseNodes.forEach((n) => {
-      prevStepNodeMap.set(n.id, n.id);
-    });
-
-    const allCreatedElemIds: number[] = [];
-    const allCreatedNodeIds: number[] = [];
-    const allCreatedPanelIds: number[] = [];
-
-    for (let step = 1; step <= repeat; step++) {
-      const currentStepNodeMap = new Map<number, number>();
-
-      baseNodes.forEach((origNode) => {
-        const newNodeId = nextNId++;
-        currentStepNodeMap.set(origNode.id, newNodeId);
-        allCreatedNodeIds.push(newNodeId);
-
-        const shiftedX = Math.round((origNode.x + moveDx * step) * 1e6) / 1e6;
-        const shiftedY = Math.round((origNode.y + moveDy * step) * 1e6) / 1e6;
-        const shiftedZ = Math.round((origNode.z + moveDz * step) * 1e6) / 1e6;
-
-        const newN: Node3D = {
-          ...JSON.parse(JSON.stringify(origNode)),
-          id: newNodeId,
-          x: shiftedX,
-          y: shiftedY,
-          z: shiftedZ,
+        return {
+          ...n,
+          x: Math.round(tx * 1e6) / 1e6,
+          y: Math.round(ty * 1e6) / 1e6,
+          z: Math.round(tz * 1e6) / 1e6,
+          force: transformedForce,
+          moment: transformedMoment,
         };
-        newNodes.push(newN);
+      });
 
-        if (moveConnect) {
-          const prevNodeId = prevStepNodeMap.get(origNode.id);
-          if (prevNodeId != null) {
-            const connElId = nextEId++;
-            connectingElements.push({
-              id: connElId,
-              n1: prevNodeId,
-              n2: newNodeId,
-              sectionId: defaultSectionId,
-              materialId: defaultMaterialId,
-              rollAngle: 0,
-              hinges: {},
-              q: null,
-              thermal: null,
-            });
-            allCreatedElemIds.push(connElId);
+      nextElements = nextElements.map((el) => {
+        if (!selectedElemIds.includes(el.id)) return el;
+        const origN1 = nodes.find((n) => n.id === el.n1);
+        const origN2 = nodes.find((n) => n.id === el.n2);
+        if (!origN1 || !origN2) return el;
+
+        const newRollAngle = getTransformedRollAngle(origN1, origN2, el.rollAngle || 0, tMode, params, 1);
+
+        let transformedQ = el.q;
+        if (el.q) {
+          if (el.q.coordinateSystem === 'global') {
+            const [qxS, qyS, qzS] = transformVector([el.q.qxStart, el.q.qyStart, el.q.qzStart], tMode, params, 1);
+            const [qxE, qyE, qzE] = transformVector([el.q.qxEnd, el.q.qyEnd, el.q.qzEnd], tMode, params, 1);
+            transformedQ = {
+              ...el.q,
+              qxStart: qxS, qxEnd: qxE,
+              qyStart: qyS, qyEnd: qyE,
+              qzStart: qzS, qzEnd: qzE,
+            };
+          } else {
+            const origAxes = computeLocalAxesForNodes(origN1, origN2, el.rollAngle || 0);
+            const t_vy = transformVector(origAxes.vy, tMode, params, 1);
+            const t_vz = transformVector(origAxes.vz, tMode, params, 1);
+
+            const t_n1 = {
+              x: transformPoint([origN1.x, origN1.y, origN1.z], tMode, params, 1)[0],
+              y: transformPoint([origN1.x, origN1.y, origN1.z], tMode, params, 1)[1],
+              z: transformPoint([origN1.x, origN1.y, origN1.z], tMode, params, 1)[2],
+            };
+            const t_n2 = {
+              x: transformPoint([origN2.x, origN2.y, origN2.z], tMode, params, 1)[0],
+              y: transformPoint([origN2.x, origN2.y, origN2.z], tMode, params, 1)[1],
+              z: transformPoint([origN2.x, origN2.y, origN2.z], tMode, params, 1)[2],
+            };
+            const defaultNewAxes = computeLocalAxesForNodes(t_n1, t_n2, newRollAngle);
+
+            const dotY = dot3D(t_vy, defaultNewAxes.vy);
+            const dotZ = dot3D(t_vz, defaultNewAxes.vz);
+
+            let qyS = el.q.qyStart;
+            let qyE = el.q.qyEnd;
+            let qzS = el.q.qzStart;
+            let qzE = el.q.qzEnd;
+
+            if (dotY < 0) {
+              qyS = -qyS;
+              qyE = -qyE;
+            }
+            if (dotZ < 0) {
+              qzS = -qzS;
+              qzE = -qzE;
+            }
+
+            transformedQ = {
+              ...el.q,
+              qyStart: qyS, qyEStart: undefined,
+              qyEnd: qyE,
+              qzStart: qzS,
+              qzEnd: qzE,
+            } as any;
           }
         }
-      });
 
-      selectedElements.forEach((origEl) => {
-        const newElemId = nextEId++;
-        allCreatedElemIds.push(newElemId);
-
-        const n1Mapped = currentStepNodeMap.get(origEl.n1)!;
-        const n2Mapped = currentStepNodeMap.get(origEl.n2)!;
-
-        const newEl: Element3D = {
-          ...JSON.parse(JSON.stringify(origEl)),
-          id: newElemId,
-          n1: n1Mapped,
-          n2: n2Mapped,
+        return {
+          ...el,
+          rollAngle: newRollAngle,
+          q: transformedQ,
         };
-        newElements.push(newEl);
       });
 
-      selectedPanels.forEach((origPan) => {
-        const newPanelId = nextPanId++;
-        allCreatedPanelIds.push(newPanelId);
-        const mappedNodeIds = origPan.nodeIds.map((nid) => currentStepNodeMap.get(nid)!);
+      allCreatedElemIds = selectedElemIds;
+      allCreatedNodeIds = selectedNodeIds;
+      allCreatedPanelIds = selectedPanelIds;
 
-        const newPan: Panel3D = {
-          ...JSON.parse(JSON.stringify(origPan)),
-          id: newPanelId,
-          nodeIds: mappedNodeIds,
-        };
-        newPanels.push(newPan);
-      });
-
-      prevStepNodeMap = currentStepNodeMap;
-    }
-
-    setNodes((prev) => [...prev, ...newNodes]);
-    setElements((prev) => [...prev, ...newElements, ...connectingElements]);
-    if (setPanels && newPanels.length > 0) {
-      setPanels((prev) => [...prev, ...newPanels]);
-    }
-
-    if (allCreatedElemIds.length > 0) {
-      setSelectedElemIds(allCreatedElemIds);
-      setSelectedNodeIds([]);
-      setSelectedPanelIds([]);
-    } else if (allCreatedPanelIds.length > 0) {
-      setSelectedPanelIds(allCreatedPanelIds);
-      setSelectedNodeIds([]);
-      setSelectedElemIds([]);
     } else {
-      setSelectedNodeIds(allCreatedNodeIds);
-      setSelectedElemIds([]);
-      setSelectedPanelIds([]);
+      // Transformation With Copy
+      const baseNodeIds = new Set<number>(selectedNodeIds);
+      selectedElements.forEach((el) => {
+        baseNodeIds.add(el.n1);
+        baseNodeIds.add(el.n2);
+      });
+      selectedPanels.forEach((p) => {
+        p.nodeIds.forEach((nid) => baseNodeIds.add(nid));
+      });
+
+      const baseNodes = Array.from(baseNodeIds)
+        .map((id) => nodes.find(n => n.id === id))
+        .filter((n): n is Node3D => !!n);
+
+      let nextNId = nodes.length > 0 ? Math.max(...nodes.map((n) => n.id)) + 1 : 1;
+      let nextEId = elements.length > 0 ? Math.max(...elements.map((e) => e.id)) + 1 : 1;
+      let nextPanId = (panels && panels.length > 0) ? Math.max(...panels.map((p) => p.id)) + 1 : 1;
+
+      let prevStepNodeMap = new Map<number, number>();
+      baseNodes.forEach((n) => {
+        prevStepNodeMap.set(n.id, n.id);
+      });
+
+      for (let step = 1; step <= repeat; step++) {
+        const currentStepNodeMap = new Map<number, number>();
+
+        baseNodes.forEach((origNode) => {
+          const newNodeId = nextNId++;
+          currentStepNodeMap.set(origNode.id, newNodeId);
+          allCreatedNodeIds.push(newNodeId);
+
+          const [tx, ty, tz] = transformPoint([origNode.x, origNode.y, origNode.z], tMode, params, step);
+
+          let transformedForce = origNode.force;
+          if (origNode.force) {
+            const [fx, fy, fz] = transformVector([origNode.force.Fx, origNode.force.Fy, origNode.force.Fz], tMode, params, step);
+            transformedForce = { Fx: fx, Fy: fy, Fz: fz };
+          }
+          let transformedMoment = origNode.moment;
+          if (origNode.moment) {
+            const [mx, my, mz] = transformVector([origNode.moment.Mx, origNode.moment.My, origNode.moment.Mz], tMode, params, step);
+            transformedMoment = { Mx: mx, My: my, Mz: mz };
+          }
+
+          const newN: Node3D = {
+            ...JSON.parse(JSON.stringify(origNode)),
+            id: newNodeId,
+            x: Math.round(tx * 1e6) / 1e6,
+            y: Math.round(ty * 1e6) / 1e6,
+            z: Math.round(tz * 1e6) / 1e6,
+            force: transformedForce,
+            moment: transformedMoment,
+            support: null,
+          };
+          nextNodes.push(newN);
+
+          if (transformConnect) {
+            const prevNodeId = prevStepNodeMap.get(origNode.id);
+            if (prevNodeId != null) {
+              const connElId = nextEId++;
+              nextElements.push({
+                id: connElId,
+                n1: prevNodeId,
+                n2: newNodeId,
+                sectionId: defaultSectionId,
+                materialId: defaultMaterialId,
+                rollAngle: 0,
+                hinges: {},
+                q: null,
+                thermal: null,
+              });
+              allCreatedElemIds.push(connElId);
+            }
+          }
+        });
+
+        selectedElements.forEach((origEl) => {
+          const newElemId = nextEId++;
+          allCreatedElemIds.push(newElemId);
+
+          const n1Mapped = currentStepNodeMap.get(origEl.n1)!;
+          const n2Mapped = currentStepNodeMap.get(origEl.n2)!;
+
+          const origN1 = nodes.find((n) => n.id === origEl.n1);
+          const origN2 = nodes.find((n) => n.id === origEl.n2);
+          let newRollAngle = origEl.rollAngle || 0;
+          let transformedQ = origEl.q;
+
+          if (origN1 && origN2) {
+            newRollAngle = getTransformedRollAngle(origN1, origN2, origEl.rollAngle || 0, tMode, params, step);
+
+            if (origEl.q) {
+              if (origEl.q.coordinateSystem === 'global') {
+                const [qxS, qyS, qzS] = transformVector([origEl.q.qxStart, origEl.q.qyStart, origEl.q.qzStart], tMode, params, step);
+                const [qxE, qyE, qzE] = transformVector([origEl.q.qxEnd, origEl.q.qyEnd, origEl.q.qzEnd], tMode, params, step);
+                transformedQ = {
+                  ...origEl.q,
+                  qxStart: qxS, qxEnd: qxE,
+                  qyStart: qyS, qyEnd: qyE,
+                  qzStart: qzS, qzEnd: qzE,
+                };
+              } else {
+                const origAxes = computeLocalAxesForNodes(origN1, origN2, origEl.rollAngle || 0);
+                const t_vy = transformVector(origAxes.vy, tMode, params, step);
+                const t_vz = transformVector(origAxes.vz, tMode, params, step);
+
+                const t_n1 = {
+                  x: transformPoint([origN1.x, origN1.y, origN1.z], tMode, params, step)[0],
+                  y: transformPoint([origN1.x, origN1.y, origN1.z], tMode, params, step)[1],
+                  z: transformPoint([origN1.x, origN1.y, origN1.z], tMode, params, step)[2],
+                };
+                const t_n2 = {
+                  x: transformPoint([origN2.x, origN2.y, origN2.z], tMode, params, step)[0],
+                  y: transformPoint([origN2.x, origN2.y, origN2.z], tMode, params, step)[1],
+                  z: transformPoint([origN2.x, origN2.y, origN2.z], tMode, params, step)[2],
+                };
+                const defaultNewAxes = computeLocalAxesForNodes(t_n1, t_n2, newRollAngle);
+
+                const dotY = dot3D(t_vy, defaultNewAxes.vy);
+                const dotZ = dot3D(t_vz, defaultNewAxes.vz);
+
+                let qyS = origEl.q.qyStart;
+                let qyE = origEl.q.qyEnd;
+                let qzS = origEl.q.qzStart;
+                let qzE = origEl.q.qzEnd;
+
+                if (dotY < 0) {
+                  qyS = -qyS;
+                  qyE = -qyE;
+                }
+                if (dotZ < 0) {
+                  qzS = -qzS;
+                  qzE = -qzE;
+                }
+
+                transformedQ = {
+                  ...origEl.q,
+                  qyStart: qyS, qyEStart: undefined, // ensure types align
+                  qyEnd: qyE,
+                  qzStart: qzS,
+                  qzEnd: qzE,
+                } as any;
+              }
+            }
+          }
+
+          const newEl: Element3D = {
+            ...JSON.parse(JSON.stringify(origEl)),
+            id: newElemId,
+            n1: n1Mapped,
+            n2: n2Mapped,
+            rollAngle: newRollAngle,
+            q: transformedQ,
+          };
+          nextElements.push(newEl);
+        });
+
+        selectedPanels.forEach((origPan) => {
+          const newPanelId = nextPanId++;
+          allCreatedPanelIds.push(newPanelId);
+          const mappedNodeIds = origPan.nodeIds.map((nid) => currentStepNodeMap.get(nid)!);
+
+          const newPan: Panel3D = {
+            ...JSON.parse(JSON.stringify(origPan)),
+            id: newPanelId,
+            nodeIds: mappedNodeIds,
+          };
+          nextPanels.push(newPan);
+        });
+
+        prevStepNodeMap = currentStepNodeMap;
+      }
     }
 
-    setMoveFormOpen(false);
+    const { mergedNodes, mergedElements, mergedPanels, nodeMap } = mergeOverlapping(nextNodes, nextElements, nextPanels, mergeTolerance ?? 0.001);
+    
+    setNodes(mergedNodes);
+    setElements(mergedElements);
+    if (setPanels) setPanels(mergedPanels);
+
+    const mappedElemIds = [...new Set(allCreatedElemIds.map(id => id))].filter(id => mergedElements.some(e => e.id === id));
+    const mappedNodeIds = [...new Set(allCreatedNodeIds.map(id => nodeMap.get(id) ?? id))];
+    const mappedPanelIds = [...new Set(allCreatedPanelIds.map(id => id))].filter(id => mergedPanels.some(p => p.id === id));
+
+    if (transformWithCopy) {
+      if (mappedElemIds.length > 0) {
+        setSelectedElemIds(mappedElemIds);
+        setSelectedNodeIds([]);
+        setSelectedPanelIds([]);
+      } else if (mappedPanelIds.length > 0) {
+        setSelectedPanelIds(mappedPanelIds);
+        setSelectedNodeIds([]);
+        setSelectedElemIds([]);
+      } else {
+        setSelectedNodeIds(mappedNodeIds);
+        setSelectedElemIds([]);
+        setSelectedPanelIds([]);
+      }
+    } else {
+      setSelectedElemIds(mappedElemIds);
+      setSelectedNodeIds(mappedNodeIds);
+      setSelectedPanelIds(mappedPanelIds);
+    }
+
+    if (setActiveTransformMode) setActiveTransformMode('none');
     onInvalidateResults();
   };
-
   // Split element action
   const confirmSplit = (elId: number | '__bulk__' = '__bulk__') => {
     const targetEls =
@@ -1242,6 +1803,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <div
       id="sidebar"
       style={panelHeight ? ({ '--panel-height': `${panelHeight}px` } as React.CSSProperties) : undefined}
+      onPointerDownCapture={handleSidebarInteractionCapture}
+      onFocusCapture={handleSidebarInteractionCapture}
     >
       {/* Draggable handle for mobile layout */}
       <div
@@ -1381,34 +1944,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <h3>Obrys / Okładzina</h3>
 
                   {/* Kształt obrysu */}
-                  <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+                  <div className="btnrow" style={{ marginTop: '4px', marginBottom: '10px' }}>
                     <button
-                      className={`mode-btn ${panelShape === 'triangle' ? 'active' : ''}`}
-                      style={{
-                        flex: 1,
-                        padding: '6px 8px',
-                        fontSize: '12px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '4px',
-                      }}
+                      type="button"
+                      className={`mini ${panelShape === 'triangle' ? 'on' : ''}`}
+                      style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}
                       onClick={() => setPanelShape?.('triangle')}
                     >
                       <span style={{ width: 14, height: 14, display: 'inline-flex' }}>{ICONS.triangle}</span>
                       Trójkąt
                     </button>
                     <button
-                      className={`mode-btn ${panelShape === 'rectangle' ? 'active' : ''}`}
-                      style={{
-                        flex: 1,
-                        padding: '6px 8px',
-                        fontSize: '12px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '4px',
-                      }}
+                      type="button"
+                      className={`mini ${panelShape === 'rectangle' ? 'on' : ''}`}
+                      style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}
                       onClick={() => setPanelShape?.('rectangle')}
                     >
                       <span style={{ width: 14, height: 14, display: 'inline-flex' }}>{ICONS.rectangle}</span>
@@ -1540,6 +2089,180 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             )}
           </div>
+        ) : mode === 'grid' ? (
+          <div className="sidebar-group">
+            <div className="group-header" onClick={() => setAddBarCoordsCollapsed(!addBarCoordsCollapsed)}>
+              <div className="group-title">
+                <span>Płaszczyzna siatki</span>
+                <span className="group-tag">
+                  {gridPlane} ({gridPlane === 'XY' ? 'Z' : gridPlane === 'XZ' ? 'Y' : 'X'} = {gridOffset.toFixed(2)} m)
+                </span>
+              </div>
+              <span className="subtle-icon">{addBarCoordsCollapsed ? '▸' : '▾'}</span>
+            </div>
+            {!addBarCoordsCollapsed && (
+              <div className="group-body">
+                <div className="panel">
+                  <h3>Płaszczyzna robocza</h3>
+
+                  {/* Wybór płaszczyzny XY / YZ / XZ */}
+                  <div className="btnrow" style={{ marginTop: '4px', marginBottom: '10px' }}>
+                    <button
+                      type="button"
+                      className={`mini ${gridPlane === 'XY' ? 'on' : ''}`}
+                      style={{ flex: 1, transition: 'none' }}
+                      id="sbGridPlaneXY"
+                      onClick={() => setGridPlane?.('XY')}
+                      title="Płaszczyzna pozioma XY (z=const)"
+                    >
+                      XY (pozioma)
+                    </button>
+                    <button
+                      type="button"
+                      className={`mini ${gridPlane === 'YZ' ? 'on' : ''}`}
+                      style={{ flex: 1, transition: 'none' }}
+                      id="sbGridPlaneYZ"
+                      onClick={() => setGridPlane?.('YZ')}
+                      title="Płaszczyzna pionowa YZ (x=const)"
+                    >
+                      YZ (boczna)
+                    </button>
+                    <button
+                      type="button"
+                      className={`mini ${gridPlane === 'XZ' ? 'on' : ''}`}
+                      style={{ flex: 1, transition: 'none' }}
+                      id="sbGridPlaneXZ"
+                      onClick={() => setGridPlane?.('XZ')}
+                      title="Płaszczyzna pionowa XZ (y=const)"
+                    >
+                      XZ (czołowa)
+                    </button>
+                  </div>
+
+                  {/* Położenie / offset płaszczyzny */}
+                  <div className="row" style={{ marginBottom: '8px' }}>
+                    <label style={{ minWidth: '70px' }}>
+                      {gridPlane === 'XY' ? 'Poziom Z' : gridPlane === 'XZ' ? 'Położenie Y' : 'Położenie X'}
+                    </label>
+                    <div className="inp-unit">
+                      <SmartNumberInput
+                        step="0.5"
+                        value={gridOffset}
+                        onChange={(v) => setGridOffset?.(v)}
+                      />
+                      <span className="unit">m</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="mini"
+                      style={{ flex: '0 0 auto', padding: '5px 10px' }}
+                      onClick={() => setGridOffset?.(0)}
+                      title="Ustaw położenie na 0.00 m"
+                    >
+                      Reset
+                    </button>
+                  </div>
+
+                  {/* Krok dociągania (Snap) przeniesiony z opcji */}
+                  <div className="row" style={{ marginBottom: '10px' }}>
+                    <label style={{ minWidth: '70px' }}>Krok snapu</label>
+                    <div className="inp-unit">
+                      <SmartNumberInput
+                        min={0.01}
+                        step="0.05"
+                        value={snapSize}
+                        onChange={(v) => setSnapSize?.(Math.max(0.01, v || 0.5))}
+                      />
+                      <span className="unit">m</span>
+                    </div>
+                  </div>
+
+                  {/* Wskazówka bez prefiksu */}
+                  <div
+                    className="card"
+                    style={{
+                      background: 'var(--surface)',
+                      padding: '0px',
+                      marginTop: '6px',
+                      marginBottom: '10px',
+                      fontSize: '11px',
+                      color: '#5c6b7a',
+                      lineHeight: 1.4,
+                      border: 'none',
+                      borderRadius: '0px',
+                    }}
+                  >
+                    Wybierz płaszczyznę i poziom odniesienia do tworzenia oraz przyciągania węzłów i prętów.
+                  </div>
+
+                  {/* Poziomy z istniejących węzłów modelu */}
+                  {(() => {
+                    const uniqueLevels: number[] = Array.from(
+                      new Set<number>(
+                        nodes.map((n) =>
+                          gridPlane === 'XY' ? n.z : gridPlane === 'XZ' ? n.y : n.x
+                        )
+                      )
+                    ).sort((a: number, b: number) => a - b);
+
+                    if (uniqueLevels.length === 0) return null;
+
+                    return (
+                      <div style={{ marginBottom: '12px' }}>
+                        <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent)', marginBottom: '6px' }}>
+                          Poziomy węzłów z modelu:
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                          {uniqueLevels.map((lvl) => (
+                            <button
+                              key={lvl}
+                              type="button"
+                              className={`mini ${Math.abs(gridOffset - lvl) < 1e-4 ? 'on' : ''}`}
+                              style={{
+                                padding: '3px 8px',
+                                fontSize: '11px',
+                              }}
+                              onClick={() => setGridOffset?.(lvl)}
+                            >
+                              {gridPlane === 'XY' ? 'Z' : gridPlane === 'XZ' ? 'Y' : 'X'} = {lvl.toFixed(2)} m
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Przyciąganie do siatki */}
+                  <div className="checkline" style={{ marginTop: '8px' }}>
+                    <input
+                      type="checkbox"
+                      id="chkGridSnapSb"
+                      checked={snapEnabled}
+                      onChange={(e) => setSnapEnabled?.(e.target.checked)}
+                    />
+                    <label htmlFor="chkGridSnapSb" style={{ cursor: 'pointer', userSelect: 'none', fontSize: '12px' }}>
+                      Przyciągaj kursor do siatki (Snap)
+                    </label>
+                  </div>
+
+                  {/* Widoczność siatki */}
+                  {setShowGrid && (
+                    <div className="checkline" style={{ marginTop: '6px' }}>
+                      <input
+                        type="checkbox"
+                        id="chkGridVisibilitySb"
+                        checked={showGrid}
+                        onChange={(e) => setShowGrid?.(e.target.checked)}
+                      />
+                      <label htmlFor="chkGridVisibilitySb" style={{ cursor: 'pointer', userSelect: 'none', fontSize: '12px' }}>
+                        Wyświetlaj siatkę w przestrzeni 3D
+                      </label>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         ) : (
           <>
             {/* WŁAŚCIWOŚCI GÓRNY KOMUNIKAT */}
@@ -1573,10 +2296,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
 
                 {/* Wspólne przyciski operacji */}
-                <div className="btnrow" style={{ marginTop: '6px', gap: '5px' }}>
+                <div ref={transformBtnRef} className="btnrow" style={{ marginTop: '6px', gap: '4px', flexWrap: 'wrap' }}>
                   <button
                     className="mini danger"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '5px 10px', fontWeight: 600 }}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 8px', fontWeight: 600 }}
                     onClick={handleDeleteSelected}
                     title="Usuń zaznaczone obiekty"
                   >
@@ -1584,24 +2307,83 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <span>Usuń</span>
                   </button>
                   <button
-                    className={`mini ${moveFormOpen ? 'on' : ''}`}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '5px 10px', fontWeight: 600 }}
+                    className={`mini ${activeTransformMode === 'move' ? 'on' : ''}`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 8px', fontWeight: 600 }}
                     onClick={() => {
-                      setMoveFormOpen(!moveFormOpen);
-                      if (splitFormOpen) setSplitFormOpen(false);
+                      if (activeTransformMode === 'move') {
+                        if (setActiveTransformMode) setActiveTransformMode('none');
+                        if (onCancelPickMode) onCancelPickMode();
+                      } else {
+                        if (setActiveTransformMode) setActiveTransformMode('move');
+                        if (splitFormOpen) setSplitFormOpen(false);
+                      }
                     }}
                     title="Przenieś lub kopiuj zaznaczone obiekty"
                   >
                     {ICONS.moveNode}
                     <span>Przenieś</span>
                   </button>
+                  <button
+                    className={`mini ${activeTransformMode === 'rotate' ? 'on' : ''}`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 8px', fontWeight: 600 }}
+                    onClick={() => {
+                      if (activeTransformMode === 'rotate') {
+                        if (setActiveTransformMode) setActiveTransformMode('none');
+                        if (onCancelPickMode) onCancelPickMode();
+                      } else {
+                        if (setActiveTransformMode) setActiveTransformMode('rotate');
+                        if (splitFormOpen) setSplitFormOpen(false);
+                      }
+                    }}
+                    title="Obróć zaznaczone obiekty"
+                  >
+                    {ICONS.rotate}
+                    <span>Obróć</span>
+                  </button>
+                  <button
+                    className={`mini ${activeTransformMode === 'mirror' ? 'on' : ''}`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 8px', fontWeight: 600 }}
+                    onClick={() => {
+                      if (activeTransformMode === 'mirror') {
+                        if (setActiveTransformMode) setActiveTransformMode('none');
+                        if (onCancelPickMode) onCancelPickMode();
+                      } else {
+                        if (setActiveTransformMode) setActiveTransformMode('mirror');
+                        if (splitFormOpen) setSplitFormOpen(false);
+                      }
+                    }}
+                    title="Lustrzane odbicie zaznaczonych obiektów"
+                  >
+                    {ICONS.mirror}
+                    <span>Lustro</span>
+                  </button>
+                  <button
+                    className={`mini ${activeTransformMode === 'scale' ? 'on' : ''}`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 8px', fontWeight: 600 }}
+                    onClick={() => {
+                      if (activeTransformMode === 'scale') {
+                        if (setActiveTransformMode) setActiveTransformMode('none');
+                        if (onCancelPickMode) onCancelPickMode();
+                      } else {
+                        if (setActiveTransformMode) setActiveTransformMode('scale');
+                        if (splitFormOpen) setSplitFormOpen(false);
+                      }
+                    }}
+                    title="Skaluj zaznaczone obiekty"
+                  >
+                    {ICONS.scale}
+                    <span>Skaluj</span>
+                  </button>
                   {selectedElemIds.length > 0 && (
                     <button
                       className={`mini ${splitFormOpen ? 'on' : ''}`}
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '5px 10px', fontWeight: 600 }}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 8px', fontWeight: 600 }}
                       onClick={() => {
                         setSplitFormOpen(!splitFormOpen);
-                        if (moveFormOpen) setMoveFormOpen(false);
+                        if (activeTransformMode !== 'none') {
+                          if (setActiveTransformMode) setActiveTransformMode('none');
+                          if (onCancelPickMode) onCancelPickMode();
+                        }
                       }}
                       title="Podziel zaznaczone pręty"
                     >
@@ -1611,9 +2393,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   )}
                 </div>
 
-                {/* Formularz Przenieś / Kopiuj */}
-                {moveFormOpen && (
+                {/* Unified Formularz Transformacji (Przenieś, Obróć, Lustro, Skaluj) */}
+                {activeTransformMode !== 'none' && (
                   <div
+                    ref={transformCardRef}
                     className="card"
                     style={{
                       marginTop: '10px',
@@ -1623,7 +2406,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   >
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                       <span style={{ fontWeight: 600, fontSize: '11px', color: 'var(--text)' }}>
-                        Opcje przenoszenia
+                        {activeTransformMode === 'move' && 'Opcje przenoszenia'}
+                        {activeTransformMode === 'rotate' && 'Opcje obrotu'}
+                        {activeTransformMode === 'mirror' && 'Opcje lustrzanego odbicia'}
+                        {activeTransformMode === 'scale' && 'Opcje skalowania'}
                       </span>
                     </div>
 
@@ -1632,98 +2418,334 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       <div className="btnrow" style={{ margin: 0, gap: '4px' }}>
                         <button
                           type="button"
-                          className={`mini ${!moveWithCopy ? 'on' : ''}`}
+                          className={`mini ${!transformWithCopy ? 'on' : ''}`}
                           style={{ padding: '3px 8px', fontSize: '10.5px' }}
-                          onClick={() => setMoveWithCopy(false)}
+                          onClick={() => setTransformWithCopy(false)}
                         >
-                          Przesuń
+                          {activeTransformMode === 'move' && 'Przesuń'}
+                          {activeTransformMode === 'rotate' && 'Obróć'}
+                          {activeTransformMode === 'mirror' && 'Odbij'}
+                          {activeTransformMode === 'scale' && 'Skaluj'}
                         </button>
                         <button
                           type="button"
-                          className={`mini ${moveWithCopy ? 'on' : ''}`}
+                          className={`mini ${transformWithCopy ? 'on' : ''}`}
                           style={{ padding: '3px 8px', fontSize: '10.5px' }}
-                          onClick={() => setMoveWithCopy(true)}
+                          onClick={() => setTransformWithCopy(true)}
                         >
                           Z kopiowaniem
                         </button>
                       </div>
                     </div>
 
-                    {moveWithCopy && (
+                    {transformWithCopy && (
                       <>
                         <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                           <label style={{ margin: 0 }} title="Łączy stary węzeł z nowym węzłem nowym prętem">Połącz</label>
                           <button
                             type="button"
-                            className={`mini ${moveConnect ? 'on' : ''}`}
+                            className={`mini ${transformConnect ? 'on' : ''}`}
                             style={{ padding: '3px 8px', fontSize: '10.5px' }}
-                            onClick={() => setMoveConnect(!moveConnect)}
+                            onClick={() => setTransformConnect(!transformConnect)}
                             title="Łączy węzły prętami o przekroju i materiale z paska"
                           >
-                            {moveConnect ? 'Połącz: WŁ' : 'Połącz: WYŁ'}
+                            {transformConnect ? 'Połącz: WŁ' : 'Połącz: WYŁ'}
                           </button>
                         </div>
-                        <div className="row" style={{ marginBottom: '8px' }}>
-                          <label>Wielokrotność</label>
+                        {activeTransformMode !== 'mirror' && (
+                          <div className="row" style={{ marginBottom: '8px' }}>
+                            <label>Wielokrotność</label>
+                            <div className="inp-unit">
+                              <SmartNumberInput
+                                min={1}
+                                max={50}
+                                step="1"
+                                value={transformRepeat}
+                                onChange={(v) => setTransformRepeat(Math.max(1, Math.round(v)))}
+                              />
+                              <span className="unit">×</span>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {/* Mode specific fields */}
+                    {activeTransformMode === 'move' && (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '5px' }}>
+                          <span className="muted" style={{ fontSize: '10px' }}>
+                            Wektor przeniesienia (krok):
+                          </span>
+                          <button
+                            type="button"
+                            className={`mini ${pickMoveVectorActive ? 'on' : ''}`}
+                            style={{ padding: '2px 7px', fontSize: '10px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            onClick={pickMoveVectorActive ? onCancelPickMode : onStartPickMoveVector}
+                            title="Wskaż wektor na modelu (kliknij 2 punkty: początek i koniec)"
+                          >
+                            {pickMoveVectorActive
+                              ? (pickMoveVectorStep === 1 ? 'Wskaż P1 (1/2)...' : 'Wskaż P2 (2/2)...')
+                              : 'Wskaż wektor'}
+                          </button>
+                        </div>
+                        {pickMoveVectorActive && (
+                          <div style={{ marginBottom: '6px', fontSize: '10px', color: 'var(--accent)', fontWeight: 600 }}>
+                            {pickMoveVectorStep === 1
+                              ? 'Kliknij na modelu punkt początkowy P1...'
+                              : 'Kliknij na modelu punkt końcowy P2 (ruch myszą pokazuje podgląd)...'}
+                          </div>
+                        )}
+                        <div className="row-triple">
+                          <div className="third">
+                            <label>Δx</label>
+                            <div className="inp-unit">
+                              <SmartNumberInput step="0.5" value={moveDx} onChange={(v) => setMoveDx(v)} />
+                              <span className="unit">m</span>
+                            </div>
+                          </div>
+                          <div className="third">
+                            <label>Δy</label>
+                            <div className="inp-unit">
+                              <SmartNumberInput step="0.5" value={moveDy} onChange={(v) => setMoveDy(v)} />
+                              <span className="unit">m</span>
+                            </div>
+                          </div>
+                          <div className="third">
+                            <label>Δz</label>
+                            <div className="inp-unit">
+                              <SmartNumberInput step="0.5" value={moveDz} onChange={(v) => setMoveDz(v)} />
+                              <span className="unit">m</span>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {activeTransformMode === 'rotate' && (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '5px' }}>
+                          <span className="muted" style={{ fontSize: '10px' }}>
+                            Środek obrotu:
+                          </span>
+                          <button
+                            type="button"
+                            className={`mini ${pickTransformPointActive && pickTransformPointTarget === 'rotateCenter' ? 'on' : ''}`}
+                            style={{ padding: '2px 7px', fontSize: '10px' }}
+                            onClick={() => {
+                              if (pickTransformPointActive && pickTransformPointTarget === 'rotateCenter') {
+                                onCancelPickMode();
+                              } else {
+                                onStartPickPoint('rotateCenter');
+                              }
+                            }}
+                            title="Wskaż środek obrotu na modelu"
+                          >
+                            {pickTransformPointActive && pickTransformPointTarget === 'rotateCenter'
+                              ? 'Wskaż na modelu...'
+                              : 'Wskaż środek'}
+                          </button>
+                        </div>
+                        {pickTransformPointActive && pickTransformPointTarget === 'rotateCenter' && (
+                          <div style={{ marginBottom: '6px', fontSize: '10px', color: 'var(--accent)', fontWeight: 600 }}>
+                            Kliknij na modelu węzeł lub punkt siatki...
+                          </div>
+                        )}
+                        <div className="row-triple" style={{ marginBottom: '8px' }}>
+                          <div className="third">
+                            <label>Cx</label>
+                            <div className="inp-unit">
+                              <SmartNumberInput step="0.5" value={rotateCx} onChange={(v) => setRotateCx(v)} />
+                              <span className="unit">m</span>
+                            </div>
+                          </div>
+                          <div className="third">
+                            <label>Cy</label>
+                            <div className="inp-unit">
+                              <SmartNumberInput step="0.5" value={rotateCy} onChange={(v) => setRotateCy(v)} />
+                              <span className="unit">m</span>
+                            </div>
+                          </div>
+                          <div className="third">
+                            <label>Cz</label>
+                            <div className="inp-unit">
+                              <SmartNumberInput step="0.5" value={rotateCz} onChange={(v) => setRotateCz(v)} />
+                              <span className="unit">m</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                          <label style={{ margin: 0 }}>Oś obrotu</label>
+                          <div className="btnrow" style={{ margin: 0, gap: '4px' }}>
+                            {(['X', 'Y', 'Z'] as const).map((axis) => (
+                              <button
+                                key={axis}
+                                type="button"
+                                className={`mini ${rotateAxis === axis ? 'on' : ''}`}
+                                style={{ padding: '3px 10px', fontSize: '10.5px' }}
+                                onClick={() => setRotateAxis(axis)}
+                              >
+                                {axis}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="row">
+                          <label>Kąt obrotu</label>
                           <div className="inp-unit">
-                            <SmartNumberInput
-                              min={1}
-                              max={50}
-                              step="1"
-                              value={moveRepeat}
-                              onChange={(v) => setMoveRepeat(Math.max(1, Math.round(v)))}
-                            />
+                            <SmartNumberInput step="15" value={rotateAngle} onChange={(v) => setRotateAngle(v)} />
+                            <span className="unit">°</span>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {activeTransformMode === 'mirror' && (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '5px' }}>
+                          <span className="muted" style={{ fontSize: '10px' }}>
+                            Punkt płaszczyzny odbicia:
+                          </span>
+                          <button
+                            type="button"
+                            className={`mini ${pickTransformPointActive && pickTransformPointTarget === 'mirrorPoint' ? 'on' : ''}`}
+                            style={{ padding: '2px 7px', fontSize: '10px' }}
+                            onClick={() => {
+                              if (pickTransformPointActive && pickTransformPointTarget === 'mirrorPoint') {
+                                onCancelPickMode();
+                              } else {
+                                onStartPickPoint('mirrorPoint');
+                              }
+                            }}
+                            title="Wskaż punkt płaszczyzny na modelu"
+                          >
+                            {pickTransformPointActive && pickTransformPointTarget === 'mirrorPoint'
+                              ? 'Wskaż na modelu...'
+                              : 'Wskaż punkt'}
+                          </button>
+                        </div>
+                        {pickTransformPointActive && pickTransformPointTarget === 'mirrorPoint' && (
+                          <div style={{ marginBottom: '6px', fontSize: '10px', color: 'var(--accent)', fontWeight: 600 }}>
+                            Kliknij na modelu węzeł lub punkt siatki...
+                          </div>
+                        )}
+                        <div className="row-triple" style={{ marginBottom: '8px' }}>
+                          <div className="third">
+                            <label>Px</label>
+                            <div className="inp-unit">
+                              <SmartNumberInput step="0.5" value={mirrorPx} onChange={(v) => setMirrorPx(v)} />
+                              <span className="unit">m</span>
+                            </div>
+                          </div>
+                          <div className="third">
+                            <label>Py</label>
+                            <div className="inp-unit">
+                              <SmartNumberInput step="0.5" value={mirrorPy} onChange={(v) => setMirrorPy(v)} />
+                              <span className="unit">m</span>
+                            </div>
+                          </div>
+                          <div className="third">
+                            <label>Pz</label>
+                            <div className="inp-unit">
+                              <SmartNumberInput step="0.5" value={mirrorPz} onChange={(v) => setMirrorPz(v)} />
+                              <span className="unit">m</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                          <label style={{ margin: 0 }}>Płaszczyzna</label>
+                          <div className="btnrow" style={{ margin: 0, gap: '4px' }}>
+                            {(['XY', 'YZ', 'XZ'] as const).map((plane) => (
+                              <button
+                                key={plane}
+                                type="button"
+                                className={`mini ${mirrorPlane === plane ? 'on' : ''}`}
+                                style={{ padding: '3px 8px', fontSize: '10.5px' }}
+                                onClick={() => setMirrorPlane(plane)}
+                              >
+                                {plane}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {activeTransformMode === 'scale' && (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '5px' }}>
+                          <span className="muted" style={{ fontSize: '10px' }}>
+                            Środek skalowania:
+                          </span>
+                          <button
+                            type="button"
+                            className={`mini ${pickTransformPointActive && pickTransformPointTarget === 'scaleCenter' ? 'on' : ''}`}
+                            style={{ padding: '2px 7px', fontSize: '10px' }}
+                            onClick={() => {
+                              if (pickTransformPointActive && pickTransformPointTarget === 'scaleCenter') {
+                                onCancelPickMode();
+                              } else {
+                                onStartPickPoint('scaleCenter');
+                              }
+                            }}
+                            title="Wskaż środek skalowania na modelu"
+                          >
+                            {pickTransformPointActive && pickTransformPointTarget === 'scaleCenter'
+                              ? 'Wskaż na modelu...'
+                              : 'Wskaż środek'}
+                          </button>
+                        </div>
+                        {pickTransformPointActive && pickTransformPointTarget === 'scaleCenter' && (
+                          <div style={{ marginBottom: '6px', fontSize: '10px', color: 'var(--accent)', fontWeight: 600 }}>
+                            Kliknij na modelu węzeł lub punkt siatki...
+                          </div>
+                        )}
+                        <div className="row-triple" style={{ marginBottom: '8px' }}>
+                          <div className="third">
+                            <label>Cx</label>
+                            <div className="inp-unit">
+                              <SmartNumberInput step="0.5" value={scaleCx} onChange={(v) => setScaleCx(v)} />
+                              <span className="unit">m</span>
+                            </div>
+                          </div>
+                          <div className="third">
+                            <label>Cy</label>
+                            <div className="inp-unit">
+                              <SmartNumberInput step="0.5" value={scaleCy} onChange={(v) => setScaleCy(v)} />
+                              <span className="unit">m</span>
+                            </div>
+                          </div>
+                          <div className="third">
+                            <label>Cz</label>
+                            <div className="inp-unit">
+                              <SmartNumberInput step="0.5" value={scaleCz} onChange={(v) => setScaleCz(v)} />
+                              <span className="unit">m</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="row">
+                          <label>Skala</label>
+                          <div className="inp-unit">
+                            <SmartNumberInput step="0.1" min={0.01} max={100} value={scaleFactor} onChange={(v) => setScaleFactor(v)} />
                             <span className="unit">×</span>
                           </div>
                         </div>
                       </>
                     )}
 
-                    <div className="muted" style={{ marginBottom: '5px', fontSize: '10px' }}>
-                      Wektor przeniesienia (krok):
-                    </div>
-                    <div className="row-triple">
-                      <div className="third">
-                        <label>Δx</label>
-                        <div className="inp-unit">
-                          <SmartNumberInput
-                            step="0.5"
-                            value={moveDx}
-                            onChange={(v) => setMoveDx(v)}
-                          />
-                          <span className="unit">m</span>
-                        </div>
-                      </div>
-                      <div className="third">
-                        <label>Δy</label>
-                        <div className="inp-unit">
-                          <SmartNumberInput
-                            step="0.5"
-                            value={moveDy}
-                            onChange={(v) => setMoveDy(v)}
-                          />
-                          <span className="unit">m</span>
-                        </div>
-                      </div>
-                      <div className="third">
-                        <label>Δz</label>
-                        <div className="inp-unit">
-                          <SmartNumberInput
-                            step="0.5"
-                            value={moveDz}
-                            onChange={(v) => setMoveDz(v)}
-                          />
-                          <span className="unit">m</span>
-                        </div>
-                      </div>
-                    </div>
-
                     <div className="btnrow" style={{ marginTop: '10px', justifyContent: 'flex-end', gap: '6px' }}>
-                      <button className="mini" onClick={() => setMoveFormOpen(false)}>
+                      <button className="mini" onClick={() => { if (setActiveTransformMode) setActiveTransformMode('none'); if (onCancelPickMode) onCancelPickMode(); }}>
                         Anuluj
                       </button>
-                      <button className="mini on" onClick={confirmMoveOrCopy}>
-                        {moveWithCopy ? (moveRepeat > 1 ? `Kopiuj (${moveRepeat}×)` : 'Kopiuj') : 'Przenieś'}
+                      <button className="mini on" onClick={() => confirmTransform(activeTransformMode as 'move' | 'rotate' | 'mirror' | 'scale')}>
+                        {activeTransformMode === 'move' && (transformWithCopy ? (transformRepeat > 1 ? `Kopiuj (${transformRepeat}×)` : 'Kopiuj') : 'Przenieś')}
+                        {activeTransformMode === 'rotate' && (transformWithCopy ? (transformRepeat > 1 ? `Kopiuj i obróć (${transformRepeat}×)` : 'Kopiuj i obróć') : 'Obróć')}
+                        {activeTransformMode === 'mirror' && (transformWithCopy ? 'Kopiuj z odbiciem' : 'Lustrzane odbicie')}
+                        {activeTransformMode === 'scale' && (transformWithCopy ? (transformRepeat > 1 ? `Kopiuj i skaluj (${transformRepeat}×)` : 'Kopiuj i skaluj') : 'Skaluj')}
                       </button>
                     </div>
                   </div>
@@ -1821,7 +2843,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 step="0.1"
                                 value={singleNode.x}
                                 onFocus={onInvalidateResults}
-                                onChange={(v) => updateNodeCoord('x', v)}
+                                onChange={(v) => updateNodeCoord('x', v, false)}
+                                onCommit={(v) => updateNodeCoord('x', v, true)}
                               />
                               <span className="unit">m</span>
                             </div>
@@ -1833,7 +2856,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 step="0.1"
                                 value={singleNode.y}
                                 onFocus={onInvalidateResults}
-                                onChange={(v) => updateNodeCoord('y', v)}
+                                onChange={(v) => updateNodeCoord('y', v, false)}
+                                onCommit={(v) => updateNodeCoord('y', v, true)}
                               />
                               <span className="unit">m</span>
                             </div>
@@ -1845,7 +2869,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 step="0.1"
                                 value={singleNode.z}
                                 onFocus={onInvalidateResults}
-                                onChange={(v) => updateNodeCoord('z', v)}
+                                onChange={(v) => updateNodeCoord('z', v, false)}
+                                onCommit={(v) => updateNodeCoord('z', v, true)}
                               />
                               <span className="unit">m</span>
                             </div>

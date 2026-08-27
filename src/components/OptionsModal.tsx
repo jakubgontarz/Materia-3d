@@ -29,6 +29,8 @@ interface OptionsModalProps {
   setIncludeSelfWeight: (v: boolean) => void;
   snapSize: number;
   setSnapSize: (v: number) => void;
+  mergeTolerance: number;
+  setMergeTolerance: (v: number) => void;
 }
 
 export const OptionsModal: React.FC<OptionsModalProps> = ({
@@ -46,6 +48,8 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
   setIncludeSelfWeight,
   snapSize,
   setSnapSize,
+  mergeTolerance,
+  setMergeTolerance,
 }) => {
   if (!isOpen) return null;
 
@@ -186,26 +190,6 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                 gap: '10px',
               }}
             >
-              <span style={{ fontSize: '12.5px', fontWeight: 600 }}>Siatka płaszczyzny podstawy (XY)</span>
-              <input
-                type="checkbox"
-                checked={showGrid}
-                onChange={(e) => setShowGrid(e.target.checked)}
-                style={{ width: '18px', height: '18px', flex: '0 0 auto', accentColor: 'var(--accent)' }}
-              />
-            </label>
-          </div>
-
-          <div style={{ marginBottom: '14px' }}>
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                cursor: 'pointer',
-                gap: '10px',
-              }}
-            >
               <span style={{ fontSize: '12.5px', fontWeight: 600 }}>Osie globalne układu (XYZ)</span>
               <input
                 type="checkbox"
@@ -242,25 +226,31 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
             </div>
           </div>
 
-          <div style={{ marginTop: '14px', marginBottom: '14px' }}>
-            <div className="row" style={{ marginBottom: 0 }}>
-              <span style={{ fontSize: '12.5px', fontWeight: 600, flex: 1, minWidth: 0 }}>
-                Krok dociągania węzłów do siatki (Snap)
-              </span>
+          <hr className="sep" />
+
+          {/* Tolerancja łączenia węzłów */}
+          <div style={{ marginBottom: '14px' }}>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                cursor: 'pointer',
+                gap: '10px',
+              }}
+            >
+              <span style={{ fontSize: '12.5px', fontWeight: 600 }}>Tolerancja łączenia węzłów (m)</span>
               <input
                 type="number"
-                step="0.05"
-                min="0.01"
-                value={snapSize}
-                onChange={(e) => setSnapSize(Math.max(0.01, parseFloat(e.target.value) || 0.5))}
-                style={{ width: '76px', flex: '0 0 auto', textAlign: 'left' }}
+                min="0"
+                step="0.001"
+                value={mergeTolerance}
+                onChange={(e) => setMergeTolerance(parseFloat(e.target.value) || 0)}
+                style={{ width: '70px', padding: '4px', background: 'var(--input-bg)', color: 'var(--text)', border: '1px solid var(--input-border)', borderRadius: '4px' }}
               />
-              <span className="unit" style={{ width: 'auto', flex: '0 0 auto', paddingLeft: '2px' }}>
-                m
-              </span>
-            </div>
-            <div className="muted" style={{ marginTop: '4px' }}>
-              Określa krok (w metrach), do jakiego będą dociągane węzły przy włączonym przycisku „Przyciągaj”.
+            </label>
+            <div className="muted" style={{ marginTop: '3px' }}>
+              Węzły znajdujące się bliżej siebie niż podana wartość zostaną połączone po wykonaniu transformacji lub edycji współrzędnych.
             </div>
           </div>
         </div>

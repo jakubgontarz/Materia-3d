@@ -40,7 +40,7 @@ export interface SceneRenderOptions {
   hoverNodeId: number | null;
   hoverElemId: number | null;
   hoverPanelId?: number | null;
-  mode?: 'select' | 'addBar' | 'addPanel';
+  mode?: 'select' | 'addBar' | 'addPanel' | 'grid';
   probe: { elId: number | null; t: number };
   theme: 'light' | 'dark';
   accentColor: string;
@@ -611,108 +611,8 @@ function rebuild3DModelGroup(
 
 // === THREE.JS BUILDERS ===
 
-export function getPanelCorners(panel: Panel3D, nodes: Node3D[]): [number, number, number][] {
-  const pNodes = panel.nodeIds.map((id) => nodes.find((n) => n.id === id)).filter(Boolean) as Node3D[];
-
-  if (panel.shape === 'triangle') {
-    if (pNodes.length < 3) return [];
-    return [
-      [pNodes[0].x, pNodes[0].y, pNodes[0].z],
-      [pNodes[1].x, pNodes[1].y, pNodes[1].z],
-      [pNodes[2].x, pNodes[2].y, pNodes[2].z],
-    ];
-  }
-
-  if (panel.shape === 'rectangle') {
-    if (pNodes.length < 3) return [];
-    const n1 = pNodes[0];
-    const n2 = pNodes[1];
-    const n3 = pNodes[2];
-
-    const ux = n2.x - n1.x;
-    const uy = n2.y - n1.y;
-    const uz = n2.z - n1.z;
-    const uLenSq = ux * ux + uy * uy + uz * uz;
-
-    if (uLenSq < 1e-12) {
-      return [
-        [n1.x, n1.y, n1.z],
-        [n2.x, n2.y, n2.z],
-        [n3.x, n3.y, n3.z],
-        [n3.x, n3.y, n3.z],
-      ];
-    }
-
-    const vx = n3.x - n1.x;
-    const vy = n3.y - n1.y;
-    const vz = n3.z - n1.z;
-
-    const dot = (vx * ux + vy * uy + vz * uz) / uLenSq;
-
-    const wx = vx - dot * ux;
-    const wy = vy - dot * uy;
-    const wz = vz - dot * uz;
-
-    const c1: [number, number, number] = [n1.x, n1.y, n1.z];
-    const c2: [number, number, number] = [n2.x, n2.y, n2.z];
-    const c3: [number, number, number] = [n2.x + wx, n2.y + wy, n2.z + wz];
-    const c4: [number, number, number] = [n1.x + wx, n1.y + wy, n1.z + wz];
-
-    return [c1, c2, c3, c4];
-  }
-
-  return [];
-}
-
-export function computePanelLocalAxes(panel: Panel3D, nodes: Node3D[]): {
-  centroid: [number, number, number];
-  vx: [number, number, number];
-  vy: [number, number, number];
-  vz: [number, number, number];
-} | null {
-  const corners = getPanelCorners(panel, nodes);
-  if (corners.length < 3) return null;
-
-  const N = corners.length;
-  let cx = 0, cy = 0, cz = 0;
-  for (let i = 0; i < N; i++) {
-    cx += corners[i][0];
-    cy += corners[i][1];
-    cz += corners[i][2];
-  }
-  cx /= N; cy /= N; cz /= N;
-
-  const [c1, c2, c3] = corners;
-
-  // Local x = direction C1 -> C2
-  let dx1 = c2[0] - c1[0];
-  let dy1 = c2[1] - c1[1];
-  let dz1 = c2[2] - c1[2];
-  let len1 = Math.hypot(dx1, dy1, dz1);
-  if (len1 < 1e-8) { dx1 = 1; dy1 = 0; dz1 = 0; len1 = 1; }
-  const vx: [number, number, number] = [dx1 / len1, dy1 / len1, dz1 / len1];
-
-  // Vector v = C1 -> C3
-  const dx2 = c3[0] - c1[0];
-  const dy2 = c3[1] - c1[1];
-  const dz2 = c3[2] - c1[2];
-
-  // vz = normal = vx x v
-  let nx = vx[1] * dz2 - vx[2] * dy2;
-  let ny = vx[2] * dx2 - vx[0] * dz2;
-  let nz = vx[0] * dy2 - vx[1] * dx2;
-  let nLen = Math.hypot(nx, ny, nz);
-  if (nLen < 1e-8) { nx = 0; ny = 0; nz = 1; nLen = 1; }
-  const vz: [number, number, number] = [nx / nLen, ny / nLen, nz / nLen];
-
-  // vy = vz x vx
-  const vyx = vz[1] * vx[2] - vz[2] * vx[1];
-  const vyy = vz[2] * vx[0] - vz[0] * vx[2];
-  const vyz = vz[0] * vx[1] - vz[1] * vx[0];
-  const vy: [number, number, number] = [vyx, vyy, vyz];
-
-  return { centroid: [cx, cy, cz], vx, vy, vz };
-}
+import { getPanelCorners, computePanelLocalAxes } from '../fem/panels';
+export { getPanelCorners, computePanelLocalAxes };
 
 function build3DPanelLocalAxes(engine: RenderEngine3D, panel: Panel3D, nodes: Node3D[]) {
   const axes = computePanelLocalAxes(panel, nodes);
@@ -2641,8 +2541,8 @@ function drawHoverAndSelection2DOverlay(
         ctx.lineWidth = 2;
         ctx.stroke();
 
-        // Hover tag with coordinates (only in select mode; in drawing modes the tip with pointer is displayed instead)
-        if (options.mode !== 'addBar' && options.mode !== 'addPanel') {
+        // Hover tag with coordinates (only in select mode; in drawing/grid modes the tip with pointer is displayed instead)
+        if (options.mode !== 'addBar' && options.mode !== 'addPanel' && options.mode !== 'grid') {
           const tag = `W${n.id} (${n.x.toFixed(2)}, ${n.y.toFixed(2)}, ${n.z.toFixed(2)})`;
           drawPillTag(ctx, p.x, p.y - 18, tag, isDark ? '#38bdf8' : '#0284c7', '#38bdf8', isDark, 11);
         }

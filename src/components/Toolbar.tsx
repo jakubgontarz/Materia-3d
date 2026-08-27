@@ -141,6 +141,12 @@ export const ICONS = {
       <path d="M8 7L4 11l4 4M16 7l4 4-4 4" />
     </svg>
   ),
+  scale: (
+    <svg viewBox="0 0 24 24">
+      <path d="M21 3v6h-2V6.41l-4.29 4.3-1.42-1.42L17.59 5H15V3h6zM3 21v-6h2v2.59l4.29-4.3 1.42 1.42L6.41 19H9v2H3z" />
+      <rect x="8" y="8" width="8" height="8" rx="1" />
+    </svg>
+  ),
   copyMirror: (
     <svg viewBox="0 0 24 24">
       <path d="M10.5 3v18" strokeDasharray="2.5 2.2" />
@@ -296,13 +302,41 @@ export const ICONS = {
       <rect x="4" y="5" width="16" height="14" rx="1.5" fill="none" strokeWidth="2" />
     </svg>
   ),
+  reset: (
+    <svg viewBox="0 0 24 24">
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path d="M3 3v5h5" />
+    </svg>
+  ),
+  planeXY: (
+    <svg viewBox="0 0 24 24">
+      <path d="M4 14l8 6 8-6-8-6-8 6z" />
+      <path d="M8 11l8 6M16 11l-8 6" opacity="0.6" />
+    </svg>
+  ),
+  planeYZ: (
+    <svg viewBox="0 0 24 24">
+      <path d="M6 3l12 4v14L6 17z" />
+      <path d="M12 5v14M6 10l12 4" opacity="0.6" />
+    </svg>
+  ),
+  planeXZ: (
+    <svg viewBox="0 0 24 24">
+      <rect x="4" y="4" width="16" height="16" rx="1.5" />
+      <path d="M4 12h16M12 4v16" opacity="0.6" />
+    </svg>
+  ),
 };
 
 interface ToolbarProps {
-  mode: 'select' | 'addBar' | 'addPanel';
-  setMode: (m: 'select' | 'addBar' | 'addPanel') => void;
+  mode: 'select' | 'addBar' | 'addPanel' | 'grid';
+  setMode: (m: 'select' | 'addBar' | 'addPanel' | 'grid') => void;
   panelShape?: 'triangle' | 'rectangle';
   setPanelShape?: (s: 'triangle' | 'rectangle') => void;
+  gridPlane?: 'XY' | 'XZ' | 'YZ';
+  setGridPlane?: (p: 'XY' | 'XZ' | 'YZ') => void;
+  gridOffset?: number;
+  setGridOffset?: (o: number) => void;
   navMode?: string;
   setNavMode?: (m: any) => void;
   effectiveSelMode?: 'replace' | 'add' | 'subtract' | 'toggle';
@@ -341,6 +375,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   setMode,
   panelShape = 'triangle',
   setPanelShape,
+  gridPlane = 'XY',
+  setGridPlane,
+  gridOffset = 0,
+  setGridOffset,
   navMode = 'orbit',
   setNavMode,
   effectiveSelMode = 'replace',
@@ -583,6 +621,15 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           {ICONS.panel}
           <span>Obrys</span>
         </button>
+        <button
+          className={`tb-btn ${mode === 'grid' ? 'active' : ''}`}
+          id="btnModeGrid"
+          onClick={() => setMode('grid')}
+          title="Płaszczyzna i poziom siatki roboczej (G)"
+        >
+          {ICONS.grid}
+          <span>Siatka</span>
+        </button>
       </div>
 
       {/* Kontekstowa grupa narzędzi dla aktywnego trybu (wyświetlana w toolbarze na ekranach poziomych) */}
@@ -728,6 +775,61 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           >
             {ICONS.node}
             <span>Autowęzły</span>
+          </button>
+        </div>
+      )}
+
+      {mode === 'grid' && (
+        <div className="tb-group tb-group-contextual">
+          <span className="tb-label">Płaszczyzna</span>
+          <button
+            className={`tb-btn ${gridPlane === 'XY' ? 'active' : ''}`}
+            id="btnGridPlaneXY"
+            onClick={() => setGridPlane?.('XY')}
+            title="Siatka pozioma XY (z=const)"
+          >
+            {ICONS.planeXY}
+            <span>XY</span>
+          </button>
+          <button
+            className={`tb-btn ${gridPlane === 'YZ' ? 'active' : ''}`}
+            id="btnGridPlaneYZ"
+            onClick={() => setGridPlane?.('YZ')}
+            title="Siatka pionowa YZ (x=const)"
+          >
+            {ICONS.planeYZ}
+            <span>YZ</span>
+          </button>
+          <button
+            className={`tb-btn ${gridPlane === 'XZ' ? 'active' : ''}`}
+            id="btnGridPlaneXZ"
+            onClick={() => setGridPlane?.('XZ')}
+            title="Siatka pionowa XZ (y=const)"
+          >
+            {ICONS.planeXZ}
+            <span>XZ</span>
+          </button>
+          <div className="tb-sep" />
+          <span className="tb-label" style={{ minWidth: '70px' }}>
+            {gridPlane === 'XY' ? 'Z' : gridPlane === 'XZ' ? 'Y' : 'X'} = {gridOffset.toFixed(2)} m
+          </span>
+          <button
+            className="tb-btn"
+            id="btnGridResetOffset"
+            onClick={() => setGridOffset?.(0)}
+            title="Zresetuj poziom siatki (0.00 m)"
+          >
+            {ICONS.reset}
+            <span>Reset</span>
+          </button>
+          <div className="tb-sep" />
+          <button
+            className={`tb-btn ${snapEnabled ? 'active' : ''}`}
+            onClick={() => setSnapEnabled(!snapEnabled)}
+            title={`Przyciąganie do siatki (${snapSize} m)`}
+          >
+            {ICONS.grid}
+            <span>Przyciągaj</span>
           </button>
         </div>
       )}
