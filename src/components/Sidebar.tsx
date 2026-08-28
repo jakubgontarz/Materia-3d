@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Node3D,
   Element3D,
@@ -18,6 +18,7 @@ import { ICONS } from './Toolbar';
 import { CATALOG_DEFS, CATALOG_ORDER } from '../fem/catalogs';
 import { SmartNumberInput } from './SmartNumberInput';
 import { mergeOverlapping } from '../utils/merge';
+import { findAndSplitIntersections } from '../utils/intersect';
 
 function transformPoint(
   p: [number, number, number],
@@ -128,6 +129,11 @@ function dot3D(a: [number, number, number], b: [number, number, number]): number
 
 function norm3D(a: [number, number, number]): number {
   return Math.hypot(a[0], a[1], a[2]);
+}
+
+function round4(v: number): number {
+  if (Math.abs(v) < 1e-6) return 0;
+  return Math.round(v * 1e4) / 1e4;
 }
 
 function normalize3D(a: [number, number, number]): [number, number, number] {
@@ -243,8 +249,12 @@ interface SidebarProps {
   setSelectedElemIds: React.Dispatch<React.SetStateAction<number[]>>;
   selectedPanelIds?: number[];
   setSelectedPanelIds?: React.Dispatch<React.SetStateAction<number[]>>;
-  mode: 'select' | 'addBar' | 'addPanel' | 'grid';
-  setMode: (m: 'select' | 'addBar' | 'addPanel' | 'grid') => void;
+  mode: 'select' | 'addBar' | 'addPanel' | 'grid' | 'lines';
+  setMode: (m: 'select' | 'addBar' | 'addPanel' | 'grid' | 'lines') => void;
+  gridCoords?: { x: number[]; y: number[]; z: number[] };
+  setGridCoords?: React.Dispatch<React.SetStateAction<{ x: number[]; y: number[]; z: number[] }>>;
+  activeGridAxis?: 'X' | 'Y' | 'Z';
+  setActiveGridAxis?: (axis: 'X' | 'Y' | 'Z') => void;
   panelShape?: PanelShape;
   setPanelShape?: (s: PanelShape) => void;
   panelPoints?: number[];
@@ -291,7 +301,6 @@ interface SidebarProps {
   probe: { elId: number | null; t: number };
   setProbe: React.Dispatch<React.SetStateAction<{ elId: number | null; t: number }>>;
   onInvalidateResults: () => void;
-  onNodeCoordinateSet?: (coord: { x: number; y: number; z: number }) => void;
   onNodePlaced?: (id: number) => void;
   onElemDrawn?: (id: number) => void;
   defaultSectionId: number;
@@ -307,6 +316,8 @@ interface SidebarProps {
   setTransformConnect?: React.Dispatch<React.SetStateAction<boolean>>;
   transformRepeat?: number;
   setTransformRepeat?: React.Dispatch<React.SetStateAction<number>>;
+  transformLoads?: boolean;
+  setTransformLoads?: React.Dispatch<React.SetStateAction<boolean>>;
   moveDx?: number;
   setMoveDx?: React.Dispatch<React.SetStateAction<number>>;
   moveDy?: number;
@@ -339,6 +350,14 @@ interface SidebarProps {
   setScaleCz?: React.Dispatch<React.SetStateAction<number>>;
   scaleFactor?: number;
   setScaleFactor?: React.Dispatch<React.SetStateAction<number>>;
+  splitFormOpen?: boolean;
+  setSplitFormOpen?: React.Dispatch<React.SetStateAction<boolean>>;
+  splitMode?: 'single' | 'multi';
+  setSplitMode?: React.Dispatch<React.SetStateAction<'single' | 'multi'>>;
+  splitT?: number;
+  setSplitT?: React.Dispatch<React.SetStateAction<number>>;
+  splitN?: number;
+  setSplitN?: React.Dispatch<React.SetStateAction<number>>;
   pickMoveVectorActive?: boolean;
   pickMoveVectorStep?: 1 | 2;
   onStartPickMoveVector?: () => void;
@@ -347,6 +366,11 @@ interface SidebarProps {
   onStartPickPoint?: (target: 'rotateCenter' | 'mirrorPoint' | 'scaleCenter') => void;
   onCancelPickMode?: () => void;
   mergeTolerance?: number;
+  setStatusHint?: (msg: string) => void;
+  drawConstructionGrid?: boolean;
+  setDrawConstructionGrid?: React.Dispatch<React.SetStateAction<boolean>>;
+  drawOuterDimensionLines?: boolean;
+  setDrawOuterDimensionLines?: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -414,7 +438,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   probe,
   setProbe,
   onInvalidateResults,
-  onNodeCoordinateSet,
   onNodePlaced,
   onElemDrawn,
   defaultSectionId,
@@ -429,6 +452,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setTransformConnect: propSetTransformConnect,
   transformRepeat: propTransformRepeat,
   setTransformRepeat: propSetTransformRepeat,
+  transformLoads: propTransformLoads,
+  setTransformLoads: propSetTransformLoads,
   moveDx: propMoveDx,
   setMoveDx: propSetMoveDx,
   moveDy: propMoveDy,
@@ -461,6 +486,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setScaleCz = (_v: React.SetStateAction<number>) => {},
   scaleFactor = 1.5,
   setScaleFactor = (_v: React.SetStateAction<number>) => {},
+  splitFormOpen: propSplitFormOpen,
+  setSplitFormOpen: propSetSplitFormOpen,
+  splitMode: propSplitMode,
+  setSplitMode: propSetSplitMode,
+  splitT: propSplitT,
+  setSplitT: propSetSplitT,
+  splitN: propSplitN,
+  setSplitN: propSetSplitN,
   pickMoveVectorActive = false,
   pickMoveVectorStep = 1,
   onStartPickMoveVector = () => {},
@@ -469,6 +502,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onStartPickPoint = (_target: 'rotateCenter' | 'mirrorPoint' | 'scaleCenter') => {},
   onCancelPickMode = () => {},
   mergeTolerance = 0.001,
+  setStatusHint,
+  gridCoords = { x: [], y: [], z: [] },
+  setGridCoords = (_action) => {},
+  activeGridAxis = 'X',
+  setActiveGridAxis = (_axis) => {},
+  drawConstructionGrid = true,
+  setDrawConstructionGrid = () => {},
+  drawOuterDimensionLines = true,
+  setDrawOuterDimensionLines = () => {},
 }) => {
   const [addBarCoordsCollapsed, setAddBarCoordsCollapsed] = useState(false);
   const [nodesGroupCollapsed, setNodesGroupCollapsed] = useState(false);
@@ -478,10 +520,66 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [analysisCollapsed, setAnalysisCollapsed] = useState(false);
   const [libraryCollapsed, setLibraryCollapsed] = useState(false);
 
+  // State for axis grid custom coordinate input
+  const [newCoordVal, setNewCoordVal] = useState<string>('');
+
+  const parseCoordsText = (text: string): number[] => {
+    return text
+      .split(/[\s,;]+/)
+      .map(val => val.trim())
+      .filter(val => val !== '' && !isNaN(Number(val)))
+      .map(val => Math.round(Number(val) * 1000) / 1000);
+  };
+
+  const handleAddCoordinates = () => {
+    if (!newCoordVal.trim()) return;
+    const values = parseCoordsText(newCoordVal);
+    if (values.length === 0) return;
+
+    setGridCoords(prev => {
+      const axisKey = activeGridAxis.toLowerCase() as 'x' | 'y' | 'z';
+      const currentList = prev[axisKey] || [];
+      const updated = Array.from(new Set([...currentList, ...values])).sort((a, b) => a - b);
+      return {
+        ...prev,
+        [axisKey]: updated
+      };
+    });
+    setNewCoordVal('');
+  };
+
+  const handleRemoveCoordinates = () => {
+    if (!newCoordVal.trim()) return;
+    const values = parseCoordsText(newCoordVal);
+    if (values.length === 0) return;
+
+    setGridCoords(prev => {
+      const axisKey = activeGridAxis.toLowerCase() as 'x' | 'y' | 'z';
+      const currentList = prev[axisKey] || [];
+      const updated = currentList.filter(v => !values.includes(v));
+      return {
+        ...prev,
+        [axisKey]: updated
+      };
+    });
+    setNewCoordVal('');
+  };
+
+  const handleClearCoordinates = () => {
+    setGridCoords(prev => {
+      const axisKey = activeGridAxis.toLowerCase() as 'x' | 'y' | 'z';
+      return {
+        ...prev,
+        [axisKey]: []
+      };
+    });
+  };
+
   // Internal Form states fallback for unified operations in Properties (Move, Rotate, Mirror, Scale)
   const [internalTransformWithCopy, setInternalTransformWithCopy] = useState(false);
   const [internalTransformConnect, setInternalTransformConnect] = useState(false);
   const [internalTransformRepeat, setInternalTransformRepeat] = useState(1);
+  const [internalTransformLoads, setInternalTransformLoads] = useState(true);
   const [internalMoveDx, setInternalMoveDx] = useState(2);
   const [internalMoveDy, setInternalMoveDy] = useState(0);
   const [internalMoveDz, setInternalMoveDz] = useState(0);
@@ -495,6 +593,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const transformRepeat = propTransformRepeat !== undefined ? propTransformRepeat : internalTransformRepeat;
   const setTransformRepeat = propSetTransformRepeat || setInternalTransformRepeat;
 
+  const transformLoads = propTransformLoads !== undefined ? propTransformLoads : internalTransformLoads;
+  const setTransformLoads = propSetTransformLoads || setInternalTransformLoads;
+
   const moveDx = propMoveDx !== undefined ? propMoveDx : internalMoveDx;
   const setMoveDx = propSetMoveDx || setInternalMoveDx;
 
@@ -503,6 +604,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const moveDz = propMoveDz !== undefined ? propMoveDz : internalMoveDz;
   const setMoveDz = propSetMoveDz || setInternalMoveDz;
+
+  const [memberLoadCoordSys, setMemberLoadCoordSys] = useState<'global' | 'local'>('global');
 
   const transformCardRef = useRef<HTMLDivElement | null>(null);
   const transformBtnRef = useRef<HTMLDivElement | null>(null);
@@ -525,10 +628,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
     [activeTransformMode, pickMoveVectorActive, pickTransformPointActive, setActiveTransformMode, onCancelPickMode]
   );
 
-  const [splitFormOpen, setSplitFormOpen] = useState(false);
-  const [splitMode, setSplitMode] = useState<'single' | 'multi'>('single');
-  const [splitT, setSplitT] = useState(0.5);
-  const [splitN, setSplitN] = useState(2);
+  const [internalSplitFormOpen, setInternalSplitFormOpen] = useState(false);
+  const [internalSplitMode, setInternalSplitMode] = useState<'single' | 'multi'>('single');
+  const [internalSplitT, setInternalSplitT] = useState(0.5);
+  const [internalSplitN, setInternalSplitN] = useState(2);
+
+  const splitFormOpen = propSplitFormOpen !== undefined ? propSplitFormOpen : internalSplitFormOpen;
+  const setSplitFormOpen = propSetSplitFormOpen || setInternalSplitFormOpen;
+  const splitMode = propSplitMode !== undefined ? propSplitMode : internalSplitMode;
+  const setSplitMode = propSetSplitMode || setInternalSplitMode;
+  const splitT = propSplitT !== undefined ? propSplitT : internalSplitT;
+  const setSplitT = propSetSplitT || setInternalSplitT;
+  const splitN = propSplitN !== undefined ? propSplitN : internalSplitN;
+  const setSplitN = propSetSplitN || setInternalSplitN;
 
   // Add Bar coordinate inputs state
   const [addBarRel, setAddBarRel] = useState(false);
@@ -630,13 +742,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const newSelectedNodes = selectedNodeIds.map(id => nodeMap.get(id) ?? id);
     setSelectedNodeIds([...new Set(newSelectedNodes)]);
 
-    if (onNodeCoordinateSet && newSelectedNodes.length === 1) {
-      const mergedNode = mergedNodes.find(n => n.id === newSelectedNodes[0]);
-      if (mergedNode) {
-        onNodeCoordinateSet(mergedNode);
-      }
-    }
-    
     onInvalidateResults();
   };
 
@@ -645,6 +750,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const nodeIdsToDelete = new Set(selectedNodeIds);
     const elemIdsToDelete = new Set(selectedElemIds);
     const panelIdsToDelete = new Set(selectedPanelIds);
+
+    const deletedElements = elements.filter(
+      (e) =>
+        elemIdsToDelete.has(e.id) ||
+        nodeIdsToDelete.has(e.n1) ||
+        nodeIdsToDelete.has(e.n2)
+    );
+    const deletedPanels = (panels || []).filter(
+      (p) =>
+        panelIdsToDelete.has(p.id) ||
+        p.nodeIds.some((nid) => nodeIdsToDelete.has(nid))
+    );
+    const deletedNodeCount = selectedNodeIds.length;
+    const deletedElemCount = deletedElements.length;
+    const deletedPanelCount = deletedPanels.length;
 
     setElements((prev) =>
       prev.filter(
@@ -670,6 +790,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (setActiveTransformMode) setActiveTransformMode('none');
     setSplitFormOpen(false);
     onInvalidateResults();
+
+    if (setStatusHint) {
+      const parts: string[] = [];
+      if (deletedElemCount > 0) parts.push(pluralUnit(deletedElemCount, 'pręt', 'pręty', 'prętów'));
+      if (deletedNodeCount > 0) parts.push(pluralUnit(deletedNodeCount, 'węzeł', 'węzły', 'węzłów'));
+      if (deletedPanelCount > 0) parts.push(pluralUnit(deletedPanelCount, 'okładzinę', 'okładziny', 'okładzin'));
+      if (parts.length > 0) {
+        setStatusHint(`Usunięto: ${parts.join(', ')}.`);
+      }
+    }
   };
 
   // Unified Transformation Action (Move, Rotate, Mirror, Scale)
@@ -724,14 +854,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
         const [tx, ty, tz] = transformPoint([n.x, n.y, n.z], tMode, params, 1);
         
         let transformedForce = n.force;
-        if (n.force) {
-          const [fx, fy, fz] = transformVector([n.force.Fx, n.force.Fy, n.force.Fz], tMode, params, 1);
-          transformedForce = { Fx: fx, Fy: fy, Fz: fz };
-        }
         let transformedMoment = n.moment;
-        if (n.moment) {
-          const [mx, my, mz] = transformVector([n.moment.Mx, n.moment.My, n.moment.Mz], tMode, params, 1);
-          transformedMoment = { Mx: mx, My: my, Mz: mz };
+        if (transformLoads) {
+          if (n.force) {
+            const [fx, fy, fz] = transformVector([n.force.Fx, n.force.Fy, n.force.Fz], tMode, params, 1);
+            transformedForce = { Fx: round4(fx), Fy: round4(fy), Fz: round4(fz) };
+          }
+          if (n.moment) {
+            const [mx, my, mz] = transformVector([n.moment.Mx, n.moment.My, n.moment.Mz], tMode, params, 1);
+            transformedMoment = { Mx: round4(mx), My: round4(my), Mz: round4(mz) };
+          }
         }
 
         return {
@@ -753,15 +885,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
         const newRollAngle = getTransformedRollAngle(origN1, origN2, el.rollAngle || 0, tMode, params, 1);
 
         let transformedQ = el.q;
-        if (el.q) {
+        if (el.q && transformLoads) {
           if (el.q.coordinateSystem === 'global') {
             const [qxS, qyS, qzS] = transformVector([el.q.qxStart, el.q.qyStart, el.q.qzStart], tMode, params, 1);
             const [qxE, qyE, qzE] = transformVector([el.q.qxEnd, el.q.qyEnd, el.q.qzEnd], tMode, params, 1);
             transformedQ = {
               ...el.q,
-              qxStart: qxS, qxEnd: qxE,
-              qyStart: qyS, qyEnd: qyE,
-              qzStart: qzS, qzEnd: qzE,
+              qxStart: round4(qxS), qxEnd: round4(qxE),
+              qyStart: round4(qyS), qyEnd: round4(qyE),
+              qzStart: round4(qzS), qzEnd: round4(qzE),
             };
           } else {
             const origAxes = computeLocalAxesForNodes(origN1, origN2, el.rollAngle || 0);
@@ -799,11 +931,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             transformedQ = {
               ...el.q,
-              qyStart: qyS, qyEStart: undefined,
-              qyEnd: qyE,
-              qzStart: qzS,
-              qzEnd: qzE,
-            } as any;
+              qxStart: round4(el.q.qxStart),
+              qxEnd: round4(el.q.qxEnd),
+              qyStart: round4(qyS),
+              qyEnd: round4(qyE),
+              qzStart: round4(qzS),
+              qzEnd: round4(qzE),
+            };
           }
         }
 
@@ -811,6 +945,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
           ...el,
           rollAngle: newRollAngle,
           q: transformedQ,
+        };
+      });
+
+      nextPanels = nextPanels.map((p) => {
+        if (!selectedPanelIds.includes(p.id)) return p;
+        let transformedPressure = p.pressure;
+        if (p.pressure && transformLoads) {
+          if (p.pressure.dir !== 'normal') {
+            const [vx, vy, vz] = transformVector(
+              [
+                p.pressure.dir === 'X' ? 1 : 0,
+                p.pressure.dir === 'Y' ? 1 : 0,
+                p.pressure.dir === 'Z' ? 1 : 0,
+              ],
+              tMode,
+              params,
+              1
+            );
+            const absX = Math.abs(vx);
+            const absY = Math.abs(vy);
+            const absZ = Math.abs(vz);
+            if (absX >= absY && absX >= absZ && absX > 1e-4) {
+              transformedPressure = { dir: 'X', value: Math.round(p.pressure.value * (vx > 0 ? 1 : -1) * 1e4) / 1e4 };
+            } else if (absY >= absX && absY >= absZ && absY > 1e-4) {
+              transformedPressure = { dir: 'Y', value: Math.round(p.pressure.value * (vy > 0 ? 1 : -1) * 1e4) / 1e4 };
+            } else if (absZ >= absX && absZ >= absY && absZ > 1e-4) {
+              transformedPressure = { dir: 'Z', value: Math.round(p.pressure.value * (vz > 0 ? 1 : -1) * 1e4) / 1e4 };
+            }
+          }
+        }
+        return {
+          ...p,
+          pressure: transformedPressure,
         };
       });
 
@@ -853,14 +1020,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
           const [tx, ty, tz] = transformPoint([origNode.x, origNode.y, origNode.z], tMode, params, step);
 
           let transformedForce = origNode.force;
-          if (origNode.force) {
-            const [fx, fy, fz] = transformVector([origNode.force.Fx, origNode.force.Fy, origNode.force.Fz], tMode, params, step);
-            transformedForce = { Fx: fx, Fy: fy, Fz: fz };
-          }
           let transformedMoment = origNode.moment;
-          if (origNode.moment) {
-            const [mx, my, mz] = transformVector([origNode.moment.Mx, origNode.moment.My, origNode.moment.Mz], tMode, params, step);
-            transformedMoment = { Mx: mx, My: my, Mz: mz };
+          if (transformLoads) {
+            if (origNode.force) {
+              const [fx, fy, fz] = transformVector([origNode.force.Fx, origNode.force.Fy, origNode.force.Fz], tMode, params, step);
+              transformedForce = { Fx: round4(fx), Fy: round4(fy), Fz: round4(fz) };
+            }
+            if (origNode.moment) {
+              const [mx, my, mz] = transformVector([origNode.moment.Mx, origNode.moment.My, origNode.moment.Mz], tMode, params, step);
+              transformedMoment = { Mx: round4(mx), My: round4(my), Mz: round4(mz) };
+            }
           }
 
           const newN: Node3D = {
@@ -910,15 +1079,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
           if (origN1 && origN2) {
             newRollAngle = getTransformedRollAngle(origN1, origN2, origEl.rollAngle || 0, tMode, params, step);
 
-            if (origEl.q) {
+            if (origEl.q && transformLoads) {
               if (origEl.q.coordinateSystem === 'global') {
                 const [qxS, qyS, qzS] = transformVector([origEl.q.qxStart, origEl.q.qyStart, origEl.q.qzStart], tMode, params, step);
                 const [qxE, qyE, qzE] = transformVector([origEl.q.qxEnd, origEl.q.qyEnd, origEl.q.qzEnd], tMode, params, step);
                 transformedQ = {
                   ...origEl.q,
-                  qxStart: qxS, qxEnd: qxE,
-                  qyStart: qyS, qyEnd: qyE,
-                  qzStart: qzS, qzEnd: qzE,
+                  qxStart: round4(qxS), qxEnd: round4(qxE),
+                  qyStart: round4(qyS), qyEnd: round4(qyE),
+                  qzStart: round4(qzS), qzEnd: round4(qzE),
                 };
               } else {
                 const origAxes = computeLocalAxesForNodes(origN1, origN2, origEl.rollAngle || 0);
@@ -956,11 +1125,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                 transformedQ = {
                   ...origEl.q,
-                  qyStart: qyS, qyEStart: undefined, // ensure types align
-                  qyEnd: qyE,
-                  qzStart: qzS,
-                  qzEnd: qzE,
-                } as any;
+                  qxStart: round4(origEl.q.qxStart),
+                  qxEnd: round4(origEl.q.qxEnd),
+                  qyStart: round4(qyS),
+                  qyEnd: round4(qyE),
+                  qzStart: round4(qzS),
+                  qzEnd: round4(qzE),
+                };
               }
             }
           }
@@ -981,10 +1152,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
           allCreatedPanelIds.push(newPanelId);
           const mappedNodeIds = origPan.nodeIds.map((nid) => currentStepNodeMap.get(nid)!);
 
+          let transformedPressure = origPan.pressure;
+          if (origPan.pressure && transformLoads) {
+            if (origPan.pressure.dir !== 'normal') {
+              const [vx, vy, vz] = transformVector(
+                [
+                  origPan.pressure.dir === 'X' ? 1 : 0,
+                  origPan.pressure.dir === 'Y' ? 1 : 0,
+                  origPan.pressure.dir === 'Z' ? 1 : 0,
+                ],
+                tMode,
+                params,
+                step
+              );
+              const absX = Math.abs(vx);
+              const absY = Math.abs(vy);
+              const absZ = Math.abs(vz);
+              if (absX >= absY && absX >= absZ && absX > 1e-4) {
+                transformedPressure = { dir: 'X', value: Math.round(origPan.pressure.value * (vx > 0 ? 1 : -1) * 1e4) / 1e4 };
+              } else if (absY >= absX && absY >= absZ && absY > 1e-4) {
+                transformedPressure = { dir: 'Y', value: Math.round(origPan.pressure.value * (vy > 0 ? 1 : -1) * 1e4) / 1e4 };
+              } else if (absZ >= absX && absZ >= absY && absZ > 1e-4) {
+                transformedPressure = { dir: 'Z', value: Math.round(origPan.pressure.value * (vz > 0 ? 1 : -1) * 1e4) / 1e4 };
+              }
+            }
+          }
+
           const newPan: Panel3D = {
             ...JSON.parse(JSON.stringify(origPan)),
             id: newPanelId,
             nodeIds: mappedNodeIds,
+            pressure: transformedPressure,
           };
           nextPanels.push(newPan);
         });
@@ -1025,6 +1223,41 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     if (setActiveTransformMode) setActiveTransformMode('none');
     onInvalidateResults();
+
+    if (setStatusHint) {
+      const parts: string[] = [];
+      if (transformWithCopy) {
+        if (mappedElemIds.length > 0) parts.push(pluralUnit(mappedElemIds.length, 'pręt', 'pręty', 'prętów'));
+        if (mappedNodeIds.length > 0) parts.push(pluralUnit(mappedNodeIds.length, 'węzeł', 'węzły', 'węzłów'));
+        if (mappedPanelIds.length > 0) parts.push(pluralUnit(mappedPanelIds.length, 'okładzinę', 'okładziny', 'okładzin'));
+        const createdSummary = parts.length > 0 ? parts.join(', ') : 'elementy';
+
+        if (tMode === 'move') {
+          setStatusHint(`Przeniesiono z kopią (${repeat}x): utworzono ${createdSummary} [dx=${params.moveDx}, dy=${params.moveDy}, dz=${params.moveDz}] m.`);
+        } else if (tMode === 'rotate') {
+          setStatusHint(`Obrócono z kopią (${repeat}x): utworzono ${createdSummary} (o ${params.rotateAngleDeg * repeat}° wokół osi ${params.rotateAxis}).`);
+        } else if (tMode === 'mirror') {
+          setStatusHint(`Odbito lustrzanie z kopią: utworzono ${createdSummary} względem płaszczyzny ${params.mirrorPlane}.`);
+        } else if (tMode === 'scale') {
+          setStatusHint(`Przeskalowano z kopią (${repeat}x): utworzono ${createdSummary} (skala ${params.scaleFactor}).`);
+        }
+      } else {
+        if (selectedElemIds.length > 0) parts.push(pluralUnit(selectedElemIds.length, 'pręt', 'pręty', 'prętów'));
+        if (selectedNodeIds.length > 0) parts.push(pluralUnit(selectedNodeIds.length, 'węzeł', 'węzły', 'węzłów'));
+        if (selectedPanelIds.length > 0) parts.push(pluralUnit(selectedPanelIds.length, 'okładzinę', 'okładziny', 'okładzin'));
+        const transformedSummary = parts.length > 0 ? parts.join(', ') : 'zaznaczenie';
+
+        if (tMode === 'move') {
+          setStatusHint(`Przesunięto: ${transformedSummary} o wektor [dx=${params.moveDx}, dy=${params.moveDy}, dz=${params.moveDz}] m.`);
+        } else if (tMode === 'rotate') {
+          setStatusHint(`Obrócono: ${transformedSummary} o kąt ${params.rotateAngleDeg}° wokół osi ${params.rotateAxis}.`);
+        } else if (tMode === 'mirror') {
+          setStatusHint(`Odbito lustrzanie: ${transformedSummary} względem płaszczyzny ${params.mirrorPlane}.`);
+        } else if (tMode === 'scale') {
+          setStatusHint(`Przeskalowano: ${transformedSummary} ze współczynnikiem skali ${params.scaleFactor}.`);
+        }
+      }
+    }
   };
   // Split element action
   const confirmSplit = (elId: number | '__bulk__' = '__bulk__') => {
@@ -1048,7 +1281,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       if (!a || !b) return;
 
       const numParts = splitMode === 'single' ? 2 : splitN;
-      const intermediateNodeIds: number[] = [el.n1];
+      const chain: { t: number; nodeId: number }[] = [{ t: 0, nodeId: el.n1 }];
 
       for (let i = 1; i < numParts; i++) {
         const t = splitMode === 'single' ? splitT : i / numParts;
@@ -1063,16 +1296,56 @@ export const Sidebar: React.FC<SidebarProps> = ({
           mass: null,
         };
         addedNodes.push(midN);
-        intermediateNodeIds.push(midN.id);
+        chain.push({ t, nodeId: midN.id });
       }
-      intermediateNodeIds.push(el.n2);
+      chain.push({ t: 1, nodeId: el.n2 });
 
-      for (let i = 0; i < intermediateNodeIds.length - 1; i++) {
+      const lerp = (v0: number, v1: number, param: number) => v0 + (v1 - v0) * param;
+
+      for (let i = 0; i < chain.length - 1; i++) {
+        const isFirst = i === 0;
+        const isLast = i === chain.length - 2;
+        const ta = chain[i].t;
+        const tb = chain[i + 1].t;
+
+        const segHinges: MemberHinges3D = {
+          start_ux: isFirst ? !!el.hinges?.start_ux : false,
+          start_uy: isFirst ? !!el.hinges?.start_uy : false,
+          start_uz: isFirst ? !!el.hinges?.start_uz : false,
+          start_rx: isFirst ? !!el.hinges?.start_rx : false,
+          start_ry: isFirst ? !!el.hinges?.start_ry : false,
+          start_rz: isFirst ? !!el.hinges?.start_rz : false,
+          end_ux: isLast ? !!el.hinges?.end_ux : false,
+          end_uy: isLast ? !!el.hinges?.end_uy : false,
+          end_uz: isLast ? !!el.hinges?.end_uz : false,
+          end_rx: isLast ? !!el.hinges?.end_rx : false,
+          end_ry: isLast ? !!el.hinges?.end_ry : false,
+          end_rz: isLast ? !!el.hinges?.end_rz : false,
+        };
+
+        let segQ = null;
+        if (el.q) {
+          segQ = {
+            coordinateSystem: el.q.coordinateSystem,
+            qxStart: Math.round(lerp(el.q.qxStart, el.q.qxEnd, ta) * 1e4) / 1e4,
+            qxEnd: Math.round(lerp(el.q.qxStart, el.q.qxEnd, tb) * 1e4) / 1e4,
+            qyStart: Math.round(lerp(el.q.qyStart, el.q.qyEnd, ta) * 1e4) / 1e4,
+            qyEnd: Math.round(lerp(el.q.qyStart, el.q.qyEnd, tb) * 1e4) / 1e4,
+            qzStart: Math.round(lerp(el.q.qzStart, el.q.qzEnd, ta) * 1e4) / 1e4,
+            qzEnd: Math.round(lerp(el.q.qzStart, el.q.qzEnd, tb) * 1e4) / 1e4,
+          };
+        }
+
         const seg: Element3D = {
-          ...JSON.parse(JSON.stringify(el)),
           id: nextEId++,
-          n1: intermediateNodeIds[i],
-          n2: intermediateNodeIds[i + 1],
+          n1: chain[i].nodeId,
+          n2: chain[i + 1].nodeId,
+          sectionId: el.sectionId,
+          materialId: el.materialId,
+          rollAngle: el.rollAngle,
+          hinges: segHinges,
+          q: segQ,
+          thermal: el.thermal ? { ...el.thermal } : null,
         };
         addedElements.push(seg);
       }
@@ -1086,6 +1359,55 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setSplitFormOpen(false);
     setSelectedElemIds(addedElements.map((e) => e.id));
     onInvalidateResults();
+
+    if (setStatusHint) {
+      const barsText = pluralUnit(targetEls.length, 'pręt', 'pręty', 'prętów');
+      const segsText = pluralUnit(addedElements.length, 'odcinek', 'odcinki', 'odcinków');
+      const nodesText = pluralUnit(addedNodes.length, 'nowy węzeł', 'nowe węzły', 'nowych węzłów');
+      if (splitMode === 'single') {
+        setStatusHint(`Podzielono: ${barsText} w punkcie t=${splitT} (powstało ${segsText}, dodano ${nodesText}).`);
+      } else {
+        setStatusHint(`Podzielono: ${barsText} na ${splitN} części (powstało ${segsText}, dodano ${nodesText}).`);
+      }
+    }
+  };
+
+  // Find & split intersections of selected elements
+  const handleFindIntersections = () => {
+    if (selectedElemIds.length < 2) return;
+
+    const res = findAndSplitIntersections(
+      nodes,
+      elements,
+      selectedElemIds,
+      mergeTolerance || 1e-4
+    );
+
+    if (!res || res.splitElementCount === 0) {
+      if (setStatusHint) {
+        setStatusHint('Znajdź przecięcia: Nie znaleziono żadnych punktów przecięcia między zaznaczonymi prętami.');
+      } else {
+        alert('Nie znaleziono żadnych punktów przecięcia między zaznaczonymi prętami.');
+      }
+      return;
+    }
+
+    const removedSet = new Set(res.removedElementIds);
+    setNodes((prev) => [...prev, ...res.newNodes]);
+    setElements((prev) => [
+      ...prev.filter((e) => !removedSet.has(e.id)),
+      ...res.newElements,
+    ]);
+
+    setSelectedElemIds(res.newElements.map((e) => e.id));
+    onInvalidateResults();
+
+    if (setStatusHint) {
+      const barsText = res.splitElementCount === 1 ? '1 pręt' : res.splitElementCount >= 2 && res.splitElementCount <= 4 ? `${res.splitElementCount} pręty` : `${res.splitElementCount} prętów`;
+      const nodesText = res.createdNodeCount === 1 ? '1 nowy węzeł' : res.createdNodeCount >= 2 && res.createdNodeCount <= 4 ? `${res.createdNodeCount} nowe węzły` : `${res.createdNodeCount} nowych węzłów`;
+      const segsText = res.newSegmentCount === 1 ? '1 odcinek' : res.newSegmentCount >= 2 && res.newSegmentCount <= 4 ? `${res.newSegmentCount} odcinki` : `${res.newSegmentCount} odcinków`;
+      setStatusHint(`Znaleziono przecięcia: podzielono ${barsText} (powstało ${segsText}), dodano ${nodesText}.`);
+    }
   };
 
   // Support presets matching helper (like Materia Lite)
@@ -1231,11 +1553,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Node forces (Fx, Fy, Fz)
   const updateNodeForce = (field: 'Fx' | 'Fy' | 'Fz', v: number) => {
+    const val = round4(v);
     setNodes((prev) =>
       prev.map((n) => {
         if (!selectedNodeIds.includes(n.id)) return n;
         const f = n.force ? { ...n.force } : { Fx: 0, Fy: 0, Fz: 0 };
-        f[field] = v;
+        f[field] = val;
         const isAllZero = (f.Fx === 0 || !f.Fx) && (f.Fy === 0 || !f.Fy) && (f.Fz === 0 || !f.Fz);
         return { ...n, force: isAllZero ? null : f };
       })
@@ -1245,11 +1568,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Node moments (Mx, My, Mz)
   const updateNodeMoment = (field: 'Mx' | 'My' | 'Mz', v: number) => {
+    const val = round4(v);
     setNodes((prev) =>
       prev.map((n) => {
         if (!selectedNodeIds.includes(n.id)) return n;
         const m = n.moment ? { ...n.moment } : { Mx: 0, My: 0, Mz: 0 };
-        m[field] = v;
+        m[field] = val;
         const isAllZero = (m.Mx === 0 || !m.Mx) && (m.My === 0 || !m.My) && (m.Mz === 0 || !m.Mz);
         return { ...n, moment: isAllZero ? null : m };
       })
@@ -1310,9 +1634,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ]);
     }
 
-    if (onNodeCoordinateSet) {
-      onNodeCoordinateSet({ x: targetX, y: targetY, z: targetZ });
-    }
     if (onNodePlaced) {
       onNodePlaced(targetNodeId);
     }
@@ -1413,9 +1734,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ]);
     }
 
-    if (onNodeCoordinateSet) {
-      onNodeCoordinateSet({ x: targetX, y: targetY, z: targetZ });
-    }
     if (targetNodeId != null && onNodePlaced) {
       onNodePlaced(targetNodeId);
     }
@@ -2263,6 +2581,311 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             )}
           </div>
+        ) : mode === 'lines' ? (
+          <div className="sidebar-group">
+            <div className="group-header">
+              <div className="group-title">
+                <span>Siatka osiowa (XYZ)</span>
+                <span className="group-tag">
+                  Główna siatka konstrukcyjna
+                </span>
+              </div>
+            </div>
+            <div className="group-body">
+              <div className="panel" style={{ padding: '12px' }}>
+                <p style={{ fontSize: '11px', color: 'var(--text-secondary, #64748b)', marginBottom: '12px', lineHeight: '1.4' }}>
+                  Wskaż aktywną oś (klikając odpowiednią kolumnę), wpisz współrzędne, a następnie kliknij <strong>Dodaj</strong> lub klikaj bezpośrednio na modelu 3D, aby dodawać linie osiowe.
+                </p>
+
+                {/* Input control row */}
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                  <input
+                    type="text"
+                    className="sidebar-input"
+                    style={{ flex: 1, fontSize: '12px', padding: '6px' }}
+                    placeholder="Współrzędna (np. 3.5 lub 0, 3, 6)"
+                    value={newCoordVal}
+                    onChange={(e) => setNewCoordVal(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleAddCoordinates();
+                    }}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: '4px', marginBottom: '16px' }}>
+                  <button
+                    type="button"
+                    style={{ flex: 1, padding: '6px 10px', fontSize: '11px', background: 'var(--accent, #3b82f6)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                    onClick={handleAddCoordinates}
+                  >
+                    Dodaj
+                  </button>
+                  <button
+                    type="button"
+                    style={{ flex: 1, padding: '6px 10px', fontSize: '11px', background: 'transparent', color: '#ef4444', border: '1px solid #ef4444', borderRadius: '4px', cursor: 'pointer' }}
+                    onClick={handleRemoveCoordinates}
+                  >
+                    Usuń
+                  </button>
+                  <button
+                    type="button"
+                    style={{ flex: 1, padding: '6px 10px', fontSize: '11px', background: 'transparent', color: '#64748b', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer' }}
+                    onClick={handleClearCoordinates}
+                  >
+                    Wyczyść
+                  </button>
+                </div>
+
+                {/* 3 columns of data */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '16px' }}>
+                  {/* Column X */}
+                  <div style={{
+                    border: activeGridAxis === 'X' ? '1px solid var(--accent, #3b82f6)' : '1px solid var(--border, #e2e8f0)',
+                    borderRadius: '6px',
+                    padding: '8px',
+                    background: activeGridAxis === 'X' ? 'rgba(59, 130, 246, 0.03)' : 'transparent',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    minHeight: '140px'
+                  }} onClick={() => setActiveGridAxis?.('X')}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '6px', borderBottom: '1px solid var(--border, #e2e8f0)', paddingBottom: '4px' }}>
+                      <input
+                        type="radio"
+                        id="axis_col_x"
+                        name="active_grid_col_axis"
+                        checked={activeGridAxis === 'X'}
+                        onChange={() => setActiveGridAxis?.('X')}
+                        style={{ cursor: 'pointer', margin: 0 }}
+                      />
+                      <label htmlFor="axis_col_x" style={{ fontWeight: 'bold', fontSize: '11px', cursor: 'pointer', color: activeGridAxis === 'X' ? 'var(--accent)' : 'inherit' }}>
+                        Oś X
+                      </label>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', overflowY: 'auto', flex: 1, maxHeight: '200px' }}>
+                      {gridCoords.x.length === 0 ? (
+                        <span style={{ fontSize: '10px', color: '#94a3b8', fontStyle: 'italic', textAlign: 'center', marginTop: '10px' }}>Brak</span>
+                      ) : (
+                        gridCoords.x.map((val) => (
+                          <div key={val} style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            background: 'rgba(59, 130, 246, 0.08)',
+                            color: 'var(--accent, #2563eb)',
+                            padding: '2px 4px',
+                            borderRadius: '4px',
+                            fontSize: '10px',
+                            border: '1px solid rgba(59, 130, 246, 0.15)'
+                          }}>
+                            <span>{val.toFixed(2)} m</span>
+                            <button
+                              type="button"
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                cursor: 'pointer',
+                                padding: '0 2px',
+                                color: '#ef4444',
+                                fontSize: '10px',
+                                fontWeight: 'bold',
+                                lineHeight: 1
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const updated = gridCoords.x.filter(v => v !== val);
+                                setGridCoords(prev => ({ ...prev, x: updated }));
+                              }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Column Y */}
+                  <div style={{
+                    border: activeGridAxis === 'Y' ? '1px solid var(--accent, #3b82f6)' : '1px solid var(--border, #e2e8f0)',
+                    borderRadius: '6px',
+                    padding: '8px',
+                    background: activeGridAxis === 'Y' ? 'rgba(59, 130, 246, 0.03)' : 'transparent',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    minHeight: '140px'
+                  }} onClick={() => setActiveGridAxis?.('Y')}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '6px', borderBottom: '1px solid var(--border, #e2e8f0)', paddingBottom: '4px' }}>
+                      <input
+                        type="radio"
+                        id="axis_col_y"
+                        name="active_grid_col_axis"
+                        checked={activeGridAxis === 'Y'}
+                        onChange={() => setActiveGridAxis?.('Y')}
+                        style={{ cursor: 'pointer', margin: 0 }}
+                      />
+                      <label htmlFor="axis_col_y" style={{ fontWeight: 'bold', fontSize: '11px', cursor: 'pointer', color: activeGridAxis === 'Y' ? 'var(--accent)' : 'inherit' }}>
+                        Oś Y
+                      </label>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', overflowY: 'auto', flex: 1, maxHeight: '200px' }}>
+                      {gridCoords.y.length === 0 ? (
+                        <span style={{ fontSize: '10px', color: '#94a3b8', fontStyle: 'italic', textAlign: 'center', marginTop: '10px' }}>Brak</span>
+                      ) : (
+                        gridCoords.y.map((val) => (
+                          <div key={val} style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            background: 'rgba(59, 130, 246, 0.08)',
+                            color: 'var(--accent, #2563eb)',
+                            padding: '2px 4px',
+                            borderRadius: '4px',
+                            fontSize: '10px',
+                            border: '1px solid rgba(59, 130, 246, 0.15)'
+                          }}>
+                            <span>{val.toFixed(2)} m</span>
+                            <button
+                              type="button"
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                cursor: 'pointer',
+                                padding: '0 2px',
+                                color: '#ef4444',
+                                fontSize: '10px',
+                                fontWeight: 'bold',
+                                lineHeight: 1
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const updated = gridCoords.y.filter(v => v !== val);
+                                setGridCoords(prev => ({ ...prev, y: updated }));
+                              }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Column Z */}
+                  <div style={{
+                    border: activeGridAxis === 'Z' ? '1px solid var(--accent, #3b82f6)' : '1px solid var(--border, #e2e8f0)',
+                    borderRadius: '6px',
+                    padding: '8px',
+                    background: activeGridAxis === 'Z' ? 'rgba(59, 130, 246, 0.03)' : 'transparent',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    minHeight: '140px'
+                  }} onClick={() => setActiveGridAxis?.('Z')}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '6px', borderBottom: '1px solid var(--border, #e2e8f0)', paddingBottom: '4px' }}>
+                      <input
+                        type="radio"
+                        id="axis_col_z"
+                        name="active_grid_col_axis"
+                        checked={activeGridAxis === 'Z'}
+                        onChange={() => setActiveGridAxis?.('Z')}
+                        style={{ cursor: 'pointer', margin: 0 }}
+                      />
+                      <label htmlFor="axis_col_z" style={{ fontWeight: 'bold', fontSize: '11px', cursor: 'pointer', color: activeGridAxis === 'Z' ? 'var(--accent)' : 'inherit' }}>
+                        Oś Z
+                      </label>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', overflowY: 'auto', flex: 1, maxHeight: '200px' }}>
+                      {gridCoords.z.length === 0 ? (
+                        <span style={{ fontSize: '10px', color: '#94a3b8', fontStyle: 'italic', textAlign: 'center', marginTop: '10px' }}>Brak</span>
+                      ) : (
+                        gridCoords.z.map((val) => (
+                          <div key={val} style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            background: 'rgba(59, 130, 246, 0.08)',
+                            color: 'var(--accent, #2563eb)',
+                            padding: '2px 4px',
+                            borderRadius: '4px',
+                            fontSize: '10px',
+                            border: '1px solid rgba(59, 130, 246, 0.15)'
+                          }}>
+                            <span>{val.toFixed(2)} m</span>
+                            <button
+                              type="button"
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                cursor: 'pointer',
+                                padding: '0 2px',
+                                color: '#ef4444',
+                                fontSize: '10px',
+                                fontWeight: 'bold',
+                                lineHeight: 1
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const updated = gridCoords.z.filter(v => v !== val);
+                                setGridCoords(prev => ({ ...prev, z: updated }));
+                              }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Display settings and persistence checkboxes */}
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px',
+                  marginTop: '12px',
+                  padding: '10px',
+                  background: 'var(--surface, #f8fafc)',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border, #e2e8f0)',
+                  marginBottom: '12px'
+                }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', cursor: 'pointer', fontWeight: 500, margin: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={drawConstructionGrid}
+                      onChange={(e) => setDrawConstructionGrid?.(e.target.checked)}
+                      style={{ cursor: 'pointer', margin: 0 }}
+                    />
+                    rysuj punkty i linie konstrukcyjne
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', cursor: 'pointer', fontWeight: 500, margin: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={drawOuterDimensionLines}
+                      onChange={(e) => setDrawOuterDimensionLines?.(e.target.checked)}
+                      style={{ cursor: 'pointer', margin: 0 }}
+                    />
+                    rysuj linie wymiarowe
+                  </label>
+                </div>
+
+                {/* HELP CARD */}
+                <div style={{
+                  background: 'var(--surface, #f8fafc)',
+                  borderRadius: '6px',
+                  padding: '10px',
+                  fontSize: '11px',
+                  color: 'var(--text-secondary, #64748b)',
+                  border: '1px dashed var(--border, #cbd5e1)',
+                  lineHeight: '1.4'
+                }}>
+                  <strong>Wskazówka:</strong> Siatka jest automatycznie rysowana, gdy co najmniej dwie osie mają wpisane współrzędne. Przecięcia osi tworzą punkty konstrukcyjne.
+                </div>
+              </div>
+            </div>
+          </div>
         ) : (
           <>
             {/* WŁAŚCIWOŚCI GÓRNY KOMUNIKAT */}
@@ -2298,17 +2921,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 {/* Wspólne przyciski operacji */}
                 <div ref={transformBtnRef} className="btnrow" style={{ marginTop: '6px', gap: '4px', flexWrap: 'wrap' }}>
                   <button
-                    className="mini danger"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 8px', fontWeight: 600 }}
+                    className="mini mini-icon danger"
                     onClick={handleDeleteSelected}
-                    title="Usuń zaznaczone obiekty"
+                    title="Usuń zaznaczone obiekty (Delete / Backspace)"
                   >
                     {ICONS.del}
-                    <span>Usuń</span>
                   </button>
                   <button
-                    className={`mini ${activeTransformMode === 'move' ? 'on' : ''}`}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 8px', fontWeight: 600 }}
+                    className={`mini mini-icon ${activeTransformMode === 'move' ? 'on' : ''}`}
                     onClick={() => {
                       if (activeTransformMode === 'move') {
                         if (setActiveTransformMode) setActiveTransformMode('none');
@@ -2321,11 +2941,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     title="Przenieś lub kopiuj zaznaczone obiekty"
                   >
                     {ICONS.moveNode}
-                    <span>Przenieś</span>
                   </button>
                   <button
-                    className={`mini ${activeTransformMode === 'rotate' ? 'on' : ''}`}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 8px', fontWeight: 600 }}
+                    className={`mini mini-icon ${activeTransformMode === 'rotate' ? 'on' : ''}`}
                     onClick={() => {
                       if (activeTransformMode === 'rotate') {
                         if (setActiveTransformMode) setActiveTransformMode('none');
@@ -2338,11 +2956,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     title="Obróć zaznaczone obiekty"
                   >
                     {ICONS.rotate}
-                    <span>Obróć</span>
                   </button>
                   <button
-                    className={`mini ${activeTransformMode === 'mirror' ? 'on' : ''}`}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 8px', fontWeight: 600 }}
+                    className={`mini mini-icon ${activeTransformMode === 'mirror' ? 'on' : ''}`}
                     onClick={() => {
                       if (activeTransformMode === 'mirror') {
                         if (setActiveTransformMode) setActiveTransformMode('none');
@@ -2355,11 +2971,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     title="Lustrzane odbicie zaznaczonych obiektów"
                   >
                     {ICONS.mirror}
-                    <span>Lustro</span>
                   </button>
                   <button
-                    className={`mini ${activeTransformMode === 'scale' ? 'on' : ''}`}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 8px', fontWeight: 600 }}
+                    className={`mini mini-icon ${activeTransformMode === 'scale' ? 'on' : ''}`}
                     onClick={() => {
                       if (activeTransformMode === 'scale') {
                         if (setActiveTransformMode) setActiveTransformMode('none');
@@ -2372,12 +2986,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     title="Skaluj zaznaczone obiekty"
                   >
                     {ICONS.scale}
-                    <span>Skaluj</span>
                   </button>
                   {selectedElemIds.length > 0 && (
                     <button
-                      className={`mini ${splitFormOpen ? 'on' : ''}`}
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 8px', fontWeight: 600 }}
+                      className={`mini mini-icon ${splitFormOpen ? 'on' : ''}`}
                       onClick={() => {
                         setSplitFormOpen(!splitFormOpen);
                         if (activeTransformMode !== 'none') {
@@ -2388,7 +3000,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       title="Podziel zaznaczone pręty"
                     >
                       {ICONS.splitBar}
-                      <span>Podziel</span>
+                    </button>
+                  )}
+                  {selectedElemIds.length >= 2 && (
+                    <button
+                      className="mini mini-icon"
+                      onClick={handleFindIntersections}
+                      title="Znajdź punkty przecięcia zaznaczonych prętów i podziel je w tych miejscach"
+                    >
+                      {ICONS.intersect}
                     </button>
                   )}
                 </div>
@@ -2599,6 +3219,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             <span className="unit">°</span>
                           </div>
                         </div>
+
+                        <div className="checkline" style={{ marginTop: '8px', marginBottom: '2px' }}>
+                          <input
+                            type="checkbox"
+                            id="chkRotateLoads"
+                            checked={transformLoads}
+                            onChange={(e) => setTransformLoads(e.target.checked)}
+                          />
+                          <label htmlFor="chkRotateLoads" style={{ cursor: 'pointer', userSelect: 'none', fontSize: '11px' }}>
+                            Obróć obciążenia
+                          </label>
+                        </div>
                       </>
                     )}
 
@@ -2670,6 +3302,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               </button>
                             ))}
                           </div>
+                        </div>
+
+                        <div className="checkline" style={{ marginTop: '8px', marginBottom: '2px' }}>
+                          <input
+                            type="checkbox"
+                            id="chkMirrorLoads"
+                            checked={transformLoads}
+                            onChange={(e) => setTransformLoads(e.target.checked)}
+                          />
+                          <label htmlFor="chkMirrorLoads" style={{ cursor: 'pointer', userSelect: 'none', fontSize: '11px' }}>
+                            Obróć obciążenia
+                          </label>
                         </div>
                       </>
                     )}
@@ -2752,64 +3396,209 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 )}
 
                 {/* Formularz Podziału */}
-                {splitFormOpen && selectedElemIds.length > 0 && (
-                  <div
-                    className="card"
-                    style={{
-                      marginTop: '10px',
-                      background: 'var(--surface)',
-                      borderColor: 'var(--input-border)',
-                    }}
-                  >
-                    <div className="btnrow" style={{ marginBottom: '8px' }}>
-                      <button
-                        type="button"
-                        className={`mini ${splitMode === 'single' ? 'on' : ''}`}
-                        onClick={() => setSplitMode('single')}
-                      >
-                        Pojedynczy podział
-                      </button>
-                      <button
-                        type="button"
-                        className={`mini ${splitMode === 'multi' ? 'on' : ''}`}
-                        onClick={() => setSplitMode('multi')}
-                      >
-                        Podział na N części
-                      </button>
-                    </div>
-                    {splitMode === 'single' ? (
-                      <div className="row">
-                        <label>Punkt t (0–1)</label>
-                        <SmartNumberInput
-                          min={0.05}
-                          max={0.95}
-                          step="0.05"
-                          value={splitT}
-                          onChange={(v) => setSplitT(v)}
-                        />
+                {splitFormOpen && selectedElemIds.length > 0 && (() => {
+                  const singleSelectedEl = selectedElements.length === 1 ? selectedElements[0] : null;
+                  const singleElN1 = singleSelectedEl ? getNode(singleSelectedEl.n1) : null;
+                  const singleElN2 = singleSelectedEl ? getNode(singleSelectedEl.n2) : null;
+                  const singleElLen = singleElN1 && singleElN2
+                    ? Math.hypot(singleElN2.x - singleElN1.x, singleElN2.y - singleElN1.y, singleElN2.z - singleElN1.z)
+                    : null;
+
+                  return (
+                    <div
+                      className="card"
+                      style={{
+                        marginTop: '10px',
+                        background: 'var(--surface)',
+                        borderColor: 'var(--input-border)',
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                        <span style={{ fontWeight: 600, fontSize: '11px', color: 'var(--text)' }}>
+                          {selectedElements.length > 1 ? `Podział (${selectedElements.length} prętów)` : `Podział pręta P${selectedElements[0]?.id}`}
+                        </span>
                       </div>
-                    ) : (
-                      <div className="row">
-                        <label>Liczba części</label>
-                        <SmartNumberInput
-                          min={2}
-                          max={20}
-                          step="1"
-                          value={splitN}
-                          onChange={(v) => setSplitN(Math.round(v))}
-                        />
+
+                      <div className="btnrow" style={{ marginBottom: '8px' }}>
+                        <button
+                          type="button"
+                          className={`mini ${splitMode === 'single' ? 'on' : ''}`}
+                          style={{ flex: 1 }}
+                          onClick={() => setSplitMode('single')}
+                        >
+                          Pojedynczy podział
+                        </button>
+                        <button
+                          type="button"
+                          className={`mini ${splitMode === 'multi' ? 'on' : ''}`}
+                          style={{ flex: 1 }}
+                          onClick={() => setSplitMode('multi')}
+                        >
+                          Podział na N części
+                        </button>
                       </div>
-                    )}
-                    <div className="btnrow" style={{ marginTop: '8px', justifyContent: 'flex-end', gap: '6px' }}>
-                      <button className="mini" onClick={() => setSplitFormOpen(false)}>
-                        Anuluj
-                      </button>
-                      <button className="mini on" onClick={() => confirmSplit('__bulk__')}>
-                        Podziel
-                      </button>
+
+                      {splitMode === 'single' ? (
+                        <>
+                          <div style={{ marginBottom: '6px' }}>
+                            <div style={{ fontSize: '10.5px', color: 'var(--text-dim)', marginBottom: '4px', fontWeight: 600 }}>
+                              Szybki wybór punktu cięcia:
+                            </div>
+                            <div className="btnrow" style={{ gap: '4px' }}>
+                              {[
+                                { label: '1/2 (50%)', val: 0.5 },
+                                { label: '1/3 (33%)', val: 0.333333 },
+                                { label: '2/3 (67%)', val: 0.666667 },
+                                { label: '1/4 (25%)', val: 0.25 },
+                                { label: '3/4 (75%)', val: 0.75 },
+                              ].map((preset) => (
+                                <button
+                                  key={preset.label}
+                                  type="button"
+                                  className={`mini ${Math.abs(splitT - preset.val) < 0.01 ? 'on' : ''}`}
+                                  style={{ padding: '2px 5px', fontSize: '10px', flex: 1 }}
+                                  onClick={() => setSplitT(preset.val)}
+                                >
+                                  {preset.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="row">
+                            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', flex: '0 0 auto' }}>
+                              <span>Współczynnik t</span>
+                              <button
+                                type="button"
+                                className="mini"
+                                style={{ padding: '2px 6px', fontSize: '10.5px', height: '22px', whiteSpace: 'nowrap' }}
+                                title="Odwróć kierunek pomiaru t (1 - t)"
+                                onClick={() => setSplitT(Math.max(0.01, Math.min(0.99, Math.round((1 - splitT) * 1000) / 1000)))}
+                              >
+                                ⇄ 1 - t
+                              </button>
+                            </label>
+                            <SmartNumberInput
+                              min={0.01}
+                              max={0.99}
+                              step="0.05"
+                              value={splitT}
+                              onChange={(v) => setSplitT(Math.max(0.01, Math.min(0.99, v)))}
+                            />
+                          </div>
+
+                          {/* Szczegóły podziału w pojedynczym trybie */}
+                          <div
+                            style={{
+                              marginTop: '6px',
+                              padding: '6px 8px',
+                              borderRadius: '4px',
+                              background: 'var(--surface-sunken)',
+                              fontSize: '10.5px',
+                              lineHeight: '1.4',
+                              border: '1px solid var(--surface-border-soft)',
+                            }}
+                          >
+                            {singleElLen != null && singleElN1 && singleElN2 ? (
+                              <>
+                                <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: '2px' }}>
+                                  Długość pręta: {singleElLen.toFixed(2)} m
+                                </div>
+                                <div style={{ color: '#2563eb', display: 'flex', justifyContent: 'space-between' }}>
+                                  <span>• Część 1 (od W{singleElN1.id}):</span>
+                                  <strong>{(splitT * singleElLen).toFixed(2)} m ({Math.round(splitT * 100)}%)</strong>
+                                </div>
+                                <div style={{ color: '#059669', display: 'flex', justifyContent: 'space-between' }}>
+                                  <span>• Część 2 (do W{singleElN2.id}):</span>
+                                  <strong>{((1 - splitT) * singleElLen).toFixed(2)} m ({Math.round((1 - splitT) * 100)}%)</strong>
+                                </div>
+                              </>
+                            ) : (
+                              <div style={{ color: 'var(--text-dim)' }}>
+                                Podział {selectedElements.length} prętów w proporcji <strong>{(splitT * 100).toFixed(0)}% / {((1 - splitT) * 100).toFixed(0)}%</strong> (+{selectedElements.length} nowych węzłów).
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ marginBottom: '6px' }}>
+                            <div style={{ fontSize: '10.5px', color: 'var(--text-dim)', marginBottom: '4px', fontWeight: 600 }}>
+                              Szybka liczba odcinków:
+                            </div>
+                            <div className="btnrow" style={{ gap: '4px' }}>
+                              {[2, 3, 4, 5, 6, 10].map((num) => (
+                                <button
+                                  key={num}
+                                  type="button"
+                                  className={`mini ${splitN === num ? 'on' : ''}`}
+                                  style={{ padding: '2px 6px', fontSize: '10px', flex: 1 }}
+                                  onClick={() => setSplitN(num)}
+                                >
+                                  {num}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="row">
+                            <label>Liczba części</label>
+                            <SmartNumberInput
+                              min={2}
+                              max={50}
+                              step="1"
+                              value={splitN}
+                              onChange={(v) => setSplitN(Math.max(2, Math.min(50, Math.round(v))))}
+                            />
+                          </div>
+
+                          {/* Szczegóły podziału na N części */}
+                          <div
+                            style={{
+                              marginTop: '6px',
+                              padding: '6px 8px',
+                              borderRadius: '4px',
+                              background: 'var(--surface-sunken)',
+                              fontSize: '10.5px',
+                              lineHeight: '1.4',
+                              border: '1px solid var(--surface-border-soft)',
+                            }}
+                          >
+                            {singleElLen != null ? (
+                              <>
+                                <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: '2px' }}>
+                                  Długość pręta: {singleElLen.toFixed(2)} m
+                                </div>
+                                <div style={{ color: 'var(--text)', display: 'flex', justifyContent: 'space-between' }}>
+                                  <span>• Długość każdego odcinka:</span>
+                                  <strong>{(singleElLen / splitN).toFixed(2)} m</strong>
+                                </div>
+                                <div style={{ color: '#ef4444', display: 'flex', justifyContent: 'space-between' }}>
+                                  <span>• Nowe węzły:</span>
+                                  <strong>+{splitN - 1}</strong>
+                                </div>
+                              </>
+                            ) : (
+                              <div style={{ color: 'var(--text-dim)' }}>
+                                Każdy z {selectedElements.length} prętów zostanie podzielony na {splitN} równych części (łącznie <strong>+{selectedElements.length * (splitN - 1)}</strong> nowych węzłów).
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
+
+                      <div className="btnrow" style={{ marginTop: '10px', justifyContent: 'flex-end', gap: '6px' }}>
+                        <button className="mini" onClick={() => setSplitFormOpen(false)}>
+                          Anuluj
+                        </button>
+                        <button className="mini on" onClick={() => confirmSplit('__bulk__')}>
+                          {selectedElements.length > 1 ? `Podziel (${selectedElements.length} pręty)` : 'Podziel pręt'}
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             )}
 
@@ -3444,98 +4233,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                     {/* OBCIĄŻENIE CIĄGŁE PRĘTA */}
                     <div className="panel">
-                      <div className="row" style={{ justifyContent: 'space-between', marginBottom: '8px' }}>
-                        <h3>Obciążenie ciągłe</h3>
-                        <div className="btnrow" style={{ gap: '2px' }}>
-                          <button
-                            type="button"
-                            className={`mini ${commonVal(selectedElements, (e) => e.q?.coordinateSystem || 'global') === 'global' ? 'on' : ''}`}
-                            style={{ fontSize: '10px', padding: '2px 6px' }}
-                            onClick={() => {
-                              setElements((prev) =>
-                                prev.map((el) =>
-                                  selectedElemIds.includes(el.id)
-                                    ? {
-                                        ...el,
-                                        q: {
-                                          coordinateSystem: 'global',
-                                          qxStart: el.q?.qxStart ?? 0,
-                                          qxEnd: el.q?.qxEnd ?? 0,
-                                          qyStart: el.q?.qyStart ?? 0,
-                                          qyEnd: el.q?.qyEnd ?? 0,
-                                          qzStart: el.q?.qzStart ?? 0,
-                                          qzEnd: el.q?.qzEnd ?? 0,
-                                        },
-                                      }
-                                    : el
-                                )
-                              );
-                              onInvalidateResults();
-                            }}
-                          >
-                            Globalny (XYZ)
-                          </button>
-                          <button
-                            type="button"
-                            className={`mini ${commonVal(selectedElements, (e) => e.q?.coordinateSystem || 'global') === 'local' ? 'on' : ''}`}
-                            style={{ fontSize: '10px', padding: '2px 6px' }}
-                            onClick={() => {
-                              setElements((prev) =>
-                                prev.map((el) =>
-                                  selectedElemIds.includes(el.id)
-                                    ? {
-                                        ...el,
-                                        q: {
-                                          coordinateSystem: 'local',
-                                          qxStart: el.q?.qxStart ?? 0,
-                                          qxEnd: el.q?.qxEnd ?? 0,
-                                          qyStart: el.q?.qyStart ?? 0,
-                                          qyEnd: el.q?.qyEnd ?? 0,
-                                          qzStart: el.q?.qzStart ?? 0,
-                                          qzEnd: el.q?.qzEnd ?? 0,
-                                        },
-                                      }
-                                    : el
-                                )
-                              );
-                              onInvalidateResults();
-                            }}
-                          >
-                            Lokalny (xyz)
-                          </button>
-                        </div>
-                      </div>
-
                       {(() => {
-                        const commonCoord = commonVal(selectedElements, (e) => e.q?.coordinateSystem || 'global');
-                        const isLoc = commonCoord === 'local';
+                        const definedCoords = selectedElements
+                          .map((e) => e.q?.coordinateSystem)
+                          .filter((c): c is 'global' | 'local' => Boolean(c));
+                        const activeCoord: 'global' | 'local' =
+                          definedCoords.length > 0 && definedCoords.every((c) => c === definedCoords[0])
+                            ? definedCoords[0]
+                            : memberLoadCoordSys;
+                        const isLoc = activeCoord === 'local';
                         const curQx = commonVal(selectedElements, (e) => e.q?.qxStart ?? 0);
                         const curQy = commonVal(selectedElements, (e) => e.q?.qyStart ?? 0);
                         const curQz = commonVal(selectedElements, (e) => e.q?.qzStart ?? 0);
 
                         const updateQ = (axis: 'x' | 'y' | 'z', val: number) => {
+                          const roundedVal = round4(val);
                           setElements((prev) =>
                             prev.map((el) => {
                               if (!selectedElemIds.includes(el.id)) return el;
-                              const coord = el.q?.coordinateSystem || (isLoc ? 'local' : 'global');
-                              const nQx = axis === 'x' ? val : (el.q?.qxStart ?? 0);
-                              const nQy = axis === 'y' ? val : (el.q?.qyStart ?? 0);
-                              const nQz = axis === 'z' ? val : (el.q?.qzStart ?? 0);
-                              const isAllZero = nQx === 0 && nQy === 0 && nQz === 0;
+                              const coord = el.q?.coordinateSystem || activeCoord;
+                              const nQx = axis === 'x' ? roundedVal : (el.q?.qxStart ?? 0);
+                              const nQy = axis === 'y' ? roundedVal : (el.q?.qyStart ?? 0);
+                              const nQz = axis === 'z' ? roundedVal : (el.q?.qzStart ?? 0);
 
                               return {
                                 ...el,
-                                q: isAllZero
-                                  ? null
-                                  : {
-                                      coordinateSystem: coord,
-                                      qxStart: nQx,
-                                      qxEnd: nQx,
-                                      qyStart: nQy,
-                                      qyEnd: nQy,
-                                      qzStart: nQz,
-                                      qzEnd: nQz,
-                                    },
+                                q: {
+                                  coordinateSystem: coord,
+                                  qxStart: round4(nQx),
+                                  qxEnd: round4(nQx),
+                                  qyStart: round4(nQy),
+                                  qyEnd: round4(nQy),
+                                  qzStart: round4(nQz),
+                                  qzEnd: round4(nQz),
+                                },
                               };
                             })
                           );
@@ -3543,56 +4274,122 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         };
 
                         return (
-                          <div className="row-triple">
-                            <div className="third">
-                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#ef4444', flexShrink: 0 }} />
-                                {isLoc ? 'qx (oś)' : 'qX'}
-                              </label>
-                              <div className="inp-unit">
-                                <SmartNumberInput
-                                  step="1"
-                                  value={curQx}
-                                  placeholder={selectedElements.length > 1 && curQx === undefined ? 'różne' : undefined}
-                                  onFocus={onInvalidateResults}
-                                  onChange={(v) => updateQ('x', v)}
-                                />
-                                <span className="unit">kN/m</span>
+                          <>
+                            <div className="row" style={{ justifyContent: 'space-between', marginBottom: '8px' }}>
+                              <h3>Obciążenie ciągłe</h3>
+                              <div className="btnrow" style={{ gap: '2px' }}>
+                                <button
+                                  type="button"
+                                  className={`mini ${activeCoord === 'global' ? 'on' : ''}`}
+                                  style={{ fontSize: '10px', padding: '2px 6px' }}
+                                  onClick={() => {
+                                    setMemberLoadCoordSys('global');
+                                    setElements((prev) =>
+                                      prev.map((el) =>
+                                        selectedElemIds.includes(el.id)
+                                          ? {
+                                              ...el,
+                                              q: {
+                                                coordinateSystem: 'global',
+                                                qxStart: el.q?.qxStart ?? 0,
+                                                qxEnd: el.q?.qxEnd ?? 0,
+                                                qyStart: el.q?.qyStart ?? 0,
+                                                qyEnd: el.q?.qyEnd ?? 0,
+                                                qzStart: el.q?.qzStart ?? 0,
+                                                qzEnd: el.q?.qzEnd ?? 0,
+                                              },
+                                            }
+                                          : el
+                                      )
+                                    );
+                                    onInvalidateResults();
+                                  }}
+                                >
+                                  Globalny (XYZ)
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`mini ${activeCoord === 'local' ? 'on' : ''}`}
+                                  style={{ fontSize: '10px', padding: '2px 6px' }}
+                                  onClick={() => {
+                                    setMemberLoadCoordSys('local');
+                                    setElements((prev) =>
+                                      prev.map((el) =>
+                                        selectedElemIds.includes(el.id)
+                                          ? {
+                                              ...el,
+                                              q: {
+                                                coordinateSystem: 'local',
+                                                qxStart: el.q?.qxStart ?? 0,
+                                                qxEnd: el.q?.qxEnd ?? 0,
+                                                qyStart: el.q?.qyStart ?? 0,
+                                                qyEnd: el.q?.qyEnd ?? 0,
+                                                qzStart: el.q?.qzStart ?? 0,
+                                                qzEnd: el.q?.qzEnd ?? 0,
+                                              },
+                                            }
+                                          : el
+                                      )
+                                    );
+                                    onInvalidateResults();
+                                  }}
+                                >
+                                  Lokalny (xyz)
+                                </button>
                               </div>
                             </div>
-                            <div className="third">
-                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#22c55e', flexShrink: 0 }} />
-                                {isLoc ? 'qy (y)' : 'qY'}
-                              </label>
-                              <div className="inp-unit">
-                                <SmartNumberInput
-                                  step="1"
-                                  value={curQy}
-                                  placeholder={selectedElements.length > 1 && curQy === undefined ? 'różne' : undefined}
-                                  onFocus={onInvalidateResults}
-                                  onChange={(v) => updateQ('y', v)}
-                                />
-                                <span className="unit">kN/m</span>
+
+                            <div className="row-triple">
+                              <div className="third">
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                  <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#ef4444', flexShrink: 0 }} />
+                                  {isLoc ? 'qx (oś)' : 'qX'}
+                                </label>
+                                <div className="inp-unit">
+                                  <SmartNumberInput
+                                    step="1"
+                                    value={curQx}
+                                    placeholder={selectedElements.length > 1 && curQx === undefined ? 'różne' : undefined}
+                                    onFocus={onInvalidateResults}
+                                    onChange={(v) => updateQ('x', v)}
+                                  />
+                                  <span className="unit">kN/m</span>
+                                </div>
+                              </div>
+                              <div className="third">
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                  <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#22c55e', flexShrink: 0 }} />
+                                  {isLoc ? 'qy (y)' : 'qY'}
+                                </label>
+                                <div className="inp-unit">
+                                  <SmartNumberInput
+                                    step="1"
+                                    value={curQy}
+                                    placeholder={selectedElements.length > 1 && curQy === undefined ? 'różne' : undefined}
+                                    onFocus={onInvalidateResults}
+                                    onChange={(v) => updateQ('y', v)}
+                                  />
+                                  <span className="unit">kN/m</span>
+                                </div>
+                              </div>
+                              <div className="third">
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                  <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', flexShrink: 0 }} />
+                                  {isLoc ? 'qz (z)' : 'qZ'}
+                                </label>
+                                <div className="inp-unit">
+                                  <SmartNumberInput
+                                    step="1"
+                                    value={curQz}
+                                    placeholder={selectedElements.length > 1 && curQz === undefined ? 'różne' : undefined}
+                                    onFocus={onInvalidateResults}
+                                    onChange={(v) => updateQ('z', v)}
+                                  />
+                                  <span className="unit">kN/m</span>
+                                </div>
                               </div>
                             </div>
-                            <div className="third">
-                              <label style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', flexShrink: 0 }} />
-                                {isLoc ? 'qz (z)' : 'qZ'}
-                              </label>
-                              <div className="inp-unit">
-                                <SmartNumberInput
-                                  step="1"
-                                  value={curQz}
-                                  placeholder={selectedElements.length > 1 && curQz === undefined ? 'różne' : undefined}
-                                  onFocus={onInvalidateResults}
-                                  onChange={(v) => updateQ('z', v)}
-                                />
-                                <span className="unit">kN/m</span>
-                              </div>
-                            </div>
-                          </div>
+                          </>
                         );
                       })()}
                     </div>
@@ -3997,13 +4794,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         };
 
                         const updatePressureVal = (value: number) => {
+                          const roundedVal = round4(value);
                           if (setPanels) {
                             setPanels((prev) =>
                               prev.map((p) => {
                                 if (!selectedPanelIds.includes(p.id)) return p;
                                 return {
                                   ...p,
-                                  pressure: { dir: p.pressure?.dir || 'normal', value },
+                                  pressure: { dir: p.pressure?.dir || 'normal', value: roundedVal },
                                 };
                               })
                             );

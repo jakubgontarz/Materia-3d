@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { RenderEngine3D, ViewCubeHit } from './render/engine3d';
 import { drawScene3D, SceneRenderOptions, getPanelCorners } from './render/scene3d';
 import {
@@ -10,6 +10,9 @@ import {
   AnalysisSettings,
   Panel3D,
   PanelShape,
+  ConstructionLine3D,
+  DimensionLine3D,
+  ToolMode,
 } from './fem/types';
 import { INITIAL_SECTIONS, INITIAL_MATERIALS } from './fem/catalogs';
 import { generate3DPortalFrame } from './fem/templates';
@@ -120,6 +123,8 @@ interface HistoryState {
   sections: Section[];
   materials: Material[];
   analysisSettings: AnalysisSettings;
+  constructionLines?: ConstructionLine3D[];
+  dimensionLines?: DimensionLine3D[];
 }
 
 interface UserPreferences {
@@ -159,6 +164,8 @@ interface UserPreferences {
   mergeTolerance?: number;
 
   allowNewNodesInBarMode?: boolean;
+  drawConstructionGrid?: boolean;
+  drawOuterDimensionLines?: boolean;
 }
 
 const PREFS_KEY = 'materia3d_user_preferences';
@@ -327,13 +334,243 @@ function drawNodeCoordTip(
   ctx.restore();
 }
 
+function drawSplitPreview(
+  ctx: CanvasRenderingContext2D,
+  engine: RenderEngine3D,
+  nodes: Node3D[],
+  elements: Element3D[],
+  selectedElemIds: number[],
+  splitMode: 'single' | 'multi',
+  splitT: number,
+  splitN: number
+) {
+  if (selectedElemIds.length === 0) return;
+
+  ctx.save();
+
+  selectedElemIds.forEach((eid) => {
+    const el = elements.find((e) => e.id === eid);
+    if (!el) return;
+    const n1 = nodes.find((n) => n.id === el.n1);
+    const n2 = nodes.find((n) => n.id === el.n2);
+    if (!n1 || !n2) return;
+
+    const A: [number, number, number] = [n1.x, n1.y, n1.z];
+    const B: [number, number, number] = [n2.x, n2.y, n2.z];
+    const totalLength = Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]);
+    if (totalLength < 1e-5) return;
+
+    const pA = engine.project(A);
+    const pB = engine.project(B);
+
+    const numParts = splitMode === 'single' ? 2 : Math.max(2, Math.min(50, Math.round(splitN || 2)));
+    const tValues: number[] = [0];
+
+    if (splitMode === 'single') {
+      const safeT = Math.max(0.01, Math.min(0.99, Number.isFinite(splitT) ? splitT : 0.5));
+      tValues.push(safeT);
+    } else {
+      for (let i = 1; i < numParts; i++) {
+        tValues.push(i / numParts);
+      }
+    }
+    tValues.push(1);
+
+    // Calculate all division points in 3D and 2D
+    const pts3D: [number, number, number][] = tValues.map((t) => [
+      A[0] + (B[0] - A[0]) * t,
+      A[1] + (B[1] - A[1]) * t,
+      A[2] + (B[2] - A[2]) * t,
+    ]);
+    const pts2D = pts3D.map((p) => engine.project(p));
+
+    // Palettes for segment visual differentiation
+    const segmentColors = ['#2563eb', '#059669', '#d97706', '#9333ea', '#0891b2', '#e11d48'];
+    const segmentTextColors = ['#93c5fd', '#6ee7b7', '#fcd34d', '#d8b4fe', '#67e8f9', '#fda4af'];
+
+    // 1. Draw glowing segment lines and length badges
+    for (let s = 0; s < numParts; s++) {
+      const sp1 = pts2D[s];
+      const sp2 = pts2D[s + 1];
+      const segColor = segmentColors[s % segmentColors.length];
+      const segTextColor = segmentTextColors[s % segmentColors.length];
+
+      // Segment thick accent glow
+      ctx.save();
+      ctx.strokeStyle = segColor;
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      ctx.globalAlpha = 0.85;
+      ctx.beginPath();
+      ctx.moveTo(sp1.x, sp1.y);
+      ctx.lineTo(sp2.x, sp2.y);
+      ctx.stroke();
+
+      // Inner dashed white line for high contrast
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.8;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(sp1.x, sp1.y);
+      ctx.lineTo(sp2.x, sp2.y);
+      ctx.stroke();
+      ctx.restore();
+
+      // Segment length label in the middle of each segment
+      const segLen3D = (tValues[s + 1] - tValues[s]) * totalLength;
+      const mid2D = { x: (sp1.x + sp2.x) / 2, y: (sp1.y + sp2.y) / 2 };
+      const segPixLen = Math.hypot(sp2.x - sp1.x, sp2.y - sp1.y);
+
+      // Normal vector in 2D
+      let nx = -(sp2.y - sp1.y);
+      let ny = sp2.x - sp1.x;
+      const nlen = Math.hypot(nx, ny) || 1;
+      nx /= nlen;
+      ny /= nlen;
+
+      // Draw segment badge if segment is long enough
+      if (segPixLen >= 24) {
+        ctx.save();
+        const segPercent = Math.round((tValues[s + 1] - tValues[s]) * 100);
+        const labelText =
+          splitMode === 'single'
+            ? `L${s + 1} = ${segLen3D.toFixed(2)} m (${segPercent}%)`
+            : `${segLen3D.toFixed(2)} m`;
+
+        ctx.font = '10.5px monospace, "SF Mono", Consolas';
+        const tw = ctx.measureText(labelText).width;
+        const padX = 6;
+        const bh = 17;
+        const offsetDist = 16;
+        const bx = mid2D.x + nx * offsetDist - tw / 2 - padX;
+        const by = mid2D.y + ny * offsetDist - bh / 2;
+
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+        ctx.strokeStyle = segColor;
+        ctx.lineWidth = 1.4;
+        roundRect(ctx, bx, by, tw + 2 * padX, bh, 4);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = segTextColor;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(labelText, mid2D.x + nx * offsetDist, mid2D.y + ny * offsetDist);
+        ctx.restore();
+      }
+    }
+
+    // 2. Draw cut ticks (perpendicular cut lines) and new node markers at all intermediate split points
+    for (let i = 1; i < pts2D.length - 1; i++) {
+      const p = pts2D[i];
+      const pPrev = pts2D[i - 1];
+      const pNext = pts2D[i + 1];
+
+      // Bar vector at cut point
+      const barDx = pNext.x - pPrev.x;
+      const barDy = pNext.y - pPrev.y;
+      const barLen = Math.hypot(barDx, barDy) || 1;
+      const perpX = -barDy / barLen;
+      const perpY = barDx / barLen;
+
+      ctx.save();
+      // Perpendicular tick cut line
+      const tickHalf = 11;
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 2.8;
+      ctx.beginPath();
+      ctx.moveTo(p.x - perpX * tickHalf, p.y - perpY * tickHalf);
+      ctx.lineTo(p.x + perpX * tickHalf, p.y + perpY * tickHalf);
+      ctx.stroke();
+
+      // Node preview marker (outer ring + center dot)
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 5.5, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#ef4444';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 2.5, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.restore();
+
+      // For single split: detailed tooltip with 3D coordinate of the new node
+      if (splitMode === 'single' && selectedElemIds.length <= 2) {
+        const pt3D = pts3D[i];
+        const tipText = `Nowy węzeł (${pt3D[0].toFixed(2)}, ${pt3D[1].toFixed(2)}, ${pt3D[2].toFixed(2)}) m`;
+        drawNodeCoordTip(ctx, p, tipText, '#ef4444');
+      } else if (splitMode === 'multi' && numParts <= 8 && selectedElemIds.length === 1) {
+        // Multi split node index badge
+        ctx.save();
+        ctx.font = '9.5px monospace, "SF Mono", Consolas';
+        const nodeBadge = `+W${i}`;
+        const nbw = ctx.measureText(nodeBadge).width;
+        const nbh = 14;
+        const nby = p.y - 18;
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
+        roundRect(ctx, p.x - nbw / 2 - 3, nby - nbh / 2, nbw + 6, nbh, 3);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(nodeBadge, p.x, nby);
+        ctx.restore();
+      }
+    }
+
+    // 3. Start & End node orientation markers when 1 or 2 bars are selected
+    if (selectedElemIds.length <= 2) {
+      ctx.save();
+      ctx.font = '10px monospace, "SF Mono", Consolas';
+
+      const labelA = `W${n1.id} (Początek)`;
+      const labelB = `W${n2.id} (Koniec)`;
+      const twA = ctx.measureText(labelA).width;
+      const twB = ctx.measureText(labelB).width;
+
+      const offsetNear = 18;
+      // Start node tag
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 1;
+      roundRect(ctx, pA.x - twA / 2 - 4, pA.y + offsetNear - 7, twA + 8, 15, 3);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#93c5fd';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(labelA, pA.x, pA.y + offsetNear + 0.5);
+
+      // End node tag
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 1;
+      roundRect(ctx, pB.x - twB / 2 - 4, pB.y + offsetNear - 7, twB + 8, 15, 3);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#6ee7b7';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(labelB, pB.x, pB.y + offsetNear + 0.5);
+
+      ctx.restore();
+    }
+  });
+
+  ctx.restore();
+}
+
 function drawTransientOverlays(
   ctx: CanvasRenderingContext2D,
   engine: RenderEngine3D,
   nodes: Node3D[],
   elements: Element3D[],
   panels: Panel3D[],
-  mode: 'select' | 'addBar' | 'addPanel' | 'grid',
+  mode: ToolMode,
   panelShape: PanelShape,
   panelPoints: number[],
   barStartNodeId: number | null,
@@ -365,8 +602,57 @@ function drawTransientOverlays(
   scaleCenter: [number, number, number] = [0, 0, 0],
   scaleFactor = 1.5,
   pickMoveVector: { active: boolean; step: 1 | 2; p1: [number, number, number] | null } = { active: false, step: 1, p1: null },
-  pickTransformPoint: { active: boolean; target: 'rotateCenter' | 'mirrorPoint' | 'scaleCenter' | null } = { active: false, target: null }
+  pickTransformPoint: { active: boolean; target: 'rotateCenter' | 'mirrorPoint' | 'scaleCenter' | null } = { active: false, target: null },
+  splitFormOpen = false,
+  splitMode: 'single' | 'multi' = 'single',
+  splitT = 0.5,
+  splitN = 2,
+  linesSubMode: 'construction' | 'dimension' = 'construction',
+  lineStartPoint: [number, number, number] | null = null,
+  activeGridAxis: 'X' | 'Y' | 'Z' = 'X',
+  drawConstructionGrid = true,
+  constructionPoints: [number, number, number][] = []
 ) {
+  const getSnappedPt = (mx: number, my: number): [number, number, number] => {
+    if (hoverNodeId != null) {
+      const hn = nodes.find((n) => n.id === hoverNodeId);
+      if (hn) return [hn.x, hn.y, hn.z];
+    }
+    if (drawConstructionGrid && constructionPoints && constructionPoints.length > 0) {
+      let closestCP: [number, number, number] | null = null;
+      let minCPDist = 14;
+      for (const cp of constructionPoints) {
+        const proj = engine.project(cp);
+        if (proj.visible) {
+          const d = Math.hypot(proj.x - mx, proj.y - my);
+          if (d < minCPDist) {
+            minCPDist = d;
+            closestCP = cp;
+          }
+        }
+      }
+      if (closestCP) return closestCP;
+    }
+    const pt = engine.unprojectToPlane(mx, my, gridPlane, gridOffset);
+    let x = pt[0], y = pt[1], z = pt[2];
+    if (snapEnabled) {
+      if (gridPlane === 'XY') {
+        x = Math.round(x / snapSize) * snapSize;
+        y = Math.round(y / snapSize) * snapSize;
+        z = gridOffset;
+      } else if (gridPlane === 'XZ') {
+        x = Math.round(x / snapSize) * snapSize;
+        y = gridOffset;
+        z = Math.round(z / snapSize) * snapSize;
+      } else if (gridPlane === 'YZ') {
+        x = gridOffset;
+        y = Math.round(y / snapSize) * snapSize;
+        z = Math.round(z / snapSize) * snapSize;
+      }
+    }
+    return [x, y, z];
+  };
+
   // 0. Draw Transform Ghosts, Vector & Point Picking Guide Line
   drawTransformPreviewAndGuide(
     ctx,
@@ -400,6 +686,20 @@ function drawTransientOverlays(
     snapSize,
     hoverNodeId
   );
+
+  // 0b. Draw Split Preview (single & multi split on selected elements)
+  if (splitFormOpen && selectedElemIds.length > 0) {
+    drawSplitPreview(
+      ctx,
+      engine,
+      nodes,
+      elements,
+      selectedElemIds,
+      splitMode,
+      splitT,
+      splitN
+    );
+  }
   // 1. Draw dimension line for last drawn element if exists
   if (lastDrawnElemId != null) {
     const el = elements.find((e) => e.id === lastDrawnElemId);
@@ -441,26 +741,7 @@ function drawTransientOverlays(
             targetNodeId = hn.id;
           }
         } else if (mousePos) {
-          const pt = engine.unprojectToPlane(mousePos.px, mousePos.py, gridPlane, gridOffset);
-          let x = pt[0];
-          let y = pt[1];
-          let z = pt[2];
-          if (snapEnabled) {
-            if (gridPlane === 'XY') {
-              x = Math.round(x / snapSize) * snapSize;
-              y = Math.round(y / snapSize) * snapSize;
-              z = gridOffset;
-            } else if (gridPlane === 'XZ') {
-              x = Math.round(x / snapSize) * snapSize;
-              y = gridOffset;
-              z = Math.round(z / snapSize) * snapSize;
-            } else if (gridPlane === 'YZ') {
-              x = gridOffset;
-              y = Math.round(y / snapSize) * snapSize;
-              z = Math.round(z / snapSize) * snapSize;
-            }
-          }
-          targetPt = [x, y, z];
+          targetPt = getSnappedPt(mousePos.px, mousePos.py);
         }
 
         const pb = engine.project(targetPt);
@@ -501,26 +782,7 @@ function drawTransientOverlays(
           targetNodeId = hn.id;
         }
       } else {
-        const pt = engine.unprojectToPlane(mousePos.px, mousePos.py, gridPlane, gridOffset);
-        let x = pt[0];
-        let y = pt[1];
-        let z = pt[2];
-        if (snapEnabled) {
-          if (gridPlane === 'XY') {
-            x = Math.round(x / snapSize) * snapSize;
-            y = Math.round(y / snapSize) * snapSize;
-            z = gridOffset;
-          } else if (gridPlane === 'XZ') {
-            x = Math.round(x / snapSize) * snapSize;
-            y = gridOffset;
-            z = Math.round(z / snapSize) * snapSize;
-          } else if (gridPlane === 'YZ') {
-            x = gridOffset;
-            y = Math.round(y / snapSize) * snapSize;
-            z = Math.round(z / snapSize) * snapSize;
-          }
-        }
-        targetPt = [x, y, z];
+        targetPt = getSnappedPt(mousePos.px, mousePos.py);
       }
       const pb = engine.project(targetPt);
       const tipLabel = targetNodeId != null
@@ -541,26 +803,7 @@ function drawTransientOverlays(
         targetNodeId = hn.id;
       }
     } else {
-      const pt = engine.unprojectToPlane(mousePos.px, mousePos.py, gridPlane, gridOffset);
-      let x = pt[0];
-      let y = pt[1];
-      let z = pt[2];
-      if (snapEnabled) {
-        if (gridPlane === 'XY') {
-          x = Math.round(x / snapSize) * snapSize;
-          y = Math.round(y / snapSize) * snapSize;
-          z = gridOffset;
-        } else if (gridPlane === 'XZ') {
-          x = Math.round(x / snapSize) * snapSize;
-          y = gridOffset;
-          z = Math.round(z / snapSize) * snapSize;
-        } else if (gridPlane === 'YZ') {
-          x = gridOffset;
-          y = Math.round(y / snapSize) * snapSize;
-          z = Math.round(z / snapSize) * snapSize;
-        }
-      }
-      targetPt = [x, y, z];
+      targetPt = getSnappedPt(mousePos.px, mousePos.py);
     }
 
     const curPts = panelPoints || [];
@@ -699,6 +942,56 @@ function drawTransientOverlays(
       const coordName = gridPlane === 'XY' ? 'Z' : gridPlane === 'XZ' ? 'Y' : 'X';
       drawNodeCoordTip(ctx, pb, `Siatka ${gridPlane} (${coordName} = ${gridOffset.toFixed(2)} m)`, '#8b5cf6');
     }
+  }
+
+  // 6. Mode 'lines' preview
+  if (mode === 'lines' && mousePos) {
+    let targetPt: [number, number, number] = [0, 0, 0];
+    let targetNodeId: number | null = null;
+    if (hoverNodeId != null) {
+      const hn = nodes.find((n) => n.id === hoverNodeId);
+      if (hn) {
+        targetPt = [hn.x, hn.y, hn.z];
+        targetNodeId = hn.id;
+      }
+    } else {
+      const pt = engine.unprojectToPlane(mousePos.px, mousePos.py, gridPlane, gridOffset);
+      let x = pt[0];
+      let y = pt[1];
+      let z = pt[2];
+      if (snapEnabled) {
+        if (gridPlane === 'XY') {
+          x = Math.round(x / snapSize) * snapSize;
+          y = Math.round(y / snapSize) * snapSize;
+          z = gridOffset;
+        } else if (gridPlane === 'XZ') {
+          x = Math.round(x / snapSize) * snapSize;
+          y = gridOffset;
+          z = Math.round(z / snapSize) * snapSize;
+        } else if (gridPlane === 'YZ') {
+          x = gridOffset;
+          y = Math.round(y / snapSize) * snapSize;
+          z = Math.round(z / snapSize) * snapSize;
+        }
+      }
+      targetPt = [x, y, z];
+    }
+
+    const pb = engine.project(targetPt);
+    const coordVal = activeGridAxis === 'X' ? targetPt[0] : activeGridAxis === 'Y' ? targetPt[1] : targetPt[2];
+    const tipLabel = `Dodaj współrzędną ${activeGridAxis} = ${coordVal.toFixed(2)} m`;
+    drawNodeCoordTip(ctx, pb, tipLabel, '#2563eb');
+
+    ctx.save();
+    ctx.strokeStyle = '#2563eb';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(pb.x - 7, pb.y);
+    ctx.lineTo(pb.x + 7, pb.y);
+    ctx.moveTo(pb.x, pb.y - 7);
+    ctx.lineTo(pb.x, pb.y + 7);
+    ctx.stroke();
+    ctx.restore();
   }
 }
 
@@ -1217,8 +1510,109 @@ export default function App() {
   const [defaultMaterialId, setDefaultMaterialId] = useState<number>(1);
 
   // Interaction Mode & 3D Navigation Mode
-  const [mode, setMode] = useState<'select' | 'addBar' | 'addPanel' | 'grid'>('select');
+  const [mode, setMode] = useState<ToolMode>('select');
   const [navMode, setNavMode] = useState<'orbit' | 'boxSelect' | 'pan' | 'zoom'>('orbit');
+
+  // Axis grid coordinates state (prepopulated with the initial portal frame dimensions: X: 0, 6; Y: 0, 4; Z: 0, 6)
+  const [gridCoords, setGridCoords] = useState<{ x: number[]; y: number[]; z: number[] }>({
+    x: [0, 6],
+    y: [0, 4],
+    z: [0, 6]
+  });
+  const [activeGridAxis, setActiveGridAxis] = useState<'X' | 'Y' | 'Z'>('X');
+
+  // Dynamically compute construction points (intersections) and construction lines
+  const { constructionPoints, constructionLines } = useMemo(() => {
+    const xVals: number[] = Array.from(new Set<number>(gridCoords.x.map((v) => Math.round(v * 1000) / 1000))).sort((a, b) => a - b);
+    const yVals: number[] = Array.from(new Set<number>(gridCoords.y.map((v) => Math.round(v * 1000) / 1000))).sort((a, b) => a - b);
+    const zVals: number[] = Array.from(new Set<number>(gridCoords.z.map((v) => Math.round(v * 1000) / 1000))).sort((a, b) => a - b);
+
+    const hasX = xVals.length > 0;
+    const hasY = yVals.length > 0;
+    const hasZ = zVals.length > 0;
+
+    const activeCount = (hasX ? 1 : 0) + (hasY ? 1 : 0) + (hasZ ? 1 : 0);
+
+    const points: [number, number, number][] = [];
+    const lines: ConstructionLine3D[] = [];
+
+    if (activeCount >= 2) {
+      const effX: number[] = hasX ? xVals : [0];
+      const effY: number[] = hasY ? yVals : [0];
+      const effZ: number[] = hasZ ? zVals : [0];
+
+      const minX = effX[0];
+      const maxX = effX[effX.length - 1];
+      const minY = effY[0];
+      const maxY = effY[effY.length - 1];
+      const minZ = effZ[0];
+      const maxZ = effZ[effZ.length - 1];
+
+      // Intersection points
+      for (const x of effX) {
+        for (const y of effY) {
+          for (const z of effZ) {
+            points.push([x, y, z]);
+          }
+        }
+      }
+
+      let lineId = 1;
+
+      // Lines parallel to X
+      if (hasX && xVals.length > 1) {
+        for (const y of effY) {
+          for (const z of effZ) {
+            lines.push({
+              id: lineId++,
+              p1: [minX, y, z],
+              p2: [maxX, y, z],
+              name: `Grid X (${y.toFixed(2)}, ${z.toFixed(2)})`,
+            });
+          }
+        }
+      }
+
+      // Lines parallel to Y
+      if (hasY && yVals.length > 1) {
+        for (const x of effX) {
+          for (const z of effZ) {
+            lines.push({
+              id: lineId++,
+              p1: [x, minY, z],
+              p2: [x, maxY, z],
+              name: `Grid Y (${x.toFixed(2)}, ${z.toFixed(2)})`,
+            });
+          }
+        }
+      }
+
+      // Lines parallel to Z
+      if (hasZ && zVals.length > 1) {
+        for (const x of effX) {
+          for (const y of effY) {
+            lines.push({
+              id: lineId++,
+              p1: [x, y, minZ],
+              p2: [x, y, maxZ],
+              name: `Grid Z (${x.toFixed(2)}, ${y.toFixed(2)})`,
+            });
+          }
+        }
+      }
+    }
+
+    return { constructionPoints: points, constructionLines: lines };
+  }, [gridCoords]);
+
+  // Lines tool state
+  const [linesSubMode, setLinesSubMode] = useState<'construction' | 'dimension'>('construction');
+  const [dimensionLines, setDimensionLines] = useState<DimensionLine3D[]>([]);
+  const [selectedConstructionLineIds, setSelectedConstructionLineIds] = useState<number[]>([]);
+  const [selectedDimensionLineIds, setSelectedDimensionLineIds] = useState<number[]>([]);
+  const hoverConstructionLineIdRef = useRef<number | null>(null);
+  const hoverDimensionLineIdRef = useRef<number | null>(null);
+  const [lineStartPoint, setLineStartPoint] = useState<[number, number, number] | null>(null);
 
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const [selectedElemIds, setSelectedElemIds] = useState<number[]>([]);
@@ -1283,6 +1677,8 @@ export default function App() {
   const [showDimensions, setShowDimensions] = useState<boolean>(initialPrefs.showDimensions ?? false);
   const [gridPlane, setGridPlane] = useState<'XY' | 'XZ' | 'YZ'>('XY');
   const [gridOffset, setGridOffset] = useState<number>(0);
+  const [drawConstructionGrid, setDrawConstructionGrid] = useState<boolean>(initialPrefs.drawConstructionGrid ?? true);
+  const [drawOuterDimensionLines, setDrawOuterDimensionLines] = useState<boolean>(initialPrefs.drawOuterDimensionLines ?? true);
 
   useEffect(() => {
     if (mode === 'select') {
@@ -1294,14 +1690,11 @@ export default function App() {
     } else if (mode === 'grid') {
       const coordName = gridPlane === 'XY' ? 'Z' : gridPlane === 'XZ' ? 'Y' : 'X';
       setStatusHint(`Tryb: Siatka (${gridPlane}, ${coordName} = ${gridOffset.toFixed(2)} m) – kliknij na węzeł, aby przenieść siatkę.`);
+    } else if (mode === 'lines') {
+      setStatusHint(`Tryb: Linie (${linesSubMode === 'construction' ? 'Konstrukcyjne' : 'Wymiarowe'}) – kliknij 1. punkt.`);
     }
-  }, [mode, gridPlane, gridOffset, panelShape]);
+  }, [mode, gridPlane, gridOffset, panelShape, linesSubMode]);
 
-  const handleNodeCoordinateSet = useCallback((coord: { x: number; y: number; z: number }) => {
-    if (gridPlane === 'XY') setGridOffset(coord.z);
-    else if (gridPlane === 'XZ') setGridOffset(coord.y);
-    else if (gridPlane === 'YZ') setGridOffset(coord.x);
-  }, [gridPlane]);
   const [snapEnabled, setSnapEnabled] = useState<boolean>(initialPrefs.snapEnabled ?? true);
   const [allowNewNodesInBarMode, setAllowNewNodesInBarMode] = useState<boolean>(initialPrefs.allowNewNodesInBarMode ?? true);
   const [snapSize, setSnapSize] = useState<number>(initialPrefs.snapSize ?? 0.5);
@@ -1315,6 +1708,7 @@ export default function App() {
   const [transformWithCopy, setTransformWithCopy] = useState(false);
   const [transformConnect, setTransformConnect] = useState(false);
   const [transformRepeat, setTransformRepeat] = useState(1);
+  const [transformLoads, setTransformLoads] = useState(true);
 
   const [moveDx, setMoveDx] = useState(2);
   const [moveDy, setMoveDy] = useState(0);
@@ -1379,6 +1773,24 @@ export default function App() {
     setActiveTransformMode(tMode);
     handleCancelPickMode();
   }, [handleCancelPickMode]);
+
+  // Split tool state
+  const [splitFormOpen, setSplitFormOpen] = useState(false);
+  const [splitMode, setSplitMode] = useState<'single' | 'multi'>('single');
+  const [splitT, setSplitT] = useState(0.5);
+  const [splitN, setSplitN] = useState(2);
+
+  useEffect(() => {
+    if (selectedElemIds.length === 0 && splitFormOpen) {
+      setSplitFormOpen(false);
+    }
+  }, [selectedElemIds.length, splitFormOpen]);
+
+  useEffect(() => {
+    if (mode !== 'select' && splitFormOpen) {
+      setSplitFormOpen(false);
+    }
+  }, [mode, splitFormOpen]);
 
   useEffect(() => {
     if (selectedNodeIds.length === 0 && selectedElemIds.length === 0 && selectedPanelIds.length === 0) {
@@ -1459,6 +1871,8 @@ export default function App() {
       showGrid,
       mergeTolerance,
       allowNewNodesInBarMode,
+      drawConstructionGrid,
+      drawOuterDimensionLines,
     });
   }, [
     theme,
@@ -1493,6 +1907,8 @@ export default function App() {
     showGrid,
     mergeTolerance,
     allowNewNodesInBarMode,
+    drawConstructionGrid,
+    drawOuterDimensionLines,
   ]);
   const [probe, setProbe] = useState<{ elId: number | null; t: number }>({ elId: null, t: 0.5 });
 
@@ -1965,6 +2381,74 @@ export default function App() {
     setStatusHint(`Wyeksportowano model do pliku ${cleanName}.json`);
   };
 
+  const handleAddBasicDimensions = () => {
+    if (nodes.length === 0) {
+      setStatusHint('Brak węzłów w modelu do wyznaczenia gabarytów.');
+      return;
+    }
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    nodes.forEach((n) => {
+      if (n.x < minX) minX = n.x;
+      if (n.x > maxX) maxX = n.x;
+      if (n.y < minY) minY = n.y;
+      if (n.y > maxY) maxY = n.y;
+      if (n.z < minZ) minZ = n.z;
+      if (n.z > maxZ) maxZ = n.z;
+    });
+
+    const newDLs: DimensionLine3D[] = [];
+    let startId = dimensionLines.length > 0 ? Math.max(...dimensionLines.map((d) => d.id)) + 1 : 1;
+
+    // Dimension X
+    if (Math.abs(maxX - minX) > 1e-4) {
+      newDLs.push({
+        id: startId++,
+        p1: [minX, minY, minZ],
+        p2: [maxX, minY, minZ],
+        name: 'Gabaryt X',
+      });
+    }
+    // Dimension Y
+    if (Math.abs(maxY - minY) > 1e-4) {
+      newDLs.push({
+        id: startId++,
+        p1: [minX, minY, minZ],
+        p2: [minX, maxY, minZ],
+        name: 'Gabaryt Y',
+      });
+    }
+    // Dimension Z
+    if (Math.abs(maxZ - minZ) > 1e-4) {
+      newDLs.push({
+        id: startId++,
+        p1: [minX, minY, minZ],
+        p2: [minX, minY, maxZ],
+        name: 'Gabaryt Z',
+      });
+    }
+
+    if (newDLs.length > 0) {
+      setDimensionLines((prev) => [...prev, ...newDLs]);
+      setStatusHint(`Dodano ${newDLs.length} podstawowe linie wymiarowe gabarytów.`);
+    } else {
+      setStatusHint('Wszystkie węzły znajdują się w jednym punkcie.');
+    }
+  };
+
+  const handleClearConstructionLines = () => {
+    setGridCoords({ x: [], y: [], z: [] });
+    setSelectedConstructionLineIds([]);
+    setStatusHint('Wyczyszczono wszystkie osie siatki konstrukcyjnej.');
+  };
+
+  const handleClearDimensionLines = () => {
+    setDimensionLines([]);
+    setSelectedDimensionLineIds([]);
+    setStatusHint('Usunięto wszystkie linie wymiarowe.');
+  };
+
   // Perform 3D FEM Analysis
   const handleSolveOrBack = () => {
     if (solved) {
@@ -2038,6 +2522,69 @@ export default function App() {
     }
   };
 
+  const autoDimensionLines = useMemo<DimensionLine3D[]>(() => {
+    const xVals = Array.from(new Set<number>(gridCoords.x.map((v) => Math.round(v * 1000) / 1000))).sort((a, b) => a - b);
+    const yVals = Array.from(new Set<number>(gridCoords.y.map((v) => Math.round(v * 1000) / 1000))).sort((a, b) => a - b);
+    const zVals = Array.from(new Set<number>(gridCoords.z.map((v) => Math.round(v * 1000) / 1000))).sort((a, b) => a - b);
+
+    const hasX = xVals.length > 0;
+    const hasY = yVals.length > 0;
+    const hasZ = zVals.length > 0;
+
+    const activeCount = (hasX ? 1 : 0) + (hasY ? 1 : 0) + (hasZ ? 1 : 0);
+    if (activeCount < 2) return [];
+
+    const effX: number[] = hasX ? xVals : [0];
+    const effY: number[] = hasY ? yVals : [0];
+    const effZ: number[] = hasZ ? zVals : [0];
+
+    const minX = effX[0];
+    const maxX = effX[effX.length - 1];
+    const minY = effY[0];
+    const maxY = effY[effY.length - 1];
+    const minZ = effZ[0];
+    const maxZ = effZ[effZ.length - 1];
+
+    const offset = 0.8;
+    const autoLines: DimensionLine3D[] = [];
+    let dId = 10000;
+
+    if (hasX && xVals.length >= 2) {
+      for (let i = 0; i < xVals.length - 1; i++) {
+        autoLines.push({
+          id: dId++,
+          p1: [xVals[i], minY, minZ - offset],
+          p2: [xVals[i + 1], minY, minZ - offset],
+          name: `Grid X ${xVals[i].toFixed(2)} - ${xVals[i + 1].toFixed(2)}`,
+        });
+      }
+    }
+
+    if (hasY && yVals.length >= 2) {
+      for (let i = 0; i < yVals.length - 1; i++) {
+        autoLines.push({
+          id: dId++,
+          p1: [minX - offset, yVals[i], minZ],
+          p2: [minX - offset, yVals[i + 1], minZ],
+          name: `Grid Y ${yVals[i].toFixed(2)} - ${yVals[i + 1].toFixed(2)}`,
+        });
+      }
+    }
+
+    if (hasZ && zVals.length >= 2) {
+      for (let i = 0; i < zVals.length - 1; i++) {
+        autoLines.push({
+          id: dId++,
+          p1: [minX - offset, minY, zVals[i]],
+          p2: [minX - offset, minY, zVals[i + 1]],
+          name: `Grid Z ${zVals[i].toFixed(2)} - ${zVals[i + 1].toFixed(2)}`,
+        });
+      }
+    }
+
+    return autoLines;
+  }, [gridCoords]);
+
   // Render loop
   const redraw = useCallback(() => {
     const webglCanvas = webglCanvasRef.current;
@@ -2101,9 +2648,15 @@ export default function App() {
       selectedNodeIds,
       selectedElemIds,
       selectedPanelIds,
+      selectedConstructionLineIds,
+      selectedDimensionLineIds,
       hoverNodeId: hoverNodeIdRef.current,
       hoverElemId: hoverElemIdRef.current,
       hoverPanelId: hoverPanelIdRef.current,
+      hoverConstructionLineId: hoverConstructionLineIdRef.current,
+      hoverDimensionLineId: hoverDimensionLineIdRef.current,
+      constructionLines: drawConstructionGrid ? constructionLines : [],
+      dimensionLines: [...dimensionLines, ...(drawOuterDimensionLines ? autoDimensionLines : [])],
       mode,
       probe,
       theme,
@@ -2179,12 +2732,29 @@ export default function App() {
       [scaleCx, scaleCy, scaleCz],
       scaleFactor,
       pickMoveVector,
-      pickTransformPoint
+      pickTransformPoint,
+      splitFormOpen,
+      splitMode,
+      splitT,
+      splitN,
+      linesSubMode,
+      lineStartPoint,
+      activeGridAxis,
+      drawConstructionGrid,
+      drawConstructionGrid ? constructionPoints : []
     );
   }, [
     nodes,
     elements,
     panels,
+    constructionLines,
+    dimensionLines,
+    activeGridAxis,
+    gridCoords,
+    selectedConstructionLineIds,
+    selectedDimensionLineIds,
+    linesSubMode,
+    lineStartPoint,
     panelShape,
     panelPoints,
     sections,
@@ -2254,6 +2824,14 @@ export default function App() {
     scaleFactor,
     pickMoveVector,
     pickTransformPoint,
+    splitFormOpen,
+    splitMode,
+    splitT,
+    splitN,
+    drawConstructionGrid,
+    constructionPoints,
+    drawOuterDimensionLines,
+    autoDimensionLines,
   ]);
 
   useEffect(() => {
@@ -2607,6 +3185,10 @@ export default function App() {
       if (canvas.style.cursor !== newCursor) {
         canvas.style.cursor = newCursor;
       }
+      const wrap = canvas.parentElement;
+      if (wrap && wrap.style.cursor !== newCursor) {
+        wrap.style.cursor = newCursor;
+      }
     },
     [mobileSelMode, mode, navMode]
   );
@@ -2868,6 +3450,70 @@ export default function App() {
     return candidates[0];
   };
 
+  const getSnapped3DPoint = useCallback((
+    px: number,
+    py: number,
+    customGridPlane: 'XY' | 'XZ' | 'YZ' = gridPlane,
+    customGridOffset: number = gridOffset
+  ): [number, number, number] => {
+    const engine = engineRef.current;
+    if (!engine) return [0, 0, 0];
+
+    // 1. If there's an existing node near the cursor, snap to it!
+    const closestNodeCandidate = getClosestEntityAt(px, py, { includeNodes: true, includeElements: false, includePanels: false });
+    if (closestNodeCandidate && closestNodeCandidate.type === 'node') {
+      const n = nodes.find((node) => node.id === closestNodeCandidate.id);
+      if (n) return [n.x, n.y, n.z];
+    }
+
+    // 2. If drawing construction grid is enabled, check if we snap to a construction point!
+    if (drawConstructionGrid && constructionPoints && constructionPoints.length > 0) {
+      let closestCP: [number, number, number] | null = null;
+      let minCPDist = 14; // Snapping radius of 14px
+      for (const cp of constructionPoints) {
+        const proj = engine.project(cp);
+        if (proj.visible) {
+          const d = Math.hypot(proj.x - px, proj.y - py);
+          if (d < minCPDist) {
+            minCPDist = d;
+            closestCP = cp;
+          }
+        }
+      }
+      if (closestCP) {
+        return closestCP;
+      }
+    }
+
+    // 3. Fallback: unproject and snap to grid size if enabled
+    const pt = engine.unprojectToPlane(px, py, customGridPlane, customGridOffset);
+    let x = pt[0], y = pt[1], z = pt[2];
+    if (snapEnabled) {
+      if (customGridPlane === 'XY') {
+        x = Math.round(x / snapSize) * snapSize;
+        y = Math.round(y / snapSize) * snapSize;
+        z = customGridOffset;
+      } else if (customGridPlane === 'XZ') {
+        x = Math.round(x / snapSize) * snapSize;
+        y = customGridOffset;
+        z = Math.round(z / snapSize) * snapSize;
+      } else if (customGridPlane === 'YZ') {
+        x = customGridOffset;
+        y = Math.round(y / snapSize) * snapSize;
+        z = Math.round(z / snapSize) * snapSize;
+      }
+    } else {
+      if (customGridPlane === 'XY') z = customGridOffset;
+      else if (customGridPlane === 'XZ') y = customGridOffset;
+      else if (customGridPlane === 'YZ') x = customGridOffset;
+    }
+    return [
+      Math.round(x * 1000) / 1000,
+      Math.round(y * 1000) / 1000,
+      Math.round(z * 1000) / 1000,
+    ];
+  }, [gridPlane, gridOffset, snapEnabled, snapSize, drawConstructionGrid, constructionPoints, nodes, getClosestEntityAt]);
+
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     // Ignore simulated mouse events from touches
     if (Date.now() - lastTouchTimeRef.current < 800) {
@@ -2942,7 +3588,7 @@ export default function App() {
     const cubeHit = showCanvasUI ? engine.hitTestViewCube(px, py) : null;
 
     // Unproject to current active grid plane for status coords
-    const groundPt = engine.unprojectToPlane(px, py, gridPlane, gridOffset);
+    const groundPt = getSnapped3DPoint(px, py);
     if (coordsSpanRef.current) {
       coordsSpanRef.current.textContent = `x=${groundPt[0].toFixed(2)} m, y=${groundPt[1].toFixed(2)} m, z=${groundPt[2].toFixed(2)} m`;
     }
@@ -2981,15 +3627,18 @@ export default function App() {
     // Dynamic smart cursor update
     updateCanvasCursor({ ctrl, shift });
 
-    // Redraw immediately during drawing mode, live vector/point picking, transform preview, or when hover state changes
+    // Redraw immediately during drawing mode, live vector/point picking, transform preview, split preview, or when hover/mouse position changes
     if (
       mode === 'addBar' ||
       mode === 'addPanel' ||
       mode === 'grid' ||
+      mode === 'lines' ||
       pickMoveVector.active ||
       pickTransformPoint.active ||
       activeTransformMode !== 'none' ||
-      hoverChanged
+      splitFormOpen ||
+      hoverChanged ||
+      mousePosRef.current !== null
     ) {
       redraw();
     }
@@ -3006,7 +3655,8 @@ export default function App() {
       mode === 'grid' ||
       pickMoveVector.active ||
       pickTransformPoint.active ||
-      activeTransformMode !== 'none'
+      activeTransformMode !== 'none' ||
+      splitFormOpen
     ) {
       redraw();
     }
@@ -3025,31 +3675,7 @@ export default function App() {
     }
 
     if (pickTransformPoint.active && pickTransformPoint.target) {
-      const closestNodeCandidate = getClosestEntityAt(px, py, { includeNodes: true, includeElements: false, includePanels: false });
-      let pt: [number, number, number];
-      if (closestNodeCandidate && closestNodeCandidate.type === 'node') {
-        const n = nodes.find((node) => node.id === closestNodeCandidate.id);
-        pt = n ? [n.x, n.y, n.z] : [0, 0, 0];
-      } else {
-        const unproj = engine.unprojectToPlane(px, py, gridPlane, gridOffset);
-        let x = unproj[0], y = unproj[1], z = unproj[2];
-        if (snapEnabled) {
-          if (gridPlane === 'XY') {
-            x = Math.round(x / snapSize) * snapSize;
-            y = Math.round(y / snapSize) * snapSize;
-            z = gridOffset;
-          } else if (gridPlane === 'XZ') {
-            x = Math.round(x / snapSize) * snapSize;
-            y = gridOffset;
-            z = Math.round(z / snapSize) * snapSize;
-          } else if (gridPlane === 'YZ') {
-            x = gridOffset;
-            y = Math.round(y / snapSize) * snapSize;
-            z = Math.round(z / snapSize) * snapSize;
-          }
-        }
-        pt = [x, y, z];
-      }
+      const pt = getSnapped3DPoint(px, py);
 
       const rx = Math.round(pt[0] * 1000) / 1000;
       const ry = Math.round(pt[1] * 1000) / 1000;
@@ -3078,31 +3704,7 @@ export default function App() {
     }
 
     if (pickMoveVector.active) {
-      const closestNodeCandidate = getClosestEntityAt(px, py, { includeNodes: true, includeElements: false, includePanels: false });
-      let pt: [number, number, number];
-      if (closestNodeCandidate && closestNodeCandidate.type === 'node') {
-        const n = nodes.find((node) => node.id === closestNodeCandidate.id);
-        pt = n ? [n.x, n.y, n.z] : [0, 0, 0];
-      } else {
-        const unproj = engine.unprojectToPlane(px, py, gridPlane, gridOffset);
-        let x = unproj[0], y = unproj[1], z = unproj[2];
-        if (snapEnabled) {
-          if (gridPlane === 'XY') {
-            x = Math.round(x / snapSize) * snapSize;
-            y = Math.round(y / snapSize) * snapSize;
-            z = gridOffset;
-          } else if (gridPlane === 'XZ') {
-            x = Math.round(x / snapSize) * snapSize;
-            y = gridOffset;
-            z = Math.round(z / snapSize) * snapSize;
-          } else if (gridPlane === 'YZ') {
-            x = gridOffset;
-            y = Math.round(y / snapSize) * snapSize;
-            z = Math.round(z / snapSize) * snapSize;
-          }
-        }
-        pt = [x, y, z];
-      }
+      const pt = getSnapped3DPoint(px, py);
 
       if (pickMoveVector.step === 1) {
         setPickMoveVector({
@@ -3184,29 +3786,10 @@ export default function App() {
       } else {
         // Clicked on empty space in addBar mode
         if (allowNewNodesInBarMode) {
-          const pt = engine.unprojectToPlane(px, py, gridPlane, gridOffset);
-          let x = pt[0];
-          let y = pt[1];
-          let z = pt[2];
-          if (snapEnabled) {
-            if (gridPlane === 'XY') {
-              x = Math.round(x / snapSize) * snapSize;
-              y = Math.round(y / snapSize) * snapSize;
-              z = gridOffset;
-            } else if (gridPlane === 'XZ') {
-              x = Math.round(x / snapSize) * snapSize;
-              y = gridOffset;
-              z = Math.round(z / snapSize) * snapSize;
-            } else if (gridPlane === 'YZ') {
-              x = gridOffset;
-              y = Math.round(y / snapSize) * snapSize;
-              z = Math.round(z / snapSize) * snapSize;
-            }
-          } else {
-            if (gridPlane === 'XY') z = gridOffset;
-            else if (gridPlane === 'XZ') y = gridOffset;
-            else if (gridPlane === 'YZ') x = gridOffset;
-          }
+          const pt = getSnapped3DPoint(px, py);
+          const x = pt[0];
+          const y = pt[1];
+          const z = pt[2];
 
           const existingNode = nodes.find(
             (n) => Math.hypot(n.x - x, n.y - y, n.z - z) < 1e-3
@@ -3296,29 +3879,10 @@ export default function App() {
         if (n) targetPt = [n.x, n.y, n.z];
       } else {
         if (allowNewNodesInBarMode) {
-          const pt = engine.unprojectToPlane(px, py, gridPlane, gridOffset);
-          let x = pt[0];
-          let y = pt[1];
-          let z = pt[2];
-          if (snapEnabled) {
-            if (gridPlane === 'XY') {
-              x = Math.round(x / snapSize) * snapSize;
-              y = Math.round(y / snapSize) * snapSize;
-              z = gridOffset;
-            } else if (gridPlane === 'XZ') {
-              x = Math.round(x / snapSize) * snapSize;
-              y = gridOffset;
-              z = Math.round(z / snapSize) * snapSize;
-            } else if (gridPlane === 'YZ') {
-              x = gridOffset;
-              y = Math.round(y / snapSize) * snapSize;
-              z = Math.round(z / snapSize) * snapSize;
-            }
-          } else {
-            if (gridPlane === 'XY') z = gridOffset;
-            else if (gridPlane === 'XZ') y = gridOffset;
-            else if (gridPlane === 'YZ') x = gridOffset;
-          }
+          const pt = getSnapped3DPoint(px, py);
+          const x = pt[0];
+          const y = pt[1];
+          const z = pt[2];
 
           const existingNode = nodes.find(
             (n) => Math.hypot(n.x - x, n.y - y, n.z - z) < 1e-3
@@ -3463,6 +4027,50 @@ export default function App() {
         const coordName = gridPlane === 'XY' ? 'Z' : gridPlane === 'XZ' ? 'Y' : 'X';
         setStatusHint(`Siatka robocza ${gridPlane} (${coordName} = ${gridOffset.toFixed(2)} m) – kliknij na węzeł, aby przenieść siatkę.`);
       }
+    } else if (mode === 'lines') {
+      let val = 0;
+      if (clickedNodeId != null) {
+        const clickedNode = nodes.find((n) => n.id === clickedNodeId);
+        if (clickedNode) {
+          val = activeGridAxis === 'X' ? clickedNode.x : activeGridAxis === 'Y' ? clickedNode.y : clickedNode.z;
+        }
+      } else {
+        const pt = engine.unprojectToPlane(px, py, gridPlane, gridOffset);
+        let x = pt[0];
+        let y = pt[1];
+        let z = pt[2];
+        if (snapEnabled) {
+          if (gridPlane === 'XY') {
+            x = Math.round(x / snapSize) * snapSize;
+            y = Math.round(y / snapSize) * snapSize;
+            z = gridOffset;
+          } else if (gridPlane === 'XZ') {
+            x = Math.round(x / snapSize) * snapSize;
+            y = gridOffset;
+            z = Math.round(z / snapSize) * snapSize;
+          } else if (gridPlane === 'YZ') {
+            x = gridOffset;
+            y = Math.round(y / snapSize) * snapSize;
+            z = Math.round(z / snapSize) * snapSize;
+          }
+        }
+        val = activeGridAxis === 'X' ? x : activeGridAxis === 'Y' ? y : z;
+      }
+
+      val = Math.round(val * 1000) / 1000;
+
+      setGridCoords((prev) => {
+        const axisKey = activeGridAxis.toLowerCase() as 'x' | 'y' | 'z';
+        const currentList = prev[axisKey];
+        if (currentList.includes(val)) return prev;
+        const updated = [...currentList, val].sort((a, b) => a - b);
+        return {
+          ...prev,
+          [axisKey]: updated,
+        };
+      });
+
+      setStatusHint(`Dodano współrzędną ${activeGridAxis} = ${val.toFixed(2)} m z kliknięcia na modelu.`);
     } else {
       // Selection Mode
       const closest = getClosestEntityAt(px, py);
@@ -3838,14 +4446,37 @@ export default function App() {
 
   // Keyboard Shortcuts & Modifier Tracking
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const ctrl = e.ctrlKey || e.metaKey;
-      const shift = e.shiftKey;
+    const syncModifiers = (e: KeyboardEvent | MouseEvent | FocusEvent) => {
+      let ctrl = false;
+      let shift = false;
+
+      if ('getModifierState' in e && typeof (e as any).getModifierState === 'function') {
+        ctrl = Boolean((e as any).getModifierState('Control') || (e as any).getModifierState('Meta'));
+        shift = Boolean((e as any).getModifierState('Shift'));
+      } else if ('ctrlKey' in e) {
+        ctrl = Boolean((e as MouseEvent).ctrlKey || (e as MouseEvent).metaKey);
+        shift = Boolean((e as MouseEvent).shiftKey);
+      }
+
+      if (e.type === 'keydown') {
+        const k = (e as KeyboardEvent).key;
+        if (k === 'Control' || k === 'Meta') ctrl = true;
+        if (k === 'Shift') shift = true;
+      } else if (e.type === 'keyup') {
+        const k = (e as KeyboardEvent).key;
+        if (k === 'Control' || k === 'Meta') ctrl = false;
+        if (k === 'Shift') shift = false;
+      }
+
       if (ctrl !== keyModifiersRef.current.ctrl || shift !== keyModifiersRef.current.shift) {
         keyModifiersRef.current = { ctrl, shift };
         setKeyModifiers({ ctrl, shift });
         updateCanvasCursor({ ctrl, shift });
       }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      syncModifiers(e);
 
       const targetTag = (e.target as HTMLElement)?.tagName?.toUpperCase();
       if (targetTag === 'INPUT' || targetTag === 'SELECT' || targetTag === 'TEXTAREA') return;
@@ -3898,6 +4529,21 @@ export default function App() {
           const elemIdsToDelete = new Set(selectedElemIds);
           const panelIdsToDelete = new Set(selectedPanelIds);
 
+          const deletedElements = elements.filter(
+            (el) =>
+              elemIdsToDelete.has(el.id) ||
+              nodeIdsToDelete.has(el.n1) ||
+              nodeIdsToDelete.has(el.n2)
+          );
+          const deletedPanels = panels.filter(
+            (p) =>
+              panelIdsToDelete.has(p.id) ||
+              p.nodeIds.some((nid) => nodeIdsToDelete.has(nid))
+          );
+          const deletedNodeCount = selectedNodeIds.length;
+          const deletedElemCount = deletedElements.length;
+          const deletedPanelCount = deletedPanels.length;
+
           setElements((prev) =>
             prev.filter(
               (el) =>
@@ -3918,18 +4564,20 @@ export default function App() {
           setSelectedElemIds([]);
           setSelectedPanelIds([]);
           handleInvalidateResults();
+
+          const parts: string[] = [];
+          if (deletedElemCount > 0) parts.push(pluralUnit(deletedElemCount, 'pręt', 'pręty', 'prętów'));
+          if (deletedNodeCount > 0) parts.push(pluralUnit(deletedNodeCount, 'węzeł', 'węzły', 'węzłów'));
+          if (deletedPanelCount > 0) parts.push(pluralUnit(deletedPanelCount, 'okładzinę', 'okładziny', 'okładzin'));
+          if (parts.length > 0) {
+            setStatusHint(`Usunięto: ${parts.join(', ')}.`);
+          }
         }
       }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      const ctrl = e.ctrlKey || e.metaKey;
-      const shift = e.shiftKey;
-      if (ctrl !== keyModifiersRef.current.ctrl || shift !== keyModifiersRef.current.shift) {
-        keyModifiersRef.current = { ctrl, shift };
-        setKeyModifiers({ ctrl, shift });
-        updateCanvasCursor({ ctrl, shift });
-      }
+      syncModifiers(e);
     };
 
     const handleBlur = () => {
@@ -3940,13 +4588,26 @@ export default function App() {
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
+    const handlePointer = (e: MouseEvent) => {
+      syncModifiers(e);
+    };
+
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    document.addEventListener('keydown', handleKeyDown, { capture: true });
+    window.addEventListener('keyup', handleKeyUp, { capture: true });
+    document.addEventListener('keyup', handleKeyUp, { capture: true });
     window.addEventListener('blur', handleBlur);
+    window.addEventListener('pointerdown', handlePointer, { capture: true });
+    window.addEventListener('pointerup', handlePointer, { capture: true });
+
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('keydown', handleKeyDown, { capture: true });
+      document.removeEventListener('keydown', handleKeyDown, { capture: true });
+      window.removeEventListener('keyup', handleKeyUp, { capture: true });
+      document.removeEventListener('keyup', handleKeyUp, { capture: true });
       window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('pointerdown', handlePointer, { capture: true });
+      window.removeEventListener('pointerup', handlePointer, { capture: true });
     };
   }, [handleUndo, handleRedo, handleSolveOrBack, handleFitView, updateCanvasCursor]);
 
@@ -3961,7 +4622,15 @@ export default function App() {
           setLastPlacedNodeId(null);
           setLastDrawnElemId(null);
           setPanelPoints([]);
+          setLineStartPoint(null);
         }}
+        activeGridAxis={activeGridAxis}
+        setActiveGridAxis={setActiveGridAxis}
+        linesSubMode={linesSubMode}
+        setLinesSubMode={setLinesSubMode}
+        onAddBasicDimensions={handleAddBasicDimensions}
+        onClearConstructionLines={handleClearConstructionLines}
+        onClearDimensionLines={handleClearDimensionLines}
         panelShape={panelShape}
         setPanelShape={(shape) => {
           setPanelShape(shape);
@@ -4007,11 +4676,13 @@ export default function App() {
       {/* Main Workspace (Canvas 3D + Sidebar) matching #main */}
       <div id="main">
         {/* Canvas Wrap */}
-        <div id="canvasWrap">
+        <div id="canvasWrap" onMouseEnter={() => { try { window.focus(); } catch {} }}>
           <canvas id="cv-webgl" ref={webglCanvasRef} />
           <canvas
             id="cv-overlay"
             ref={overlayCanvasRef}
+            tabIndex={0}
+            style={{ outline: 'none' }}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
@@ -4184,6 +4855,39 @@ export default function App() {
                   title="Siatka pionowa XZ (y=const)"
                 >
                   XZ
+                </button>
+                <button
+                  className={`zbtn ${snapEnabled ? 'active' : ''}`}
+                  onClick={() => setSnapEnabled(!snapEnabled)}
+                  title={`Przyciąganie do siatki (${snapSize} m)`}
+                >
+                  {ICONS.grid}
+                </button>
+              </>
+            )}
+
+            {mode === 'lines' && (
+              <>
+                <button
+                  className={`zbtn ${activeGridAxis === 'X' ? 'active' : ''}`}
+                  onClick={() => setActiveGridAxis('X')}
+                  title="Aktywna oś X"
+                >
+                  Oś X
+                </button>
+                <button
+                  className={`zbtn ${activeGridAxis === 'Y' ? 'active' : ''}`}
+                  onClick={() => setActiveGridAxis('Y')}
+                  title="Aktywna oś Y"
+                >
+                  Oś Y
+                </button>
+                <button
+                  className={`zbtn ${activeGridAxis === 'Z' ? 'active' : ''}`}
+                  onClick={() => setActiveGridAxis('Z')}
+                  title="Aktywna oś Z"
+                >
+                  Oś Z
                 </button>
                 <button
                   className={`zbtn ${snapEnabled ? 'active' : ''}`}
@@ -4369,7 +5073,6 @@ export default function App() {
           probe={probe}
           setProbe={setProbe}
           onInvalidateResults={handleInvalidateResults}
-          onNodeCoordinateSet={handleNodeCoordinateSet}
           onNodePlaced={(id) => setLastPlacedNodeId(id)}
           onElemDrawn={(id) => setLastDrawnElemId(id)}
           defaultSectionId={defaultSectionId}
@@ -4394,6 +5097,8 @@ export default function App() {
           setTransformConnect={setTransformConnect}
           transformRepeat={transformRepeat}
           setTransformRepeat={setTransformRepeat}
+          transformLoads={transformLoads}
+          setTransformLoads={setTransformLoads}
           moveDx={moveDx}
           setMoveDx={setMoveDx}
           moveDy={moveDy}
@@ -4433,7 +5138,24 @@ export default function App() {
           pickTransformPointTarget={pickTransformPoint.target}
           onStartPickPoint={handleStartPickPoint}
           onCancelPickMode={handleCancelPickMode}
+          splitFormOpen={splitFormOpen}
+          setSplitFormOpen={setSplitFormOpen}
+          splitMode={splitMode}
+          setSplitMode={setSplitMode}
+          splitT={splitT}
+          setSplitT={setSplitT}
+          splitN={splitN}
+          setSplitN={setSplitN}
           mergeTolerance={mergeTolerance}
+          setStatusHint={setStatusHint}
+          gridCoords={gridCoords}
+          setGridCoords={setGridCoords}
+          activeGridAxis={activeGridAxis}
+          setActiveGridAxis={setActiveGridAxis}
+          drawConstructionGrid={drawConstructionGrid}
+          setDrawConstructionGrid={setDrawConstructionGrid}
+          drawOuterDimensionLines={drawOuterDimensionLines}
+          setDrawOuterDimensionLines={setDrawOuterDimensionLines}
         />
       </div>
 

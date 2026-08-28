@@ -114,6 +114,20 @@ export interface Panel3D {
   pressure?: PanelPressureLoad | null;
 }
 
+export interface ConstructionLine3D {
+  id: number;
+  p1: [number, number, number];
+  p2: [number, number, number];
+  name?: string;
+}
+
+export interface DimensionLine3D {
+  id: number;
+  p1: [number, number, number];
+  p2: [number, number, number];
+  name?: string;
+}
+
 export interface Material {
   id: number;
   name: string;
@@ -258,3 +272,6 @@ export interface ModalResult3D {
 }
 
 export type SolverResult3D = LinearStaticResult3D | StabilityResult3D | ModalResult3D;
+
+export type ToolMode = 'select' | 'addBar' | 'addPanel' | 'grid' | 'lines';
+

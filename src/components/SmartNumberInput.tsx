@@ -15,6 +15,7 @@ export interface SmartNumberInputProps {
   autoFocus?: boolean;
   id?: string;
   name?: string;
+  debounceMs?: number;
 }
 
 export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
@@ -32,20 +33,35 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
   autoFocus,
   id,
   name,
+  debounceMs = 120,
 }) => {
   const formatVal = (v: number | null | undefined) => {
     if (v == null || isNaN(v)) return '';
-    return String(v);
+    if (Math.abs(v) < 1e-6) return '0';
+    const rounded = Math.round(v * 1e4) / 1e4;
+    return String(rounded);
   };
 
   const [text, setText] = useState<string>(() => formatVal(value));
   const [isFocused, setIsFocused] = useState<boolean>(false);
   const isFocusedRef = useRef<boolean>(false);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastEmittedValueRef = useRef<number | null | undefined>(value);
+
+  // Clear debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
 
   // Synchronize when value changes externally while not actively typing in this input
   useEffect(() => {
     if (!isFocusedRef.current) {
       setText(formatVal(value));
+      lastEmittedValueRef.current = value;
     }
   }, [value]);
 
@@ -69,7 +85,21 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
           let clamped = num;
           if (min != null && clamped < min) clamped = min;
           if (max != null && clamped > max) clamped = max;
-          onChange(clamped);
+          clamped = Math.round(clamped * 1e4) / 1e4;
+
+          if (debounceTimerRef.current) {
+            clearTimeout(debounceTimerRef.current);
+          }
+
+          if (debounceMs <= 0) {
+            lastEmittedValueRef.current = clamped;
+            onChange(clamped);
+          } else {
+            debounceTimerRef.current = setTimeout(() => {
+              lastEmittedValueRef.current = clamped;
+              onChange(clamped);
+            }, debounceMs);
+          }
         }
       }
     }
@@ -84,6 +114,12 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
   const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
     isFocusedRef.current = false;
     setIsFocused(false);
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+
     const raw = e.target.value.trim().replace(',', '.');
 
     if (
@@ -100,6 +136,7 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
       } else {
         const fallback = 0;
         setText(String(fallback));
+        lastEmittedValueRef.current = fallback;
         onChange(fallback);
         onCommit?.(fallback);
       }
@@ -107,7 +144,9 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
       let num = parseFloat(raw);
       if (min != null && num < min) num = min;
       if (max != null && num > max) num = max;
+      num = Math.round(num * 1e4) / 1e4;
       setText(String(num));
+      lastEmittedValueRef.current = num;
       onChange(num);
       onCommit?.(num);
     }

@@ -143,8 +143,8 @@ export const ICONS = {
   ),
   scale: (
     <svg viewBox="0 0 24 24">
-      <path d="M21 3v6h-2V6.41l-4.29 4.3-1.42-1.42L17.59 5H15V3h6zM3 21v-6h2v2.59l4.29-4.3 1.42 1.42L6.41 19H9v2H3z" />
-      <rect x="8" y="8" width="8" height="8" rx="1" />
+      <path d="M15 3h6v6M21 3l-7 7M9 21H3v-6M3 21l7-7" />
+      <rect x="7" y="7" width="10" height="10" rx="1.5" />
     </svg>
   ),
   copyMirror: (
@@ -326,11 +326,48 @@ export const ICONS = {
       <path d="M4 12h16M12 4v16" opacity="0.6" />
     </svg>
   ),
+  lines: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 20L20 4" strokeDasharray="3 3" />
+      <line x1="4" y1="8" x2="16" y2="8" />
+      <line x1="4" y1="6" x2="4" y2="10" />
+      <line x1="16" y1="6" x2="16" y2="10" />
+    </svg>
+  ),
+  constructionLine: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 21L21 3" strokeDasharray="3 3" />
+      <path d="M7 17v-4m-2 2h4M17 7v-4m-2 2h4" strokeWidth="1.5" />
+    </svg>
+  ),
+  dimensionLine: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="4" y1="12" x2="20" y2="12" />
+      <line x1="4" y1="7" x2="4" y2="17" />
+      <line x1="20" y1="7" x2="20" y2="17" />
+      <path d="M2 14l4-4M18 14l4-4" strokeWidth="1.8" />
+    </svg>
+  ),
+  addBasicDimensions: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="5" y="5" width="14" height="14" rx="2" strokeDasharray="2 2" opacity="0.6" />
+      <path d="M5 21h14M21 5v14M3 5v14" strokeWidth="2" />
+    </svg>
+  ),
 };
 
 interface ToolbarProps {
-  mode: 'select' | 'addBar' | 'addPanel' | 'grid';
-  setMode: (m: 'select' | 'addBar' | 'addPanel' | 'grid') => void;
+  mode: 'select' | 'addBar' | 'addPanel' | 'grid' | 'lines';
+  setMode: (m: 'select' | 'addBar' | 'addPanel' | 'grid' | 'lines') => void;
+  activeGridAxis?: 'X' | 'Y' | 'Z';
+  setActiveGridAxis?: (axis: 'X' | 'Y' | 'Z') => void;
+  linesSubMode?: 'construction' | 'dimension';
+  setLinesSubMode?: (m: 'construction' | 'dimension') => void;
+  onAddBasicDimensions?: () => void;
+  onClearConstructionLines?: () => void;
+  onClearDimensionLines?: () => void;
+  constructionLinesCount?: number;
+  dimensionLinesCount?: number;
   panelShape?: 'triangle' | 'rectangle';
   setPanelShape?: (s: 'triangle' | 'rectangle') => void;
   gridPlane?: 'XY' | 'XZ' | 'YZ';
@@ -373,6 +410,15 @@ interface ToolbarProps {
 export const Toolbar: React.FC<ToolbarProps> = ({
   mode,
   setMode,
+  activeGridAxis = 'X',
+  setActiveGridAxis = (_axis) => {},
+  linesSubMode = 'construction',
+  setLinesSubMode,
+  onAddBasicDimensions,
+  onClearConstructionLines,
+  onClearDimensionLines,
+  constructionLinesCount = 0,
+  dimensionLinesCount = 0,
   panelShape = 'triangle',
   setPanelShape,
   gridPlane = 'XY',
@@ -630,6 +676,15 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           {ICONS.grid}
           <span>Siatka</span>
         </button>
+        <button
+          className={`tb-btn ${mode === 'lines' ? 'active' : ''}`}
+          id="btnModeLines"
+          onClick={() => setMode('lines')}
+          title="Siatka osiowa / osie konstrukcyjne (L)"
+        >
+          {ICONS.lines}
+          <span>Siatka osiowa</span>
+        </button>
       </div>
 
       {/* Kontekstowa grupa narzędzi dla aktywnego trybu (wyświetlana w toolbarze na ekranach poziomych) */}
@@ -821,6 +876,45 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           >
             {ICONS.reset}
             <span>Reset</span>
+          </button>
+          <div className="tb-sep" />
+          <button
+            className={`tb-btn ${snapEnabled ? 'active' : ''}`}
+            onClick={() => setSnapEnabled(!snapEnabled)}
+            title={`Przyciąganie do siatki (${snapSize} m)`}
+          >
+            {ICONS.grid}
+            <span>Przyciągaj</span>
+          </button>
+        </div>
+      )}
+
+      {mode === 'lines' && (
+        <div className="tb-group tb-group-contextual">
+          <span className="tb-label" style={{ fontWeight: '600', color: 'var(--accent)' }}>Aktywna oś:</span>
+          <button
+            className={`tb-btn ${activeGridAxis === 'X' ? 'active' : ''}`}
+            onClick={() => setActiveGridAxis?.('X')}
+            title="Wybierz oś X – kliknięcie na modelu lub wpisanie wartości doda współrzędną X"
+            style={{ fontWeight: activeGridAxis === 'X' ? 'bold' : 'normal', padding: '0 12px' }}
+          >
+            <span>Oś X</span>
+          </button>
+          <button
+            className={`tb-btn ${activeGridAxis === 'Y' ? 'active' : ''}`}
+            onClick={() => setActiveGridAxis?.('Y')}
+            title="Wybierz oś Y – kliknięcie na modelu lub wpisanie wartości doda współrzędną Y"
+            style={{ fontWeight: activeGridAxis === 'Y' ? 'bold' : 'normal', padding: '0 12px' }}
+          >
+            <span>Oś Y</span>
+          </button>
+          <button
+            className={`tb-btn ${activeGridAxis === 'Z' ? 'active' : ''}`}
+            onClick={() => setActiveGridAxis?.('Z')}
+            title="Wybierz oś Z – kliknięcie na modelu lub wpisanie wartości doda współrzędną Z"
+            style={{ fontWeight: activeGridAxis === 'Z' ? 'bold' : 'normal', padding: '0 12px' }}
+          >
+            <span>Oś Z</span>
           </button>
           <div className="tb-sep" />
           <button
