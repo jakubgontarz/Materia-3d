@@ -494,6 +494,7 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <input
                         type="number"
+                        inputMode="decimal"
                         step="0.01"
                         min="0"
                         value={minLen}
@@ -511,6 +512,7 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <input
                         type="number"
+                        inputMode="decimal"
                         step="0.01"
                         min="0"
                         value={maxLen}
@@ -533,6 +535,7 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <input
                         type="number"
+                        inputMode="decimal"
                         step="0.01"
                         min="0"
                         value={exactLen}
@@ -550,6 +553,7 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <input
                         type="number"
+                        inputMode="decimal"
                         step="0.001"
                         min="0"
                         value={tolerance}
@@ -571,6 +575,7 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <input
                       type="number"
+                      inputMode="decimal"
                       step="0.01"
                       min="0"
                       value={minLen}
@@ -591,6 +596,7 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <input
                       type="number"
+                      inputMode="decimal"
                       step="0.01"
                       min="0"
                       value={maxLen}

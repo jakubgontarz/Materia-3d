@@ -51,6 +51,11 @@ export function transpose(A: number[][]): number[][] {
 
 export function invSmall(A: number[][]): number[][] {
   const n = A.length;
+  if (n === 0) return [];
+  if (n === 1) {
+    const v = A[0][0];
+    return [[Math.abs(v) > 1e-12 ? 1 / v : 0]];
+  }
   const M = A.map((row, i) => row.concat(Array.from({ length: n }, (_, j) => (i === j ? 1 : 0))));
   for (let col = 0; col < n; col++) {
     let piv = col;
@@ -60,7 +65,11 @@ export function invSmall(A: number[][]): number[][] {
     const tmp = M[col];
     M[col] = M[piv];
     M[piv] = tmp;
-    const pv = M[col][col] || 1e-12;
+    const pv = M[col][col];
+    if (Math.abs(pv) < 1e-12) {
+      // Degenerate pivot: fall back to symmetric pseudoinverse
+      return pinvSymmetric(A);
+    }
     for (let j = 0; j < 2 * n; j++) M[col][j] /= pv;
     for (let r = 0; r < n; r++) {
       if (r === col) continue;
@@ -69,6 +78,46 @@ export function invSmall(A: number[][]): number[][] {
     }
   }
   return M.map((row) => row.slice(n));
+}
+
+export function pinvSymmetric(M: number[][], rcond = 1e-8): number[][] {
+  const n = M.length;
+  if (n === 0) return [];
+  if (n === 1) {
+    const v = M[0][0];
+    return [[Math.abs(v) > 1e-12 ? 1 / v : 0]];
+  }
+
+  // Symmetrize
+  const Msym = zerosMat(n, n);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      Msym[i][j] = (M[i][j] + M[j][i]) / 2;
+    }
+  }
+
+  const { eigenvalues, eigenvectors } = jacobiSymmetric(Msym, 150, 1e-12);
+  let maxEig = 0;
+  for (let i = 0; i < n; i++) {
+    maxEig = Math.max(maxEig, Math.abs(eigenvalues[i]));
+  }
+  const tol = Math.max(maxEig * rcond, 1e-13);
+
+  const out = zerosMat(n, n);
+  for (let k = 0; k < n; k++) {
+    const lam = eigenvalues[k];
+    if (Math.abs(lam) > tol) {
+      const invLam = 1 / lam;
+      for (let i = 0; i < n; i++) {
+        const vi = eigenvectors[i][k];
+        for (let j = 0; j < n; j++) {
+          const vj = eigenvectors[j][k];
+          out[i][j] += vi * invLam * vj;
+        }
+      }
+    }
+  }
+  return out;
 }
 
 export function solveLinSys(Ain: number[][], bin: number[]): { x: number[]; singular: boolean } {

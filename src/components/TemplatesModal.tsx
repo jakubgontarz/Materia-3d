@@ -146,6 +146,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Rozpiętość nawy X [m]</label>
                   <input
                     type="number"
+                    inputMode="decimal"
                     step="0.5"
                     value={bayX}
                     onChange={(e) => setBayX(parseFloat(e.target.value) || 1)}
@@ -156,6 +157,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Rozstaw ram Y [m]</label>
                   <input
                     type="number"
+                    inputMode="decimal"
                     step="0.5"
                     value={bayY}
                     onChange={(e) => setBayY(parseFloat(e.target.value) || 1)}
@@ -166,6 +168,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Liczba naw X</label>
                   <input
                     type="number"
+                    inputMode="numeric"
                     min="1"
                     max="10"
                     value={numBaysX}
@@ -177,6 +180,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Liczba przęseł Y</label>
                   <input
                     type="number"
+                    inputMode="numeric"
                     min="1"
                     max="10"
                     value={numBaysY}
@@ -188,6 +192,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Wysokość słupów H [m]</label>
                   <input
                     type="number"
+                    inputMode="decimal"
                     step="0.5"
                     value={frameHeight}
                     onChange={(e) => setFrameHeight(parseFloat(e.target.value) || 1)}
@@ -206,6 +211,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Szerokość podstawy [m]</label>
                   <input
                     type="number"
+                    inputMode="decimal"
                     step="0.5"
                     value={towerBase}
                     onChange={(e) => setTowerBase(parseFloat(e.target.value) || 1)}
@@ -216,6 +222,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Szerokość głowicy [m]</label>
                   <input
                     type="number"
+                    inputMode="decimal"
                     step="0.5"
                     value={towerTop}
                     onChange={(e) => setTowerTop(parseFloat(e.target.value) || 1)}
@@ -226,6 +233,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Wysokość całkowita [m]</label>
                   <input
                     type="number"
+                    inputMode="decimal"
                     step="1.0"
                     value={towerHeight}
                     onChange={(e) => setTowerHeight(parseFloat(e.target.value) || 1)}
@@ -236,6 +244,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Liczba segmentów / kondygnacji</label>
                   <input
                     type="number"
+                    inputMode="numeric"
                     min="1"
                     max="12"
                     value={towerStories}
@@ -255,6 +264,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Szerokość X [m]</label>
                   <input
                     type="number"
+                    inputMode="decimal"
                     step="1.0"
                     value={grillWidthX}
                     onChange={(e) => setGrillWidthX(parseFloat(e.target.value) || 1)}
@@ -265,6 +275,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Długość Y [m]</label>
                   <input
                     type="number"
+                    inputMode="decimal"
                     step="1.0"
                     value={grillWidthY}
                     onChange={(e) => setGrillWidthY(parseFloat(e.target.value) || 1)}
@@ -275,6 +286,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Podział wzdłuż X</label>
                   <input
                     type="number"
+                    inputMode="numeric"
                     min="1"
                     max="10"
                     value={grillDivX}
@@ -286,6 +298,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Podział wzdłuż Y</label>
                   <input
                     type="number"
+                    inputMode="numeric"
                     min="1"
                     max="10"
                     value={grillDivY}
@@ -305,6 +318,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Rozpiętość L [m]</label>
                   <input
                     type="number"
+                    inputMode="decimal"
                     step="0.5"
                     value={span2D}
                     onChange={(e) => setSpan2D(parseFloat(e.target.value) || 1)}
@@ -315,6 +329,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   <label className="mb-1 block text-slate-400">Wysokość H [m]</label>
                   <input
                     type="number"
+                    inputMode="decimal"
                     step="0.5"
                     value={height2D}
                     onChange={(e) => setHeight2D(parseFloat(e.target.value) || 1)}

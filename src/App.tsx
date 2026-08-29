@@ -684,7 +684,8 @@ function drawTransientOverlays(
     gridOffset,
     snapEnabled,
     snapSize,
-    hoverNodeId
+    hoverNodeId,
+    constructionPoints
   );
 
   // 0b. Draw Split Preview (single & multi split on selected elements)
@@ -1070,41 +1071,58 @@ function drawTransformPreviewAndGuide(
   gridOffset: number,
   snapEnabled: boolean,
   snapSize: number,
-  hoverNodeId: number | null
+  hoverNodeId: number | null,
+  constructionPoints: [number, number, number][] = []
 ) {
   let effectiveDx = moveDx;
   let effectiveDy = moveDy;
   let effectiveDz = moveDz;
 
+  const resolvePoint = (mx: number, my: number): [number, number, number] => {
+    if (hoverNodeId != null) {
+      const hn = nodes.find((n) => n.id === hoverNodeId);
+      if (hn) return [hn.x, hn.y, hn.z];
+    }
+    if (constructionPoints && constructionPoints.length > 0) {
+      let closestCP: [number, number, number] | null = null;
+      let minCPDist = 14;
+      for (const cp of constructionPoints) {
+        const proj = engine.project(cp);
+        if (proj.visible) {
+          const d = Math.hypot(proj.x - mx, proj.y - my);
+          if (d < minCPDist) {
+            minCPDist = d;
+            closestCP = cp;
+          }
+        }
+      }
+      if (closestCP) return closestCP;
+    }
+    const pt = engine.unprojectToPlane(mx, my, gridPlane, gridOffset);
+    let x = pt[0], y = pt[1], z = pt[2];
+    if (snapEnabled) {
+      if (gridPlane === 'XY') {
+        x = Math.round(x / snapSize) * snapSize;
+        y = Math.round(y / snapSize) * snapSize;
+        z = gridOffset;
+      } else if (gridPlane === 'XZ') {
+        x = Math.round(x / snapSize) * snapSize;
+        y = gridOffset;
+        z = Math.round(z / snapSize) * snapSize;
+      } else if (gridPlane === 'YZ') {
+        x = gridOffset;
+        y = Math.round(y / snapSize) * snapSize;
+        z = Math.round(z / snapSize) * snapSize;
+      }
+    }
+    return [x, y, z];
+  };
+
   // 1. Vector Picking Active (Step 1 or Step 2)
   if (pickMoveVector.active) {
     if (pickMoveVector.step === 2 && pickMoveVector.p1) {
       const p1 = pickMoveVector.p1;
-      let targetPt: [number, number, number] = [p1[0], p1[1], p1[2]];
-
-      if (hoverNodeId != null) {
-        const hn = nodes.find((n) => n.id === hoverNodeId);
-        if (hn) targetPt = [hn.x, hn.y, hn.z];
-      } else if (mousePos) {
-        const pt = engine.unprojectToPlane(mousePos.px, mousePos.py, gridPlane, gridOffset);
-        let x = pt[0], y = pt[1], z = pt[2];
-        if (snapEnabled) {
-          if (gridPlane === 'XY') {
-            x = Math.round(x / snapSize) * snapSize;
-            y = Math.round(y / snapSize) * snapSize;
-            z = gridOffset;
-          } else if (gridPlane === 'XZ') {
-            x = Math.round(x / snapSize) * snapSize;
-            y = gridOffset;
-            z = Math.round(z / snapSize) * snapSize;
-          } else if (gridPlane === 'YZ') {
-            x = gridOffset;
-            y = Math.round(y / snapSize) * snapSize;
-            z = Math.round(z / snapSize) * snapSize;
-          }
-        }
-        targetPt = [x, y, z];
-      }
+      let targetPt: [number, number, number] = mousePos ? resolvePoint(mousePos.px, mousePos.py) : [p1[0], p1[1], p1[2]];
 
       effectiveDx = Math.round((targetPt[0] - p1[0]) * 1000) / 1000;
       effectiveDy = Math.round((targetPt[1] - p1[1]) * 1000) / 1000;
@@ -1150,30 +1168,7 @@ function drawTransformPreviewAndGuide(
       const deltaLabel = `Δ (${effectiveDx.toFixed(2)}, ${effectiveDy.toFixed(2)}, ${effectiveDz.toFixed(2)}) m`;
       drawNodeCoordTip(ctx, sp2, deltaLabel, '#2563eb');
     } else if (pickMoveVector.step === 1 && mousePos) {
-      let targetPt: [number, number, number] = [0, 0, 0];
-      if (hoverNodeId != null) {
-        const hn = nodes.find((n) => n.id === hoverNodeId);
-        if (hn) targetPt = [hn.x, hn.y, hn.z];
-      } else {
-        const pt = engine.unprojectToPlane(mousePos.px, mousePos.py, gridPlane, gridOffset);
-        let x = pt[0], y = pt[1], z = pt[2];
-        if (snapEnabled) {
-          if (gridPlane === 'XY') {
-            x = Math.round(x / snapSize) * snapSize;
-            y = Math.round(y / snapSize) * snapSize;
-            z = gridOffset;
-          } else if (gridPlane === 'XZ') {
-            x = Math.round(x / snapSize) * snapSize;
-            y = gridOffset;
-            z = Math.round(z / snapSize) * snapSize;
-          } else if (gridPlane === 'YZ') {
-            x = gridOffset;
-            y = Math.round(y / snapSize) * snapSize;
-            z = Math.round(z / snapSize) * snapSize;
-          }
-        }
-        targetPt = [x, y, z];
-      }
+      const targetPt = resolvePoint(mousePos.px, mousePos.py);
       const sp = engine.project(targetPt);
       drawNodeCoordTip(ctx, sp, `Wskaż P1 (${targetPt[0].toFixed(2)}, ${targetPt[1].toFixed(2)}, ${targetPt[2].toFixed(2)}) m`, '#2563eb');
     }
@@ -1181,30 +1176,7 @@ function drawTransformPreviewAndGuide(
 
   // 2. Point Picking Active for Rotate/Mirror/Scale
   if (pickTransformPoint.active && pickTransformPoint.target && mousePos) {
-    let targetPt: [number, number, number] = [0, 0, 0];
-    if (hoverNodeId != null) {
-      const hn = nodes.find((n) => n.id === hoverNodeId);
-      if (hn) targetPt = [hn.x, hn.y, hn.z];
-    } else {
-      const pt = engine.unprojectToPlane(mousePos.px, mousePos.py, gridPlane, gridOffset);
-      let x = pt[0], y = pt[1], z = pt[2];
-      if (snapEnabled) {
-        if (gridPlane === 'XY') {
-          x = Math.round(x / snapSize) * snapSize;
-          y = Math.round(y / snapSize) * snapSize;
-          z = gridOffset;
-        } else if (gridPlane === 'XZ') {
-          x = Math.round(x / snapSize) * snapSize;
-          y = gridOffset;
-          z = Math.round(z / snapSize) * snapSize;
-        } else if (gridPlane === 'YZ') {
-          x = gridOffset;
-          y = Math.round(y / snapSize) * snapSize;
-          z = Math.round(z / snapSize) * snapSize;
-        }
-      }
-      targetPt = [x, y, z];
-    }
+    const targetPt = resolvePoint(mousePos.px, mousePos.py);
     const sp = engine.project(targetPt);
     let label = '';
     if (pickTransformPoint.target === 'rotateCenter') {
@@ -1919,7 +1891,7 @@ export default function App() {
   const [saveModalOpen, setSaveModalOpen] = useState<boolean>(false);
   const [loadModalOpen, setLoadModalOpen] = useState<boolean>(false);
   const [exportModalOpen, setExportModalOpen] = useState<boolean>(false);
-  const [currentModelName, setCurrentModelName] = useState<string>('Projekt konstrukcji 3D');
+  const [currentModelName, setCurrentModelName] = useState<string>('Projekt konstrukcji');
   const [currentModelId, setCurrentModelId] = useState<string | null>(null);
   const jsonFileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -2195,10 +2167,10 @@ export default function App() {
     setSelectedNodeIds([]);
     setSelectedElemIds([]);
     setSelectedPanelIds([]);
-    setCurrentModelName('Projekt konstrukcji 3D');
+    setCurrentModelName('Projekt konstrukcji');
     setCurrentModelId(null);
     resetHistoryWithModel([], [], [], sections, materials, analysisSettings);
-    setStatusHint('Utworzono nowy czysty model 3D.');
+    setStatusHint('Utworzono nowy czysty model.');
   };
 
   const handleSaveModel = () => {
@@ -2234,7 +2206,7 @@ export default function App() {
 
   const handleConfirmSaveLocal = (name: string) => {
     const list = getStoredModelsList();
-    const cleanName = name.trim() || 'Projekt konstrukcji 3D';
+    const cleanName = name.trim() || 'Projekt konstrukcji';
     const existingIdx = list.findIndex(
       (m) => m.name.trim().toLowerCase() === cleanName.toLowerCase()
     );
@@ -2515,7 +2487,7 @@ export default function App() {
         const out = solveLinearStatic3D(solverModel);
         setSolved(out);
         if (out.singular) setSolveWarning('Osobliwa macierz sztywności. Sprawdź podparcie konstrukcji.');
-        else setStatusHint('Obliczono statykę 3D: wyznaczono siły, ugięcia i reakcje.');
+        else setStatusHint('Obliczono statykę: wyznaczono siły, ugięcia i reakcje.');
       }
     } catch (e: any) {
       setSolveWarning('Błąd obliczeń MES: ' + e.message);
@@ -2546,6 +2518,7 @@ export default function App() {
     const maxZ = effZ[effZ.length - 1];
 
     const offset = 0.8;
+    const mainOffset = 0.55;
     const autoLines: DimensionLine3D[] = [];
     let dId = 10000;
 
@@ -2556,6 +2529,14 @@ export default function App() {
           p1: [xVals[i], minY, minZ - offset],
           p2: [xVals[i + 1], minY, minZ - offset],
           name: `Grid X ${xVals[i].toFixed(2)} - ${xVals[i + 1].toFixed(2)}`,
+        });
+      }
+      if (xVals.length >= 3) {
+        autoLines.push({
+          id: dId++,
+          p1: [xVals[0], minY, minZ - offset - mainOffset],
+          p2: [xVals[xVals.length - 1], minY, minZ - offset - mainOffset],
+          name: `Grid X Główny ${xVals[0].toFixed(2)} - ${xVals[xVals.length - 1].toFixed(2)}`,
         });
       }
     }
@@ -2569,6 +2550,14 @@ export default function App() {
           name: `Grid Y ${yVals[i].toFixed(2)} - ${yVals[i + 1].toFixed(2)}`,
         });
       }
+      if (yVals.length >= 3) {
+        autoLines.push({
+          id: dId++,
+          p1: [minX - offset - mainOffset, yVals[0], minZ],
+          p2: [minX - offset - mainOffset, yVals[yVals.length - 1], minZ],
+          name: `Grid Y Główny ${yVals[0].toFixed(2)} - ${yVals[yVals.length - 1].toFixed(2)}`,
+        });
+      }
     }
 
     if (hasZ && zVals.length >= 2) {
@@ -2578,6 +2567,14 @@ export default function App() {
           p1: [minX - offset, minY, zVals[i]],
           p2: [minX - offset, minY, zVals[i + 1]],
           name: `Grid Z ${zVals[i].toFixed(2)} - ${zVals[i + 1].toFixed(2)}`,
+        });
+      }
+      if (zVals.length >= 3) {
+        autoLines.push({
+          id: dId++,
+          p1: [minX - offset - mainOffset, minY, zVals[0]],
+          p2: [minX - offset - mainOffset, minY, zVals[zVals.length - 1]],
+          name: `Grid Z Główny ${zVals[0].toFixed(2)} - ${zVals[zVals.length - 1].toFixed(2)}`,
         });
       }
     }
@@ -4203,17 +4200,6 @@ export default function App() {
         if (cubeHit === 'FIT') {
           handleFitView();
         } else {
-          if (cubeHit === 'FRONT' || cubeHit === 'BACK') {
-            setGridPlane('XZ');
-            setStatusHint('Zmieniono płaszczyznę siatki na XZ (y=0).');
-          } else if (cubeHit === 'LEFT' || cubeHit === 'RIGHT') {
-            setGridPlane('YZ');
-            setStatusHint('Zmieniono płaszczyznę siatki na YZ (x=0).');
-          } else if (cubeHit === 'TOP' || cubeHit === 'BOTTOM') {
-            setGridPlane('XY');
-            setStatusHint('Zmieniono płaszczyznę siatki na XY (z=0).');
-          }
-
           const angles = engine.getViewAngles(cubeHit);
           engine.animateCameraTo(angles.az, angles.el, 320, () => {
             redraw();
@@ -4662,6 +4648,10 @@ export default function App() {
         onOpenAbout={() => setAboutOpen(true)}
         snapEnabled={snapEnabled}
         setSnapEnabled={setSnapEnabled}
+        drawConstructionGrid={drawConstructionGrid}
+        setDrawConstructionGrid={setDrawConstructionGrid}
+        drawOuterDimensionLines={drawOuterDimensionLines}
+        setDrawOuterDimensionLines={setDrawOuterDimensionLines}
         allowNewNodesInBarMode={allowNewNodesInBarMode}
         setAllowNewNodesInBarMode={setAllowNewNodesInBarMode}
         sections={sections}
@@ -4872,22 +4862,42 @@ export default function App() {
                   className={`zbtn ${activeGridAxis === 'X' ? 'active' : ''}`}
                   onClick={() => setActiveGridAxis('X')}
                   title="Aktywna oś X"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '0 8px' }}
                 >
-                  Oś X
+                  <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#ef4444', display: 'inline-block' }} />
+                  <span>X</span>
                 </button>
                 <button
                   className={`zbtn ${activeGridAxis === 'Y' ? 'active' : ''}`}
                   onClick={() => setActiveGridAxis('Y')}
                   title="Aktywna oś Y"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '0 8px' }}
                 >
-                  Oś Y
+                  <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#22c55e', display: 'inline-block' }} />
+                  <span>Y</span>
                 </button>
                 <button
                   className={`zbtn ${activeGridAxis === 'Z' ? 'active' : ''}`}
                   onClick={() => setActiveGridAxis('Z')}
                   title="Aktywna oś Z"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '0 8px' }}
                 >
-                  Oś Z
+                  <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#3b82f6', display: 'inline-block' }} />
+                  <span>Z</span>
+                </button>
+                <button
+                  className={`zbtn ${drawConstructionGrid ? 'active' : ''}`}
+                  onClick={() => setDrawConstructionGrid(!drawConstructionGrid)}
+                  title="Linie konstrukcyjne osi"
+                >
+                  {ICONS.constructionLine}
+                </button>
+                <button
+                  className={`zbtn ${drawOuterDimensionLines ? 'active' : ''}`}
+                  onClick={() => setDrawOuterDimensionLines(!drawOuterDimensionLines)}
+                  title="Linie wymiarowe osi"
+                >
+                  {ICONS.dimensionLine}
                 </button>
                 <button
                   className={`zbtn ${snapEnabled ? 'active' : ''}`}
@@ -4952,7 +4962,7 @@ export default function App() {
                 <button
                   className={`zbtn ${showProfileSketches ? 'active' : ''}`}
                   onClick={() => setShowProfileSketches(!showProfileSketches)}
-                  title="Pokaż szkice profili (geometria 3D przekroju)"
+                  title="Pokaż szkice profili (geometria przekroju)"
                 >
                   {TOGGLE_ICONS.profileSketches}
                 </button>

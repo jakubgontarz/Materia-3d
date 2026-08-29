@@ -14,6 +14,9 @@ export interface Support3D {
   ry: SupportComponent;
   rz: SupportComponent;
   name?: string;
+  rotX?: number;
+  rotY?: number;
+  rotZ?: number;
 }
 
 export interface NodalForce3D {
@@ -76,6 +79,9 @@ export interface MemberDistributedLoad3D {
 }
 
 export interface MemberThermalLoad3D {
+  deltaTx?: number; // °C uniform axial temperature change (expansion/contraction)
+  deltaTy?: number; // °C temperature difference across local y-axis (top - bottom)
+  deltaTz?: number; // °C temperature difference across local z-axis (top - bottom)
   dT_axial?: number; // °C uniform
   dTy_top?: number; // °C along local y
   dTy_bot?: number;

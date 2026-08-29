@@ -404,6 +404,10 @@ interface ToolbarProps {
   setDefaultSectionId: (id: number) => void;
   defaultMaterialId: number;
   setDefaultMaterialId: (id: number) => void;
+  drawConstructionGrid?: boolean;
+  setDrawConstructionGrid?: (v: boolean) => void;
+  drawOuterDimensionLines?: boolean;
+  setDrawOuterDimensionLines?: (v: boolean) => void;
   snapSize?: number;
 }
 
@@ -412,6 +416,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   setMode,
   activeGridAxis = 'X',
   setActiveGridAxis = (_axis) => {},
+  drawConstructionGrid = true,
+  setDrawConstructionGrid,
+  drawOuterDimensionLines = true,
+  setDrawOuterDimensionLines,
   linesSubMode = 'construction',
   setLinesSubMode,
   onAddBasicDimensions,
@@ -656,7 +664,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           title="Rysuj pręt / węzeł (R / B)"
         >
           {ICONS.bar}
-          <span>Rysuj</span>
+          <span>Pręt</span>
         </button>
         <button
           className={`tb-btn ${mode === 'addPanel' ? 'active' : ''}`}
@@ -683,7 +691,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           title="Siatka osiowa / osie konstrukcyjne (L)"
         >
           {ICONS.lines}
-          <span>Siatka osiowa</span>
+          <span>Linie</span>
         </button>
       </div>
 
@@ -896,26 +904,52 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             className={`tb-btn ${activeGridAxis === 'X' ? 'active' : ''}`}
             onClick={() => setActiveGridAxis?.('X')}
             title="Wybierz oś X – kliknięcie na modelu lub wpisanie wartości doda współrzędną X"
-            style={{ fontWeight: activeGridAxis === 'X' ? 'bold' : 'normal', padding: '0 12px' }}
+            style={{ fontWeight: activeGridAxis === 'X' ? 'bold' : 'normal', padding: '0 10px', display: 'flex', alignItems: 'center', gap: '6px' }}
           >
-            <span>Oś X</span>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#ef4444', display: 'inline-block' }} />
+            <span>X</span>
           </button>
           <button
             className={`tb-btn ${activeGridAxis === 'Y' ? 'active' : ''}`}
             onClick={() => setActiveGridAxis?.('Y')}
             title="Wybierz oś Y – kliknięcie na modelu lub wpisanie wartości doda współrzędną Y"
-            style={{ fontWeight: activeGridAxis === 'Y' ? 'bold' : 'normal', padding: '0 12px' }}
+            style={{ fontWeight: activeGridAxis === 'Y' ? 'bold' : 'normal', padding: '0 10px', display: 'flex', alignItems: 'center', gap: '6px' }}
           >
-            <span>Oś Y</span>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#22c55e', display: 'inline-block' }} />
+            <span>Y</span>
           </button>
           <button
             className={`tb-btn ${activeGridAxis === 'Z' ? 'active' : ''}`}
             onClick={() => setActiveGridAxis?.('Z')}
             title="Wybierz oś Z – kliknięcie na modelu lub wpisanie wartości doda współrzędną Z"
-            style={{ fontWeight: activeGridAxis === 'Z' ? 'bold' : 'normal', padding: '0 12px' }}
+            style={{ fontWeight: activeGridAxis === 'Z' ? 'bold' : 'normal', padding: '0 10px', display: 'flex', alignItems: 'center', gap: '6px' }}
           >
-            <span>Oś Z</span>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#3b82f6', display: 'inline-block' }} />
+            <span>Z</span>
           </button>
+
+          <div className="tb-sep" />
+
+          <button
+            className={`tb-btn ${drawConstructionGrid ? 'active' : ''}`}
+            onClick={() => setDrawConstructionGrid?.(!drawConstructionGrid)}
+            title="Włącz/wyłącz rysowanie linii konstrukcyjnych osi (siatka przecięć XYZ)"
+            style={{ padding: '0 10px' }}
+          >
+            {ICONS.constructionLine}
+            <span>Linie konstrukcyjne</span>
+          </button>
+
+          <button
+            className={`tb-btn ${drawOuterDimensionLines ? 'active' : ''}`}
+            onClick={() => setDrawOuterDimensionLines?.(!drawOuterDimensionLines)}
+            title="Włącz/wyłącz rysowanie automatycznych linii wymiarowych osi"
+            style={{ padding: '0 10px' }}
+          >
+            {ICONS.dimensionLine}
+            <span>Linie wymiarowe</span>
+          </button>
+
           <div className="tb-sep" />
           <button
             className={`tb-btn ${snapEnabled ? 'active' : ''}`}

@@ -242,6 +242,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
               <span style={{ fontSize: '12.5px', fontWeight: 600 }}>Tolerancja łączenia węzłów (m)</span>
               <input
                 type="number"
+                inputMode="decimal"
                 min="0"
                 step="0.001"
                 value={mergeTolerance}

@@ -5,6 +5,7 @@ import {
   matVec,
   transpose,
   invSmall,
+  pinvSymmetric,
   solveLinSys,
   cholesky,
   solveL,
@@ -54,6 +55,145 @@ export interface SolverModel3D {
   sections: Section[];
   panels?: Panel3D[];
   settings?: AnalysisSettings;
+}
+
+export function computeSupportRotationMatrix(
+  rotXDeg = 0,
+  rotYDeg = 0,
+  rotZDeg = 0
+): number[][] {
+  const rx = (rotXDeg || 0) * (Math.PI / 180);
+  const ry = (rotYDeg || 0) * (Math.PI / 180);
+  const rz = (rotZDeg || 0) * (Math.PI / 180);
+
+  const cx = Math.cos(rx);
+  const sx = Math.sin(rx);
+  const cy = Math.cos(ry);
+  const sy = Math.sin(ry);
+  const cz = Math.cos(rz);
+  const sz = Math.sin(rz);
+
+  const R = [
+    [cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx],
+    [sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx],
+    [-sy, cy * sx, cy * cx]
+  ];
+  return R;
+}
+
+export function applySupportRotations(
+  nodes: Node3D[],
+  K: number[][],
+  F?: number[],
+  K2?: number[][]
+): (number[][] | null)[] {
+  const nNodes = nodes.length;
+  const T_nodes = nodes.map((n) => {
+    if (!n.support) return null;
+    const rotX = n.support.rotX || 0;
+    const rotY = n.support.rotY || 0;
+    const rotZ = n.support.rotZ || 0;
+    if (rotX === 0 && rotY === 0 && rotZ === 0) return null;
+    const R = computeSupportRotationMatrix(rotX, rotY, rotZ);
+    const Ti = zerosMat(6, 6);
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        Ti[r][c] = R[r][c];
+        Ti[r + 3][c + 3] = R[r][c];
+      }
+    }
+    return Ti;
+  });
+
+  // Transform F if provided: F'_p = Tp^T * F_p
+  if (F) {
+    for (let p = 0; p < nNodes; p++) {
+      const Tp = T_nodes[p];
+      if (Tp) {
+        const Fp_old = F.slice(6 * p, 6 * p + 6);
+        const Fp_new = zerosVec(6);
+        for (let i = 0; i < 6; i++) {
+          let sum = 0;
+          for (let j = 0; j < 6; j++) {
+            sum += Tp[j][i] * Fp_old[j]; // Tp^T * Fp
+          }
+          Fp_new[i] = sum;
+        }
+        for (let i = 0; i < 6; i++) {
+          F[6 * p + i] = Fp_new[i];
+        }
+      }
+    }
+  }
+
+  // Transform K and K2 (e.g., mass, geometric stiffness)
+  const transformMatrix = (mat: number[][]) => {
+    for (let p = 0; p < nNodes; p++) {
+      for (let q = 0; q < nNodes; q++) {
+        const Tp = T_nodes[p];
+        const Tq = T_nodes[q];
+        if (!Tp && !Tq) continue;
+
+        const Kpq = zerosMat(6, 6);
+        for (let i = 0; i < 6; i++) {
+          for (let j = 0; j < 6; j++) {
+            Kpq[i][j] = mat[6 * p + i][6 * q + j];
+          }
+        }
+
+        const temp = zerosMat(6, 6);
+        if (Tp) {
+          for (let i = 0; i < 6; i++) {
+            for (let j = 0; j < 6; j++) {
+              let sum = 0;
+              for (let k = 0; k < 6; k++) {
+                sum += Tp[k][i] * Kpq[k][j]; // Tp^T * Kpq
+              }
+              temp[i][j] = sum;
+            }
+          }
+        } else {
+          for (let i = 0; i < 6; i++) {
+            for (let j = 0; j < 6; j++) {
+              temp[i][j] = Kpq[i][j];
+            }
+          }
+        }
+
+        const Kpq_new = zerosMat(6, 6);
+        if (Tq) {
+          for (let i = 0; i < 6; i++) {
+            for (let j = 0; j < 6; j++) {
+              let sum = 0;
+              for (let k = 0; k < 6; k++) {
+                sum += temp[i][k] * Tq[k][j]; // temp * Tq
+              }
+              Kpq_new[i][j] = sum;
+            }
+          }
+        } else {
+          for (let i = 0; i < 6; i++) {
+            for (let j = 0; j < 6; j++) {
+              Kpq_new[i][j] = temp[i][j];
+            }
+          }
+        }
+
+        for (let i = 0; i < 6; i++) {
+          for (let j = 0; j < 6; j++) {
+            mat[6 * p + i][6 * q + j] = Kpq_new[i][j];
+          }
+        }
+      }
+    }
+  };
+
+  transformMatrix(K);
+  if (K2) {
+    transformMatrix(K2);
+  }
+
+  return T_nodes;
 }
 
 export function computeLocalAxes(
@@ -205,6 +345,25 @@ export function localStiffness3D(
   return k;
 }
 
+export function getElementCondIdx(el: Element3D): number[] {
+  const condIdx: number[] = [];
+  const h = el.hinges || {};
+  if (h.start_ux) condIdx.push(0);
+  if (h.start_uy) condIdx.push(1);
+  if (h.start_uz) condIdx.push(2);
+  if (h.start_rx) condIdx.push(3);
+  if (h.start_ry) condIdx.push(4);
+  if (h.start_rz) condIdx.push(5);
+
+  if (h.end_ux) condIdx.push(6);
+  if (h.end_uy) condIdx.push(7);
+  if (h.end_uz) condIdx.push(8);
+  if (h.end_rx) condIdx.push(9);
+  if (h.end_ry) condIdx.push(10);
+  if (h.end_rz) condIdx.push(11);
+  return condIdx;
+}
+
 export function condense3D(
   k: number[][],
   f: number[],
@@ -223,7 +382,7 @@ export function condense3D(
   const Fr = R.map((i) => f[i]);
   const Fc = C.map((i) => f[i]);
 
-  const KccInv = invSmall(Kcc);
+  const KccInv = pinvSymmetric(Kcc);
   const KccInvKcr = matMul(KccInv, Kcr);
   const KrcKccInvKcr = matMul(Krc, KccInvKcr);
 
@@ -237,7 +396,7 @@ export function condense3D(
   for (let i = 0; i < R.length; i++) {
     fOut[R[i]] = Fred[i];
     for (let j = 0; j < R.length; j++) {
-      kOut[R[i]][R[j]] = Kred[i][j];
+      kOut[R[i]][R[j]] = (Kred[i][j] + Kred[j][i]) / 2;
     }
   }
   return { k: kOut, f: fOut };
@@ -259,7 +418,7 @@ export function backSubstitute3D(
   const Fc = C.map((i) => fFull[i]);
   const uR = R.map((i) => dLocalRaw[i]);
 
-  const KccInv = invSmall(Kcc);
+  const KccInv = pinvSymmetric(Kcc);
   const KcrUr = matVec(Kcr, uR);
   const rhs = Fc.map((val, i) => val - KcrUr[i]);
   const uC = matVec(KccInv, rhs);
@@ -267,6 +426,61 @@ export function backSubstitute3D(
   const dOut = dLocalRaw.slice();
   for (let i = 0; i < C.length; i++) dOut[C[i]] = uC[i];
   return dOut;
+}
+
+export function getGuyanTransformation3D(
+  kFull: number[][],
+  condIdx: number[]
+): { T_guyan: number[][]; R: number[]; C: number[] } {
+  const all = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  if (condIdx.length === 0) {
+    const eye = zerosMat(12, 12);
+    for (let i = 0; i < 12; i++) eye[i][i] = 1;
+    return { T_guyan: eye, R: all, C: [] };
+  }
+  const R = all.filter((i) => !condIdx.includes(i));
+  const C = condIdx;
+
+  const Kcr = C.map((i) => R.map((j) => kFull[i][j]));
+  const Kcc = C.map((i) => C.map((j) => kFull[i][j]));
+  const KccInv = pinvSymmetric(Kcc);
+  const KccInvKcr = matMul(KccInv, Kcr); // size: C.length x R.length
+
+  // T_guyan is 12 x R.length
+  // uFull = T_guyan * uR
+  const T_guyan = zerosMat(12, R.length);
+  for (let rIdx = 0; rIdx < R.length; rIdx++) {
+    T_guyan[R[rIdx]][rIdx] = 1;
+  }
+  for (let cIdx = 0; cIdx < C.length; cIdx++) {
+    const c = C[cIdx];
+    for (let rIdx = 0; rIdx < R.length; rIdx++) {
+      T_guyan[c][rIdx] = -KccInvKcr[cIdx][rIdx];
+    }
+  }
+
+  return { T_guyan, R, C };
+}
+
+export function condenseGuyan3D(
+  matFull: number[][],
+  kFull: number[][],
+  condIdx: number[]
+): number[][] {
+  if (condIdx.length === 0) return matFull.map((r) => r.slice());
+  const { T_guyan, R } = getGuyanTransformation3D(kFull, condIdx);
+
+  const T_t = transpose(T_guyan);
+  const matT = matMul(matFull, T_guyan);
+  const matReduced = matMul(T_t, matT);
+
+  const out = zerosMat(12, 12);
+  for (let i = 0; i < R.length; i++) {
+    for (let j = 0; j < R.length; j++) {
+      out[R[i]][R[j]] = (matReduced[i][j] + matReduced[j][i]) / 2;
+    }
+  }
+  return out;
 }
 
 export function shapeFunctions3D(x: number, L: number) {
@@ -386,22 +600,46 @@ export function solveLinearStatic3D(model: SolverModel3D): LinearStaticResult3D 
       fFull = fFull.map((v, i) => v + fsw[i]);
     }
 
-    // Member releases / hinges condensation indices
-    const condIdx: number[] = [];
-    const h = el.hinges || {};
-    if (h.start_ux) condIdx.push(0);
-    if (h.start_uy) condIdx.push(1);
-    if (h.start_uz) condIdx.push(2);
-    if (h.start_rx) condIdx.push(3);
-    if (h.start_ry) condIdx.push(4);
-    if (h.start_rz) condIdx.push(5);
+    // Member thermal loads (axial dT_x and transverse gradient dTy, dTz)
+    if (el.thermal) {
+      const dTx = el.thermal.deltaTx ?? el.thermal.dT_axial ?? 0;
+      const dTy = el.thermal.deltaTy ?? ((el.thermal.dTy_top ?? 0) - (el.thermal.dTy_bot ?? 0));
+      const dTz = el.thermal.deltaTz ?? ((el.thermal.dTz_top ?? 0) - (el.thermal.dTz_bot ?? 0));
 
-    if (h.end_ux) condIdx.push(6);
-    if (h.end_uy) condIdx.push(7);
-    if (h.end_uz) condIdx.push(8);
-    if (h.end_rx) condIdx.push(9);
-    if (h.end_ry) condIdx.push(10);
-    if (h.end_rz) condIdx.push(11);
+      const alpha = (mat.alpha || 1.2) * 1e-5; // Thermal expansion coeff [1/°C]
+      const hDim = (sec.h ? sec.h * UNIT.cm : 0.1); // depth along local y [m]
+      const bDim = (sec.b ? sec.b * UNIT.cm : 0.1); // width along local z [m]
+
+      const fTherm = zerosVec(12);
+
+      // 1. Axial temperature deltaTx (uniform expansion / compression)
+      // Positive deltaTx (expansion) -> equivalent nodal force pulls outward at node 2 (+x) and pushes inward at node 1 (-x)
+      if (Math.abs(dTx) > 1e-9) {
+        const N_T = E * A * alpha * dTx;
+        fTherm[0] += -N_T;
+        fTherm[6] += +N_T;
+      }
+
+      // 2. Transverse gradient in local y: deltaTy (bending about local z, DOFs 5 and 11)
+      // Positive deltaTy (top fiber warmer than bottom fiber) -> curvature towards -y
+      if (Math.abs(dTy) > 1e-9 && hDim > 1e-4) {
+        const M_Tz = E * Iz * alpha * (dTy / hDim);
+        fTherm[5] += -M_Tz;
+        fTherm[11] += +M_Tz;
+      }
+
+      // 3. Transverse gradient in local z: deltaTz (bending about local y, DOFs 4 and 10)
+      if (Math.abs(dTz) > 1e-9 && bDim > 1e-4) {
+        const M_Ty = E * Iy * alpha * (dTz / bDim);
+        fTherm[4] += +M_Ty;
+        fTherm[10] += -M_Ty;
+      }
+
+      fFull = fFull.map((v, i) => v + fTherm[i]);
+    }
+
+    // Member releases / hinges condensation indices
+    const condIdx = getElementCondIdx(el);
 
     const { k: kCond, f: fCond } = condense3D(kFull, fFull, condIdx);
 
@@ -471,6 +709,9 @@ export function solveLinearStatic3D(model: SolverModel3D): LinearStaticResult3D 
       F[6 * idx + 5] += n.moment.Mz || 0;
     }
   });
+
+  // Rotate support conditions (K and F)
+  const T_nodes = applySupportRotations(nodes, K, F);
 
   // Boundary conditions
   const isFixed = new Array(nDof).fill(false);
@@ -548,6 +789,24 @@ export function solveLinearStatic3D(model: SolverModel3D): LinearStaticResult3D 
     const { k, delta } = springInfo[dof];
     Rglobal[dof] = k * (delta - D[dof]);
   });
+
+  // Globalize displacement vector D
+  const D_global = [...D];
+  nodes.forEach((n, i) => {
+    const Tp = T_nodes[i];
+    if (Tp) {
+      const D_local_i = D.slice(6 * i, 6 * i + 6);
+      const D_global_i = matVec(Tp, D_local_i);
+      for (let d = 0; d < 6; d++) {
+        D_global[6 * i + d] = D_global_i[d];
+      }
+    }
+  });
+
+  // Overwrite D with D_global for global post-processing and returned values
+  for (let i = 0; i < nDof; i++) {
+    D[i] = D_global[i];
+  }
 
   // Sample internal forces and displacements along each member (40 subdivisions per member)
   const NSAMP = 40;
@@ -855,9 +1114,7 @@ export function solveStability3D(model: SolverModel3D, maxModes = 4): StabilityR
     const Navg = (edRes.pts[0].N + edRes.pts[edRes.pts.length - 1].N) / 2;
     if (Navg < -1e-6) hasCompression = true;
 
-    const kgFull = localGeometricStiffness3D(Navg, L);
-    const kgGlobal = matMul(matMul(Tt, kgFull), T);
-
+    const condIdx = getElementCondIdx(el);
     const mat = model.materials.find((m) => m.id === el.materialId) || model.materials[0];
     const sec = model.sections.find((s) => s.id === el.sectionId) || model.sections[0];
     const E = mat.E * UNIT.GPa;
@@ -868,7 +1125,12 @@ export function solveStability3D(model: SolverModel3D, maxModes = 4): StabilityR
     const It = sec.It * UNIT.cm4;
 
     const kFull = localStiffness3D(E, G, A, Iy, Iz, It, L);
-    const kGlobal = matMul(matMul(Tt, kFull), T);
+    const { k: kCond } = condense3D(kFull, zerosVec(12), condIdx);
+    const kGlobal = matMul(matMul(Tt, kCond), T);
+
+    const kgFull = localGeometricStiffness3D(Navg, L);
+    const kgCond = condenseGuyan3D(kgFull, kFull, condIdx);
+    const kgGlobal = matMul(matMul(Tt, kgCond), T);
 
     const dofMap = [
       6 * nodeIndex[el.n1] + 0,
@@ -892,6 +1154,9 @@ export function solveStability3D(model: SolverModel3D, maxModes = 4): StabilityR
       }
     }
   });
+
+  // Rotate support conditions for stiffness matrix K and geometric stiffness matrix KG
+  const T_nodes = applySupportRotations(nodes, K, undefined, KG);
 
   const isFixed = new Array(nDof).fill(false);
   nodes.forEach((n, i) => {
@@ -944,10 +1209,13 @@ export function solveStability3D(model: SolverModel3D, maxModes = 4): StabilityR
 
   let Lchol = cholesky(Kff);
   if (!Lchol) {
-    const regKff = Kff.map((row, i) =>
-      row.map((v, j) => (i === j ? v + 1e-7 * maxDiag : v))
-    );
-    Lchol = cholesky(regKff);
+    for (const shiftFactor of [1e-7, 1e-5, 1e-3, 1e-1]) {
+      const regKff = Kff.map((row, i) =>
+        row.map((v, j) => (i === j ? v + shiftFactor * Math.max(maxDiag, 1) : v))
+      );
+      Lchol = cholesky(regKff);
+      if (Lchol) break;
+    }
     if (!Lchol) {
       return {
         type: 'stability',
@@ -998,7 +1266,21 @@ export function solveStability3D(model: SolverModel3D, maxModes = 4): StabilityR
       freeIdx.forEach((gi, idx) => {
         D[gi] = phi_free[idx];
       });
-      rawModes.push({ alphaCr, D });
+
+      // Transform D back to global coordinates for correct displacement and shape calculations
+      const D_global = [...D];
+      nodes.forEach((n, i) => {
+        const Tp = T_nodes[i];
+        if (Tp) {
+          const D_local_i = D.slice(6 * i, 6 * i + 6);
+          const D_global_i = matVec(Tp, D_local_i);
+          for (let d = 0; d < 6; d++) {
+            D_global[6 * i + d] = D_global_i[d];
+          }
+        }
+      });
+
+      rawModes.push({ alphaCr, D: D_global });
     }
   }
 
@@ -1026,6 +1308,17 @@ export function solveStability3D(model: SolverModel3D, maxModes = 4): StabilityR
       const n2 = nodes.find((n) => n.id === el.n2)!;
       const { L, vx, vy, vz, T } = computeLocalAxes(n1, n2, el.rollAngle || 0);
 
+      const mat = model.materials.find((m) => m.id === el.materialId) || model.materials[0];
+      const sec = model.sections.find((s) => s.id === el.sectionId) || model.sections[0];
+      const E = mat.E * UNIT.GPa;
+      const G = mat.G * UNIT.GPa;
+      const A = sec.A * UNIT.cm2;
+      const Iy = sec.Iy * UNIT.cm4;
+      const Iz = sec.Iz * UNIT.cm4;
+      const It = sec.It * UNIT.cm4;
+      const kFull = localStiffness3D(E, G, A, Iy, Iz, It, L);
+      const condIdx = getElementCondIdx(el);
+
       const dofMap = [
         6 * nodeIndex[el.n1] + 0,
         6 * nodeIndex[el.n1] + 1,
@@ -1041,7 +1334,8 @@ export function solveStability3D(model: SolverModel3D, maxModes = 4): StabilityR
         6 * nodeIndex[el.n2] + 5,
       ];
       const dg = dofMap.map((i) => D[i]);
-      const dLocal = matVec(T, dg);
+      const dLocalRaw = matVec(T, dg);
+      const dLocal = backSubstitute3D(kFull, zerosVec(12), dLocalRaw, condIdx);
 
       const pts: PointResult3D[] = [];
       const NSAMP = 20;
@@ -1204,14 +1498,17 @@ export function solveModal3D(model: SolverModel3D, maxModes = 4): ModalResult3D 
     const Iz = sec.Iz * UNIT.cm4;
     const It = sec.It * UNIT.cm4;
 
+    const condIdx = getElementCondIdx(el);
     const kFull = localStiffness3D(E, G, A, Iy, Iz, It, L);
-    const kGlobal = matMul(matMul(Tt, kFull), T);
+    const { k: kCond } = condense3D(kFull, zerosVec(12), condIdx);
+    const kGlobal = matMul(matMul(Tt, kCond), T);
 
     const mTotal = includeElemMass ? (mat.density * A * L) / 1000 : 0; // tonnes
     let mGlobal = zerosMat(12, 12);
     if (mTotal > 1e-15) {
       const mLocal = localConsistentMass3D(mTotal, L);
-      mGlobal = matMul(matMul(Tt, mLocal), T);
+      const mCond = condenseGuyan3D(mLocal, kFull, condIdx);
+      mGlobal = matMul(matMul(Tt, mCond), T);
     }
 
     const dofMap = [
@@ -1248,6 +1545,9 @@ export function solveModal3D(model: SolverModel3D, maxModes = 4): ModalResult3D 
       if (mz > 0) M[6 * i + 2][6 * i + 2] += mz;
     }
   });
+
+  // Rotate support conditions for stiffness matrix K and mass matrix M
+  const T_nodes = applySupportRotations(nodes, K, undefined, M);
 
   const isFixed = new Array(nDof).fill(false);
   nodes.forEach((n, i) => {
@@ -1307,10 +1607,13 @@ export function solveModal3D(model: SolverModel3D, maxModes = 4): ModalResult3D 
 
   let Lchol = cholesky(Kff);
   if (!Lchol) {
-    const regKff = Kff.map((row, i) =>
-      row.map((v, j) => (i === j ? v + 1e-7 * maxDiag : v))
-    );
-    Lchol = cholesky(regKff);
+    for (const shiftFactor of [1e-7, 1e-5, 1e-3, 1e-1]) {
+      const regKff = Kff.map((row, i) =>
+        row.map((v, j) => (i === j ? v + shiftFactor * Math.max(maxDiag, 1) : v))
+      );
+      Lchol = cholesky(regKff);
+      if (Lchol) break;
+    }
     if (!Lchol) {
       return {
         type: 'modal',
@@ -1382,20 +1685,46 @@ export function solveModal3D(model: SolverModel3D, maxModes = 4): ModalResult3D 
         D[gi] = phi_free[idx];
       });
 
-      // Generalized modal mass & participation
+      // Compute local mass-displacements product
+      const mRowD_local = zerosVec(nDof);
+      for (let i = 0; i < nDof; i++) {
+        let sum = 0;
+        for (let j = 0; j < nDof; j++) {
+          sum += M[i][j] * D[j];
+        }
+        mRowD_local[i] = sum;
+      }
+
+      // Transform D and mRowD_local back to global coordinates for correct participation & shape calculations
+      const D_global = [...D];
+      const mRowD_global = [...mRowD_local];
+      nodes.forEach((n, i) => {
+        const Tp = T_nodes[i];
+        if (Tp) {
+          const D_local_i = D.slice(6 * i, 6 * i + 6);
+          const D_global_i = matVec(Tp, D_local_i);
+          for (let d = 0; d < 6; d++) {
+            D_global[6 * i + d] = D_global_i[d];
+          }
+
+          const mRowD_local_i = mRowD_local.slice(6 * i, 6 * i + 6);
+          const mRowD_global_i = matVec(Tp, mRowD_local_i);
+          for (let d = 0; d < 6; d++) {
+            mRowD_global[6 * i + d] = mRowD_global_i[d];
+          }
+        }
+      });
+
+      // Generalized modal mass & participation using globalized vectors
       let Mgen = 0;
       let Lx = 0;
       let Ly = 0;
       let Lz = 0;
       for (let i = 0; i < nDof; i++) {
-        let mRowD = 0;
-        for (let j = 0; j < nDof; j++) {
-          mRowD += M[i][j] * D[j];
-        }
-        Mgen += D[i] * mRowD;
-        if (i % 6 === 0) Lx += mRowD;
-        if (i % 6 === 1) Ly += mRowD;
-        if (i % 6 === 2) Lz += mRowD;
+        Mgen += D_global[i] * mRowD_global[i];
+        if (i % 6 === 0) Lx += mRowD_global[i];
+        if (i % 6 === 1) Ly += mRowD_global[i];
+        if (i % 6 === 2) Lz += mRowD_global[i];
       }
 
       let massRatioX = 0;
@@ -1407,7 +1736,7 @@ export function solveModal3D(model: SolverModel3D, maxModes = 4): ModalResult3D 
         massRatioZ = MtotZ > 1e-9 ? ((Lz * Lz) / Mgen / MtotZ) * 100 : 0;
       }
 
-      rawModes.push({ omega, f, T, D, massRatioX, massRatioY, massRatioZ });
+      rawModes.push({ omega, f, T, D: D_global, massRatioX, massRatioY, massRatioZ });
     }
   }
 
@@ -1432,6 +1761,17 @@ export function solveModal3D(model: SolverModel3D, maxModes = 4): ModalResult3D 
       const n2 = nodes.find((n) => n.id === el.n2)!;
       const { L, vx, vy, vz, T } = computeLocalAxes(n1, n2, el.rollAngle || 0);
 
+      const mat = model.materials.find((m) => m.id === el.materialId) || model.materials[0];
+      const sec = model.sections.find((s) => s.id === el.sectionId) || model.sections[0];
+      const E = mat.E * UNIT.GPa;
+      const G = mat.G * UNIT.GPa;
+      const A = sec.A * UNIT.cm2;
+      const Iy = sec.Iy * UNIT.cm4;
+      const Iz = sec.Iz * UNIT.cm4;
+      const It = sec.It * UNIT.cm4;
+      const kFull = localStiffness3D(E, G, A, Iy, Iz, It, L);
+      const condIdx = getElementCondIdx(el);
+
       const dofMap = [
         6 * nodeIndex[el.n1] + 0,
         6 * nodeIndex[el.n1] + 1,
@@ -1447,7 +1787,8 @@ export function solveModal3D(model: SolverModel3D, maxModes = 4): ModalResult3D 
         6 * nodeIndex[el.n2] + 5,
       ];
       const dg = dofMap.map((i) => D[i]);
-      const dLocal = matVec(T, dg);
+      const dLocalRaw = matVec(T, dg);
+      const dLocal = backSubstitute3D(kFull, zerosVec(12), dLocalRaw, condIdx);
 
       const pts: PointResult3D[] = [];
       const NSAMP = 20;
