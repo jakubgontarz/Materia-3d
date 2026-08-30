@@ -263,16 +263,22 @@ export function drawScene3D(
       [cl.p1, cl.p2].forEach((pt) => {
         const sp = engine.project(pt);
         if (sp.visible) {
-          overlayCtx.save();
-          overlayCtx.strokeStyle = color;
-          overlayCtx.lineWidth = isSel ? 2.5 : 2.0;
-          overlayCtx.beginPath();
-          overlayCtx.moveTo(sp.x - 7, sp.y);
-          overlayCtx.lineTo(sp.x + 7, sp.y);
-          overlayCtx.moveTo(sp.x, sp.y - 7);
-          overlayCtx.lineTo(sp.x, sp.y + 7);
-          overlayCtx.stroke();
-          overlayCtx.restore();
+          labelQueue.push({
+            depth: sp.depth,
+            priority: 0,
+            draw: (ctx) => {
+              ctx.save();
+              ctx.strokeStyle = color;
+              ctx.lineWidth = isSel ? 2.5 : 2.0;
+              ctx.beginPath();
+              ctx.moveTo(sp.x - 7, sp.y);
+              ctx.lineTo(sp.x + 7, sp.y);
+              ctx.moveTo(sp.x, sp.y - 7);
+              ctx.lineTo(sp.x, sp.y + 7);
+              ctx.stroke();
+              ctx.restore();
+            },
+          });
         }
       });
     });
@@ -280,21 +286,28 @@ export function drawScene3D(
 
   // Construction Intersection Points
   if (options.constructionPoints && options.constructionPoints.length > 0) {
-    overlayCtx.save();
-    overlayCtx.strokeStyle = isDark ? 'rgba(251, 146, 60, 0.65)' : 'rgba(234, 88, 12, 0.65)';
-    overlayCtx.lineWidth = 1.0;
+    const strokeStyle = isDark ? 'rgba(251, 146, 60, 0.65)' : 'rgba(234, 88, 12, 0.65)';
     options.constructionPoints.forEach((cp) => {
       const sp = engine.project(cp);
       if (sp.visible) {
-        overlayCtx.beginPath();
-        overlayCtx.moveTo(sp.x - 4, sp.y);
-        overlayCtx.lineTo(sp.x + 4, sp.y);
-        overlayCtx.moveTo(sp.x, sp.y - 4);
-        overlayCtx.lineTo(sp.x, sp.y + 4);
-        overlayCtx.stroke();
+        labelQueue.push({
+          depth: sp.depth,
+          priority: 0,
+          draw: (ctx) => {
+            ctx.save();
+            ctx.strokeStyle = strokeStyle;
+            ctx.lineWidth = 1.0;
+            ctx.beginPath();
+            ctx.moveTo(sp.x - 4, sp.y);
+            ctx.lineTo(sp.x + 4, sp.y);
+            ctx.moveTo(sp.x, sp.y - 4);
+            ctx.lineTo(sp.x, sp.y + 4);
+            ctx.stroke();
+            ctx.restore();
+          },
+        });
       }
     });
-    overlayCtx.restore();
   }
 
   // Dimension Lines
@@ -1024,9 +1037,9 @@ function build3DPanelLocalAxes(engine: RenderEngine3D, panel: Panel3D, nodes: No
   makeLocalAxisOnTop(arrowY);
   makeLocalAxisOnTop(arrowZ);
 
-  engine.modelGroup.add(arrowX);
-  engine.modelGroup.add(arrowY);
-  engine.modelGroup.add(arrowZ);
+  engine.overlayGroup.add(arrowX);
+  engine.overlayGroup.add(arrowY);
+  engine.overlayGroup.add(arrowZ);
 }
 
 function build3DPanelLoadTransferDirections(
@@ -1058,7 +1071,7 @@ function build3DPanelLoadTransferDirections(
   );
 
   const colorHex = isDark ? 0xf59e0b : 0xd97706;
-  const lineMat = new THREE.LineBasicMaterial({ color: colorHex, linewidth: 2 });
+  const lineMat = new THREE.LineBasicMaterial({ color: colorHex, linewidth: 2, depthTest: true, depthWrite: true });
 
   const symbolLen = Math.max(0.3, Math.min(0.55, Math.min(Lx, Ly) * 0.25));
 
@@ -1077,8 +1090,8 @@ function build3DPanelLoadTransferDirections(
 
     const lineGeom = new THREE.BufferGeometry().setFromPoints([p1, p2]);
     const line = new THREE.Line(lineGeom, lineMat);
-    makeOnTop(line, 2);
-    engine.modelGroup.add(line);
+    makeOnTop(line, 1);
+    engine.overlayGroup.add(line);
 
     const arrHead1 = new THREE.ArrowHelper(
       new THREE.Vector3(...vDir),
@@ -1096,10 +1109,10 @@ function build3DPanelLoadTransferDirections(
       0.08,
       0.04
     );
-    makeOnTop(arrHead1, 2);
-    makeOnTop(arrHead2, 2);
-    engine.modelGroup.add(arrHead1);
-    engine.modelGroup.add(arrHead2);
+    makeOnTop(arrHead1, 1);
+    makeOnTop(arrHead2, 1);
+    engine.overlayGroup.add(arrHead1);
+    engine.overlayGroup.add(arrHead2);
   };
 
   if (dir === 'one_way_x' || dir === 'two_way') {
@@ -1159,8 +1172,8 @@ function build3DPanelPressureLoad(
     0.16,
     0.08
   );
-  makeOnTop(centerArrow, 2);
-  engine.modelGroup.add(centerArrow);
+  makeOnTop(centerArrow, 1);
+  engine.overlayGroup.add(centerArrow);
 
   const N = corners.length;
   for (let i = 0; i < N; i++) {
@@ -1192,15 +1205,15 @@ function build3DPanelPressureLoad(
         0.12,
         0.06
       );
-      makeOnTop(arrow, 2);
-      engine.modelGroup.add(arrow);
+      makeOnTop(arrow, 1);
+      engine.overlayGroup.add(arrow);
     }
 
     const lineGeom = new THREE.BufferGeometry().setFromPoints(tailPoints);
-    const lineMat = new THREE.LineBasicMaterial({ color: colorHex, linewidth: 2 });
+    const lineMat = new THREE.LineBasicMaterial({ color: colorHex, linewidth: 2, depthTest: true, depthWrite: true });
     const line = new THREE.Line(lineGeom, lineMat);
-    makeOnTop(line, 2);
-    engine.modelGroup.add(line);
+    makeOnTop(line, 1);
+    engine.overlayGroup.add(line);
   }
 }
 
@@ -1411,20 +1424,20 @@ function build3DOriginTriad(engine: RenderEngine3D) {
   // X axis (Red)
   const dirX = new THREE.Vector3(1, 0, 0);
   const arrowX = new THREE.ArrowHelper(dirX, new THREE.Vector3(0, 0, 0), len, 0xef4444, 0.25, 0.12);
-  makeOnTop(arrowX, 100);
-  engine.modelGroup.add(arrowX);
+  makeOnTop(arrowX, 1);
+  engine.overlayGroup.add(arrowX);
 
   // Y axis (Green)
   const dirY = new THREE.Vector3(0, 1, 0);
   const arrowY = new THREE.ArrowHelper(dirY, new THREE.Vector3(0, 0, 0), len, 0x22c55e, 0.25, 0.12);
-  makeOnTop(arrowY, 100);
-  engine.modelGroup.add(arrowY);
+  makeOnTop(arrowY, 1);
+  engine.overlayGroup.add(arrowY);
 
   // Z axis (Blue)
   const dirZ = new THREE.Vector3(0, 0, 1);
   const arrowZ = new THREE.ArrowHelper(dirZ, new THREE.Vector3(0, 0, 0), len, 0x3b82f6, 0.25, 0.12);
-  makeOnTop(arrowZ, 100);
-  engine.modelGroup.add(arrowZ);
+  makeOnTop(arrowZ, 1);
+  engine.overlayGroup.add(arrowZ);
 }
 
 function createProfileShape2D(sec: Section): THREE.Shape {
@@ -2171,28 +2184,15 @@ function isPointOccluded(
   return false;
 }
 
-function makeOnTop(obj: THREE.Object3D, renderOrder = 100) {
+function makeOnTop(obj: THREE.Object3D, renderOrder = 1) {
   obj.renderOrder = renderOrder;
   obj.traverse((child) => {
     child.renderOrder = renderOrder;
-    const mesh = child as THREE.Mesh;
-    if (mesh.material) {
-      const applyMat = (m: THREE.Material) => {
-        m.depthTest = false;
-        m.depthWrite = false;
-      };
-
-      if (Array.isArray(mesh.material)) {
-        mesh.material.forEach(applyMat);
-      } else {
-        applyMat(mesh.material);
-      }
-    }
   });
 }
 
 function makeLocalAxisOnTop(obj: THREE.Object3D) {
-  makeOnTop(obj, 100);
+  makeOnTop(obj, 1);
 }
 
 function buildSingleArrow(
@@ -2205,8 +2205,8 @@ function buildSingleArrow(
   headWidth = 0.11
 ) {
   const arrow = new THREE.ArrowHelper(dir.clone().normalize(), origin, length, color, headLength, headWidth);
-  makeOnTop(arrow, 100);
-  engine.modelGroup.add(arrow);
+  makeOnTop(arrow, 1);
+  engine.overlayGroup.add(arrow);
 }
 
 function buildDoubleHeadedArrow(
@@ -2223,15 +2223,15 @@ function buildDoubleHeadedArrow(
 
   // Shaft line
   const lineGeom = new THREE.BufferGeometry().setFromPoints([origin, endPoint]);
-  const lineMat = new THREE.LineBasicMaterial({ color, depthTest: false, depthWrite: false });
+  const lineMat = new THREE.LineBasicMaterial({ color, depthTest: true, depthWrite: true });
   const line = new THREE.Line(lineGeom, lineMat);
-  line.renderOrder = 100;
-  engine.modelGroup.add(line);
+  line.renderOrder = 1;
+  engine.overlayGroup.add(line);
 
   // Two Cones along direction
   const coneGeom = new THREE.ConeGeometry(headWidth / 2, headLength, 12);
   coneGeom.translate(0, -headLength / 2, 0); // shift apex to origin
-  const coneMat = new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false });
+  const coneMat = new THREE.MeshBasicMaterial({ color, depthTest: true, depthWrite: true });
 
   const quaternion = new THREE.Quaternion();
   quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normDir);
@@ -2240,15 +2240,15 @@ function buildDoubleHeadedArrow(
   const head1 = new THREE.Mesh(coneGeom, coneMat);
   head1.position.copy(endPoint);
   head1.quaternion.copy(quaternion);
-  head1.renderOrder = 100;
-  engine.modelGroup.add(head1);
+  head1.renderOrder = 1;
+  engine.overlayGroup.add(head1);
 
   // Head 2 (behind head 1)
   const head2 = new THREE.Mesh(coneGeom, coneMat);
   head2.position.copy(endPoint.clone().addScaledVector(normDir, -headLength * 0.85));
   head2.quaternion.copy(quaternion);
-  head2.renderOrder = 100;
-  engine.modelGroup.add(head2);
+  head2.renderOrder = 1;
+  engine.overlayGroup.add(head2);
 }
 
 function build3DNodalMass(_engine: RenderEngine3D, _n: Node3D, _isDark: boolean) {
@@ -2307,8 +2307,8 @@ function build3DDistributedLoad(engine: RenderEngine3D, el: Element3D, n1: Node3
 
       const origin = memberPt.clone().addScaledVector(actualDir, -arrowLen);
       const arrow = new THREE.ArrowHelper(actualDir, origin, arrowLen, comp.color, 0.18, 0.09);
-      makeOnTop(arrow, 2);
-      engine.modelGroup.add(arrow);
+      makeOnTop(arrow, 1);
+      engine.overlayGroup.add(arrow);
       topPts.push(origin);
     }
 
@@ -2316,9 +2316,9 @@ function build3DDistributedLoad(engine: RenderEngine3D, el: Element3D, n1: Node3
       const geom = new THREE.BufferGeometry().setFromPoints(topPts);
       const mat = new THREE.LineDashedMaterial({ color: comp.color, dashSize: 0.1, gapSize: 0.05, depthTest: true, depthWrite: true });
       const line = new THREE.Line(geom, mat);
-      line.renderOrder = 2;
+      line.renderOrder = 1;
       line.computeLineDistances();
-      engine.modelGroup.add(line);
+      engine.overlayGroup.add(line);
     }
   });
 }
@@ -2364,8 +2364,8 @@ function build3DThermalLoad(engine: RenderEngine3D, el: Element3D, n1: Node3D, n
 
       const origin = pt.clone().addScaledVector(arrowDir, -arrowLen * 0.5);
       const arrow = new THREE.ArrowHelper(arrowDir, origin, arrowLen, color, arrowHeadLen, arrowHeadWidth);
-      makeOnTop(arrow, 2);
-      engine.modelGroup.add(arrow);
+      makeOnTop(arrow, 1);
+      engine.overlayGroup.add(arrow);
     });
 
     // Thermal indicator dashed line along member
@@ -2380,9 +2380,9 @@ function build3DThermalLoad(engine: RenderEngine3D, el: Element3D, n1: Node3D, n
       depthWrite: true,
     });
     const line = new THREE.Line(geom, lineMat);
-    line.renderOrder = 2;
+    line.renderOrder = 1;
     line.computeLineDistances();
-    engine.modelGroup.add(line);
+    engine.overlayGroup.add(line);
   }
 
   // 2. Transverse gradient in local y (deltaTy):
@@ -2400,15 +2400,15 @@ function build3DThermalLoad(engine: RenderEngine3D, el: Element3D, n1: Node3D, n
       const warmOrigin = pt.clone().addScaledVector(dirY, sign * 0.04);
       const warmDir = dirY.clone().multiplyScalar(sign);
       const warmArrow = new THREE.ArrowHelper(warmDir, warmOrigin, arrowLen, warmColor, arrowHeadLen, arrowHeadWidth);
-      makeOnTop(warmArrow, 2);
-      engine.modelGroup.add(warmArrow);
+      makeOnTop(warmArrow, 1);
+      engine.overlayGroup.add(warmArrow);
 
       // Cool side (-y if sign > 0)
       const coolOrigin = pt.clone().addScaledVector(dirY, -sign * 0.04);
       const coolDir = dirY.clone().multiplyScalar(-sign);
       const coolArrow = new THREE.ArrowHelper(coolDir, coolOrigin, arrowLen, coolColor, arrowHeadLen, arrowHeadWidth);
-      makeOnTop(coolArrow, 2);
-      engine.modelGroup.add(coolArrow);
+      makeOnTop(coolArrow, 1);
+      engine.overlayGroup.add(coolArrow);
     });
   }
 
@@ -2427,15 +2427,15 @@ function build3DThermalLoad(engine: RenderEngine3D, el: Element3D, n1: Node3D, n
       const warmOrigin = pt.clone().addScaledVector(dirZ, sign * 0.04);
       const warmDir = dirZ.clone().multiplyScalar(sign);
       const warmArrow = new THREE.ArrowHelper(warmDir, warmOrigin, arrowLen, warmColor, arrowHeadLen, arrowHeadWidth);
-      makeOnTop(warmArrow, 2);
-      engine.modelGroup.add(warmArrow);
+      makeOnTop(warmArrow, 1);
+      engine.overlayGroup.add(warmArrow);
 
       // Cool side (-z if sign > 0)
       const coolOrigin = pt.clone().addScaledVector(dirZ, -sign * 0.04);
       const coolDir = dirZ.clone().multiplyScalar(-sign);
       const coolArrow = new THREE.ArrowHelper(coolDir, coolOrigin, arrowLen, coolColor, arrowHeadLen, arrowHeadWidth);
-      makeOnTop(coolArrow, 2);
-      engine.modelGroup.add(coolArrow);
+      makeOnTop(coolArrow, 1);
+      engine.overlayGroup.add(coolArrow);
     });
   }
 }
@@ -2455,9 +2455,9 @@ function build3DLocalAxes(engine: RenderEngine3D, el: Element3D, n1: Node3D, n2:
   makeLocalAxisOnTop(arrowX);
   makeLocalAxisOnTop(arrowY);
   makeLocalAxisOnTop(arrowZ);
-  engine.modelGroup.add(arrowX);
-  engine.modelGroup.add(arrowY);
-  engine.modelGroup.add(arrowZ);
+  engine.overlayGroup.add(arrowX);
+  engine.overlayGroup.add(arrowY);
+  engine.overlayGroup.add(arrowZ);
 }
 
 function build3DProbeMarker(engine: RenderEngine3D, n1: Node3D, n2: Node3D, t: number) {
@@ -2466,10 +2466,10 @@ function build3DProbeMarker(engine: RenderEngine3D, n1: Node3D, n2: Node3D, t: n
   const pz = n1.z + (n2.z - n1.z) * t;
 
   const geom = new THREE.SphereGeometry(0.18, 16, 16);
-  const mat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+  const mat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, depthTest: true, depthWrite: true });
   const mesh = new THREE.Mesh(geom, mat);
   mesh.position.set(px, py, pz);
-  engine.modelGroup.add(mesh);
+  engine.overlayGroup.add(mesh);
 }
 
 function build3DDeformedShape(engine: RenderEngine3D, solved: SolverResult3D, options: SceneRenderOptions) {
@@ -3323,88 +3323,96 @@ export function drawSegmentDimensionPoints(
   color: string = '#7c3aed',
   labelQueue?: DepthLabel2D[]
 ) {
-  ctx.save();
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = 1.5;
+  const midDepth = (p1.depth + p2.depth) / 2;
 
-  // 1. Draw the main dimension line
-  ctx.beginPath();
-  ctx.moveTo(p1.x, p1.y);
-  ctx.lineTo(p2.x, p2.y);
-  ctx.stroke();
+  const drawLines = (c: CanvasRenderingContext2D) => {
+    c.save();
+    c.strokeStyle = color;
+    c.fillStyle = color;
+    c.lineWidth = 1.5;
 
-  // 2. Compute normal/direction for tick marks
-  const dx = p2.x - p1.x;
-  const dy = p2.y - p1.y;
-  const len = Math.hypot(dx, dy);
-  if (len > 1e-4) {
-    const ux = dx / len;
-    const uy = dy / len;
-    const nx = -uy;
-    const ny = ux;
+    // 1. Draw the main dimension line
+    c.beginPath();
+    c.moveTo(p1.x, p1.y);
+    c.lineTo(p2.x, p2.y);
+    c.stroke();
 
-    // Ticks size
-    const tickLen = 6;
-    
-    // Draw tick at p1
-    ctx.beginPath();
-    ctx.moveTo(p1.x - nx * tickLen, p1.y - ny * tickLen);
-    ctx.lineTo(p1.x + nx * tickLen, p1.y + ny * tickLen);
-    ctx.stroke();
+    // 2. Compute normal/direction for tick marks
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const len = Math.hypot(dx, dy);
+    if (len > 1e-4) {
+      const ux = dx / len;
+      const uy = dy / len;
+      const nx = -uy;
+      const ny = ux;
 
-    // Draw tick at p2
-    ctx.beginPath();
-    ctx.moveTo(p2.x - nx * tickLen, p2.y - ny * tickLen);
-    ctx.lineTo(p2.x + nx * tickLen, p2.y + ny * tickLen);
-    ctx.stroke();
-
-    // 3. Draw text label badge in the center
-    const mx = (p1.x + p2.x) / 2;
-    const my = (p1.y + p2.y) / 2;
-    const midDepth = (p1.depth + p2.depth) / 2;
-    const label = `${dist3D.toFixed(2)} m`;
-
-    const drawBadge = (c: CanvasRenderingContext2D) => {
-      c.save();
-      c.font = 'bold 11px monospace, "SF Mono", Consolas';
-      const textWidth = c.measureText(label).width;
-      const padX = 5;
-      const bh = 15;
-      const bw = textWidth + padX * 2;
-
-      // Background rect
-      c.fillStyle = 'rgba(15, 23, 42, 0.9)'; // Dark neutral bg
-      c.strokeStyle = color;
-      c.lineWidth = 1.2;
+      const tickLen = 6;
       c.beginPath();
-      if (typeof (c as any).roundRect === 'function') {
-        (c as any).roundRect(mx - bw / 2, my - bh / 2, bw, bh, 3);
-      } else {
-        c.rect(mx - bw / 2, my - bh / 2, bw, bh);
-      }
-      c.fill();
+      c.moveTo(p1.x - nx * tickLen, p1.y - ny * tickLen);
+      c.lineTo(p1.x + nx * tickLen, p1.y + ny * tickLen);
       c.stroke();
 
-      // Draw text
-      c.fillStyle = '#ffffff';
-      c.textAlign = 'center';
-      c.textBaseline = 'middle';
-      c.fillText(label, mx, my + 0.5);
-      c.restore();
-    };
-
-    if (labelQueue) {
-      labelQueue.push({
-        depth: midDepth,
-        priority: 1,
-        draw: drawBadge,
-      });
-    } else {
-      drawBadge(ctx);
+      c.beginPath();
+      c.moveTo(p2.x - nx * tickLen, p2.y - ny * tickLen);
+      c.lineTo(p2.x + nx * tickLen, p2.y + ny * tickLen);
+      c.stroke();
     }
+    c.restore();
+  };
+
+  if (labelQueue) {
+    labelQueue.push({
+      depth: midDepth,
+      priority: 0,
+      draw: drawLines,
+    });
+  } else {
+    drawLines(ctx);
   }
 
-  ctx.restore();
+  // 3. Draw text label badge in the center
+  const mx = (p1.x + p2.x) / 2;
+  const my = (p1.y + p2.y) / 2;
+  const label = `${dist3D.toFixed(2)} m`;
+
+  const drawBadge = (c: CanvasRenderingContext2D) => {
+    c.save();
+    c.font = 'bold 11px monospace, "SF Mono", Consolas';
+    const textWidth = c.measureText(label).width;
+    const padX = 5;
+    const bh = 15;
+    const bw = textWidth + padX * 2;
+
+    // Background rect
+    c.fillStyle = 'rgba(15, 23, 42, 0.9)'; // Dark neutral bg
+    c.strokeStyle = color;
+    c.lineWidth = 1.2;
+    c.beginPath();
+    if (typeof (c as any).roundRect === 'function') {
+      (c as any).roundRect(mx - bw / 2, my - bh / 2, bw, bh, 3);
+    } else {
+      c.rect(mx - bw / 2, my - bh / 2, bw, bh);
+    }
+    c.fill();
+    c.stroke();
+
+    // Draw text
+    c.fillStyle = '#ffffff';
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText(label, mx, my + 0.5);
+    c.restore();
+  };
+
+  if (labelQueue) {
+    labelQueue.push({
+      depth: midDepth,
+      priority: 1,
+      draw: drawBadge,
+    });
+  } else {
+    drawBadge(ctx);
+  }
 }
 

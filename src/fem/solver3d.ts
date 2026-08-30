@@ -57,6 +57,49 @@ export interface SolverModel3D {
   settings?: AnalysisSettings;
 }
 
+export function autoLockZeroStiffnessDofs(
+  K: number[][],
+  isFixed: boolean[],
+  fixedValue?: number[]
+): void {
+  const nDof = K.length;
+  const numNodes = Math.floor(nDof / 6);
+
+  for (let n = 0; n < numNodes; n++) {
+    const base = 6 * n;
+
+    // Local max diagonal for translational DOFs (ux, uy, uz)
+    let maxTrans = 0;
+    for (let d = 0; d < 3; d++) {
+      maxTrans = Math.max(maxTrans, Math.abs(K[base + d][base + d]));
+    }
+    const tolTrans = Math.max(maxTrans, 1) * 1e-9;
+
+    for (let d = 0; d < 3; d++) {
+      const dof = base + d;
+      if (!isFixed[dof] && Math.abs(K[dof][dof]) < tolTrans) {
+        isFixed[dof] = true;
+        if (fixedValue) fixedValue[dof] = 0;
+      }
+    }
+
+    // Local max diagonal for rotational DOFs (rx, ry, rz)
+    let maxRot = 0;
+    for (let d = 3; d < 6; d++) {
+      maxRot = Math.max(maxRot, Math.abs(K[base + d][base + d]));
+    }
+    const tolRot = Math.max(maxRot, 1) * 1e-9;
+
+    for (let d = 3; d < 6; d++) {
+      const dof = base + d;
+      if (!isFixed[dof] && Math.abs(K[dof][dof]) < tolRot) {
+        isFixed[dof] = true;
+        if (fixedValue) fixedValue[dof] = 0;
+      }
+    }
+  }
+}
+
 export function computeSupportRotationMatrix(
   rotXDeg = 0,
   rotYDeg = 0,
@@ -746,15 +789,7 @@ export function solveLinearStatic3D(model: SolverModel3D): LinearStaticResult3D 
   });
 
   // Check for unconstrained floating DOFs (lock numerical singularities)
-  let maxDiag = 0;
-  for (let i = 0; i < nDof; i++) maxDiag = Math.max(maxDiag, Math.abs(K[i][i]));
-  const floatTol = Math.max(maxDiag, 1) * 1e-9;
-  for (let i = 0; i < nDof; i++) {
-    if (!isFixed[i] && Math.abs(K[i][i]) < floatTol) {
-      isFixed[i] = true;
-      fixedValue[i] = 0;
-    }
-  }
+  autoLockZeroStiffnessDofs(K, isFixed, fixedValue);
 
   const freeIdx: number[] = [];
   const fixedIdx: number[] = [];
@@ -1170,12 +1205,10 @@ export function solveStability3D(model: SolverModel3D, maxModes = 4): StabilityR
     });
   });
 
+  autoLockZeroStiffnessDofs(K, isFixed);
+
   let maxDiag = 0;
   for (let i = 0; i < nDof; i++) maxDiag = Math.max(maxDiag, Math.abs(K[i][i]));
-  const floatTol = Math.max(maxDiag, 1) * 1e-9;
-  for (let i = 0; i < nDof; i++) {
-    if (!isFixed[i] && Math.abs(K[i][i]) < floatTol) isFixed[i] = true;
-  }
 
   const freeIdx: number[] = [];
   for (let i = 0; i < nDof; i++) {
@@ -1561,12 +1594,10 @@ export function solveModal3D(model: SolverModel3D, maxModes = 4): ModalResult3D 
     });
   });
 
+  autoLockZeroStiffnessDofs(K, isFixed);
+
   let maxDiag = 0;
   for (let i = 0; i < nDof; i++) maxDiag = Math.max(maxDiag, Math.abs(K[i][i]));
-  const floatTol = Math.max(maxDiag, 1) * 1e-9;
-  for (let i = 0; i < nDof; i++) {
-    if (!isFixed[i] && Math.abs(K[i][i]) < floatTol) isFixed[i] = true;
-  }
 
   const freeIdx: number[] = [];
   for (let i = 0; i < nDof; i++) {

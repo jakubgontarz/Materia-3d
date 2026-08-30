@@ -425,7 +425,8 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.12s, color 0.12s;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  opacity: 1;
 }
 
 .zbtn svg {
@@ -437,18 +438,35 @@ html, body {
 }
 
 .zbtn:hover {
-  background: var(--accent-soft);
+  background: #eef2ff;
   color: var(--accent-dark);
+  border-color: var(--accent);
+  opacity: 1 !important;
+}
+
+html[data-theme="dark"] .zbtn:hover {
+  background: #243447;
+  color: #93c5fd;
+  border-color: var(--accent);
+  opacity: 1 !important;
 }
 
 .zbtn.active {
   background: var(--accent);
   border-color: var(--accent-dark);
   color: #fff;
+  opacity: 1;
 }
 
 .zbtn.active svg {
   stroke: #fff;
+}
+
+.zbtn.active:hover {
+  background: var(--accent-dark);
+  border-color: var(--accent-dark);
+  color: #ffffff;
+  opacity: 1 !important;
 }
 
 .zselect {
@@ -465,14 +483,14 @@ html, body {
   max-width: 125px;
   outline: none;
   transition: background 0.12s, border-color 0.12s;
+  opacity: 1;
 }
 
-.zselect:hover {
-  border-color: var(--accent);
-}
-
+.zselect:hover,
 .zselect:focus {
+  background: var(--surface);
   border-color: var(--accent);
+  opacity: 1 !important;
 }
 
 /* ---------- Sidebar ---------- */

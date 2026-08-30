@@ -21,16 +21,12 @@ interface OptionsModalProps {
   setTheme: (t: 'light' | 'dark') => void;
   accent: string;
   setAccent: (a: string) => void;
-  showGrid: boolean;
-  setShowGrid: (v: boolean) => void;
-  showAxes: boolean;
-  setShowAxes: (v: boolean) => void;
+  showGrid?: boolean;
+  setShowGrid?: (v: boolean) => void;
   includeSelfWeight: boolean;
   setIncludeSelfWeight: (v: boolean) => void;
-  snapSize: number;
-  setSnapSize: (v: number) => void;
-  mergeTolerance: number;
-  setMergeTolerance: (v: number) => void;
+  snapSize?: number;
+  setSnapSize?: (v: number) => void;
 }
 
 export const OptionsModal: React.FC<OptionsModalProps> = ({
@@ -40,16 +36,8 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
   setTheme,
   accent,
   setAccent,
-  showGrid,
-  setShowGrid,
-  showAxes,
-  setShowAxes,
   includeSelfWeight,
   setIncludeSelfWeight,
-  snapSize,
-  setSnapSize,
-  mergeTolerance,
-  setMergeTolerance,
 }) => {
   if (!isOpen) return null;
 
@@ -179,29 +167,6 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
 
           <hr className="sep" />
 
-          {/* Opcje wyświetlania 3D */}
-          <div style={{ marginBottom: '14px' }}>
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                cursor: 'pointer',
-                gap: '10px',
-              }}
-            >
-              <span style={{ fontSize: '12.5px', fontWeight: 600 }}>Osie globalne układu (XYZ)</span>
-              <input
-                type="checkbox"
-                checked={showAxes}
-                onChange={(e) => setShowAxes(e.target.checked)}
-                style={{ width: '18px', height: '18px', flex: '0 0 auto', accentColor: 'var(--accent)' }}
-              />
-            </label>
-          </div>
-
-          <hr className="sep" />
-
           {/* Ciężar własny */}
           <div style={{ marginBottom: '14px' }}>
             <label
@@ -223,35 +188,6 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
             </label>
             <div className="muted" style={{ marginTop: '3px' }}>
               Dolicza do każdego pręta obciążenie pionowe w dół (-Z): gęstość materiału × pole przekroju × g.
-            </div>
-          </div>
-
-          <hr className="sep" />
-
-          {/* Tolerancja łączenia węzłów */}
-          <div style={{ marginBottom: '14px' }}>
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                cursor: 'pointer',
-                gap: '10px',
-              }}
-            >
-              <span style={{ fontSize: '12.5px', fontWeight: 600 }}>Tolerancja łączenia węzłów (m)</span>
-              <input
-                type="number"
-                inputMode="decimal"
-                min="0"
-                step="0.001"
-                value={mergeTolerance}
-                onChange={(e) => setMergeTolerance(parseFloat(e.target.value) || 0)}
-                style={{ width: '70px', padding: '4px', background: 'var(--input-bg)', color: 'var(--text)', border: '1px solid var(--input-border)', borderRadius: '4px' }}
-              />
-            </label>
-            <div className="muted" style={{ marginTop: '3px' }}>
-              Węzły znajdujące się bliżej siebie niż podana wartość zostaną połączone po wykonaniu transformacji lub edycji współrzędnych.
             </div>
           </div>
         </div>

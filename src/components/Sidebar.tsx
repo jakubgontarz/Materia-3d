@@ -459,6 +459,8 @@ interface SidebarProps {
   setSnapSize?: (v: number) => void;
   showGrid?: boolean;
   setShowGrid?: (v: boolean) => void;
+  showAxes?: boolean;
+  setShowAxes?: (v: boolean) => void;
   barStartNodeId: number | null;
   setBarStartNodeId: (id: number | null) => void;
   analysisSettings: AnalysisSettings;
@@ -556,6 +558,7 @@ interface SidebarProps {
   onStartPickPoint?: (target: 'rotateCenter' | 'mirrorPoint' | 'scaleCenter') => void;
   onCancelPickMode?: () => void;
   mergeTolerance?: number;
+  setMergeTolerance?: React.Dispatch<React.SetStateAction<number>> | ((v: number) => void);
   setStatusHint?: (msg: string) => void;
   drawConstructionGrid?: boolean;
   setDrawConstructionGrid?: React.Dispatch<React.SetStateAction<boolean>>;
@@ -596,6 +599,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setSnapSize,
   showGrid = true,
   setShowGrid,
+  showAxes = true,
+  setShowAxes,
   barStartNodeId,
   setBarStartNodeId,
   analysisSettings,
@@ -692,6 +697,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onStartPickPoint = (_target: 'rotateCenter' | 'mirrorPoint' | 'scaleCenter') => {},
   onCancelPickMode = () => {},
   mergeTolerance = 0.001,
+  setMergeTolerance,
   setStatusHint,
   gridCoords = { x: [], y: [], z: [] },
   setGridCoords = (_action) => {},
@@ -962,6 +968,65 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setSelectedNodeIds([...new Set(newSelectedNodes)]);
 
     onInvalidateResults();
+  };
+
+  // Manual explicit merge of overlapping nodes in model
+  const handleMergeNodes = () => {
+    const initialNodeCount = nodes.length;
+    const initialElemCount = elements.length;
+    const initialPanelCount = (panels || []).length;
+
+    if (initialNodeCount === 0) {
+      if (setStatusHint) {
+        setStatusHint('Łączenie węzłów: Model nie zawiera żadnych węzłów.');
+      }
+      return;
+    }
+
+    const { mergedNodes, mergedElements, mergedPanels, nodeMap } = mergeOverlapping(
+      nodes,
+      elements,
+      panels || [],
+      mergeTolerance ?? 0.001
+    );
+
+    const removedNodesCount = initialNodeCount - mergedNodes.length;
+    const removedElemCount = initialElemCount - mergedElements.length;
+    const removedPanelCount = initialPanelCount - mergedPanels.length;
+
+    if (removedNodesCount === 0 && removedElemCount === 0 && removedPanelCount === 0) {
+      if (setStatusHint) {
+        setStatusHint(`Łączenie węzłów: Brak nakładających się węzłów w tolerancji ${mergeTolerance ?? 0.001} m.`);
+      }
+      return;
+    }
+
+    setNodes(mergedNodes);
+    setElements(mergedElements);
+    if (setPanels) setPanels(mergedPanels);
+
+    if (selectedNodeIds.length > 0) {
+      const newSelectedNodes = selectedNodeIds.map(id => nodeMap.get(id) ?? id);
+      setSelectedNodeIds([...new Set(newSelectedNodes)].filter(id => mergedNodes.some(n => n.id === id)));
+    }
+    if (selectedElemIds.length > 0) {
+      setSelectedElemIds(prev => prev.filter(id => mergedElements.some(e => e.id === id)));
+    }
+    if (selectedPanelIds && selectedPanelIds.length > 0 && setSelectedPanelIds) {
+      setSelectedPanelIds(prev => prev.filter(id => mergedPanels.some(p => p.id === id)));
+    }
+
+    onInvalidateResults();
+
+    const msgParts: string[] = [];
+    if (removedNodesCount > 0) msgParts.push(`połączono ${removedNodesCount} węzłów`);
+    if (removedElemCount > 0) msgParts.push(`usunięto ${removedElemCount} zduplikowanych prętów`);
+    if (removedPanelCount > 0) msgParts.push(`zaktualizowano panele`);
+
+    const summary = msgParts.join(', ');
+    if (setStatusHint) {
+      setStatusHint(`Połączono węzły (tolerancja ${mergeTolerance ?? 0.001} m): ${summary}.`);
+    }
   };
 
   // Unified Delete Selected (all selected nodes, elements & panels)
@@ -2760,8 +2825,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                   {/* Krok dociągania (Snap) przeniesiony z opcji */}
                   <div className="row" style={{ marginBottom: '10px' }}>
-                    <label style={{ minWidth: '70px' }}>Krok snapu</label>
-                    <div className="inp-unit">
+                    <label style={{ minWidth: '70px', fontSize: '11px', whiteSpace: 'nowrap' }}>Krok snapu</label>
+                    <div className="inp-unit" style={{ flex: 1, minWidth: 0 }}>
                       <SmartNumberInput
                         min={0.01}
                         step="0.05"
@@ -2854,6 +2919,56 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       </label>
                     </div>
                   )}
+
+                  {/* Osie globalne układu (XYZ) */}
+                  {setShowAxes && (
+                    <div className="checkline" style={{ marginTop: '6px' }}>
+                      <input
+                        type="checkbox"
+                        id="chkShowAxesSb"
+                        checked={showAxes}
+                        onChange={(e) => setShowAxes?.(e.target.checked)}
+                      />
+                      <label htmlFor="chkShowAxesSb" style={{ cursor: 'pointer', userSelect: 'none', fontSize: '12px' }}>
+                        Osie globalne układu (XYZ)
+                      </label>
+                    </div>
+                  )}
+
+                  <hr className="sep" style={{ margin: '10px 0 8px 0' }} />
+
+                  {/* Tolerancja łączenia węzłów i przycisk Połącz */}
+                  <div className="row" style={{ marginTop: '4px', marginBottom: '4px' }}>
+                    <label style={{ minWidth: '70px', fontSize: '11px', whiteSpace: 'nowrap' }} title="Tolerancja łączenia węzłów (m)">
+                      Łączenie węzłów
+                    </label>
+                    <div className="inp-unit" style={{ flex: 1, minWidth: 0 }}>
+                      <SmartNumberInput
+                        min={0}
+                        step="0.001"
+                        value={mergeTolerance}
+                        onChange={(v) => setMergeTolerance?.(Math.max(0, v ?? 0.001))}
+                      />
+                      <span className="unit">m</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="mini"
+                      style={{
+                        flex: '0 0 auto',
+                        padding: '4px 9px',
+                        height: '27px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        whiteSpace: 'nowrap',
+                      }}
+                      id="btnMergeNodesWorkPlane"
+                      onClick={handleMergeNodes}
+                      title="Połącz węzły znajdujące się bliżej siebie niż zadana tolerancja"
+                    >
+                      Połącz
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -4794,20 +4909,48 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           </div>
                           <div className="row">
                             <label>Obrót osi β</label>
-                            <div className="inp-unit">
-                              <SmartNumberInput
-                                step="15"
-                                value={commonRollAngle}
-                                placeholder={selectedElements.length > 1 && commonRollAngle === undefined ? 'różne' : undefined}
-                                onFocus={onInvalidateResults}
-                                onChange={(v) => {
+                            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flex: 1 }}>
+                              <div className="inp-unit" style={{ flex: 1 }}>
+                                <SmartNumberInput
+                                  step="15"
+                                  value={commonRollAngle}
+                                  placeholder={selectedElements.length > 1 && commonRollAngle === undefined ? 'różne' : undefined}
+                                  onFocus={onInvalidateResults}
+                                  onChange={(v) => {
+                                    setElements((prev) =>
+                                      prev.map((el) => (selectedElemIds.includes(el.id) ? { ...el, rollAngle: v } : el))
+                                    );
+                                    onInvalidateResults();
+                                  }}
+                                />
+                                <span className="unit">°</span>
+                              </div>
+                              <button
+                                type="button"
+                                className="mini"
+                                style={{ padding: '0 4px', fontSize: '10.5px', height: '24px', minWidth: '34px' }}
+                                onClick={() => {
                                   setElements((prev) =>
-                                    prev.map((el) => (selectedElemIds.includes(el.id) ? { ...el, rollAngle: v } : el))
+                                    prev.map((el) => (selectedElemIds.includes(el.id) ? { ...el, rollAngle: (el.rollAngle ?? 0) - 90 } : el))
                                   );
                                   onInvalidateResults();
                                 }}
-                              />
-                              <span className="unit">°</span>
+                              >
+                                -90°
+                              </button>
+                              <button
+                                type="button"
+                                className="mini"
+                                style={{ padding: '0 4px', fontSize: '10.5px', height: '24px', minWidth: '34px' }}
+                                onClick={() => {
+                                  setElements((prev) =>
+                                    prev.map((el) => (selectedElemIds.includes(el.id) ? { ...el, rollAngle: (el.rollAngle ?? 0) + 90 } : el))
+                                  );
+                                  onInvalidateResults();
+                                }}
+                              >
+                                +90°
+                              </button>
                             </div>
                           </div>
                         </div>

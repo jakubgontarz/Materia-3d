@@ -1467,11 +1467,8 @@ const calculateRotationCenter = (
 };
 
 export default function App() {
-  // Initial 3D structure: 3D Portal Frame
-  const initialData = generate3DPortalFrame(6.0, 6.0, 4.0, 1, 1, 1, 1);
-
-  const [nodes, setNodes] = useState<Node3D[]>(initialData.nodes);
-  const [elements, setElements] = useState<Element3D[]>(initialData.elements);
+  const [nodes, setNodes] = useState<Node3D[]>([]);
+  const [elements, setElements] = useState<Element3D[]>([]);
   const [panels, setPanels] = useState<Panel3D[]>([]);
   const [panelShape, setPanelShape] = useState<PanelShape>('triangle');
   const [panelPoints, setPanelPoints] = useState<number[]>([]);
@@ -1485,11 +1482,11 @@ export default function App() {
   const [mode, setMode] = useState<ToolMode>('select');
   const [navMode, setNavMode] = useState<'orbit' | 'boxSelect' | 'pan' | 'zoom'>('orbit');
 
-  // Axis grid coordinates state (prepopulated with the initial portal frame dimensions: X: 0, 6; Y: 0, 4; Z: 0, 6)
+  // Axis grid coordinates state (initially empty for a clean canvas)
   const [gridCoords, setGridCoords] = useState<{ x: number[]; y: number[]; z: number[] }>({
-    x: [0, 6],
-    y: [0, 4],
-    z: [0, 6]
+    x: [],
+    y: [],
+    z: []
   });
   const [activeGridAxis, setActiveGridAxis] = useState<'X' | 'Y' | 'Z'>('X');
 
@@ -2347,8 +2344,12 @@ export default function App() {
     const a = document.createElement('a');
     a.href = url;
     a.download = `${cleanName}.json`;
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 10000);
     setExportModalOpen(false);
     setStatusHint(`Wyeksportowano model do pliku ${cleanName}.json`);
   };
@@ -2526,16 +2527,16 @@ export default function App() {
       for (let i = 0; i < xVals.length - 1; i++) {
         autoLines.push({
           id: dId++,
-          p1: [xVals[i], minY, minZ - offset],
-          p2: [xVals[i + 1], minY, minZ - offset],
+          p1: [xVals[i], minY - offset, minZ - offset],
+          p2: [xVals[i + 1], minY - offset, minZ - offset],
           name: `Grid X ${xVals[i].toFixed(2)} - ${xVals[i + 1].toFixed(2)}`,
         });
       }
       if (xVals.length >= 3) {
         autoLines.push({
           id: dId++,
-          p1: [xVals[0], minY, minZ - offset - mainOffset],
-          p2: [xVals[xVals.length - 1], minY, minZ - offset - mainOffset],
+          p1: [xVals[0], minY - offset - mainOffset, minZ - offset - mainOffset],
+          p2: [xVals[xVals.length - 1], minY - offset - mainOffset, minZ - offset - mainOffset],
           name: `Grid X Główny ${xVals[0].toFixed(2)} - ${xVals[xVals.length - 1].toFixed(2)}`,
         });
       }
@@ -2545,16 +2546,16 @@ export default function App() {
       for (let i = 0; i < yVals.length - 1; i++) {
         autoLines.push({
           id: dId++,
-          p1: [minX - offset, yVals[i], minZ],
-          p2: [minX - offset, yVals[i + 1], minZ],
+          p1: [minX - offset, yVals[i], minZ - offset],
+          p2: [minX - offset, yVals[i + 1], minZ - offset],
           name: `Grid Y ${yVals[i].toFixed(2)} - ${yVals[i + 1].toFixed(2)}`,
         });
       }
       if (yVals.length >= 3) {
         autoLines.push({
           id: dId++,
-          p1: [minX - offset - mainOffset, yVals[0], minZ],
-          p2: [minX - offset - mainOffset, yVals[yVals.length - 1], minZ],
+          p1: [minX - offset - mainOffset, yVals[0], minZ - offset - mainOffset],
+          p2: [minX - offset - mainOffset, yVals[yVals.length - 1], minZ - offset - mainOffset],
           name: `Grid Y Główny ${yVals[0].toFixed(2)} - ${yVals[yVals.length - 1].toFixed(2)}`,
         });
       }
@@ -2564,16 +2565,16 @@ export default function App() {
       for (let i = 0; i < zVals.length - 1; i++) {
         autoLines.push({
           id: dId++,
-          p1: [minX - offset, minY, zVals[i]],
-          p2: [minX - offset, minY, zVals[i + 1]],
+          p1: [minX - offset, minY - offset, zVals[i]],
+          p2: [minX - offset, minY - offset, zVals[i + 1]],
           name: `Grid Z ${zVals[i].toFixed(2)} - ${zVals[i + 1].toFixed(2)}`,
         });
       }
       if (zVals.length >= 3) {
         autoLines.push({
           id: dId++,
-          p1: [minX - offset - mainOffset, minY, zVals[0]],
-          p2: [minX - offset - mainOffset, minY, zVals[zVals.length - 1]],
+          p1: [minX - offset - mainOffset, minY - offset - mainOffset, zVals[0]],
+          p2: [minX - offset - mainOffset, minY - offset - mainOffset, zVals[zVals.length - 1]],
           name: `Grid Z Główny ${zVals[0].toFixed(2)} - ${zVals[zVals.length - 1].toFixed(2)}`,
         });
       }
@@ -5097,6 +5098,8 @@ export default function App() {
           setSnapSize={setSnapSize}
           showGrid={showGrid}
           setShowGrid={setShowGrid}
+          showAxes={showAxes}
+          setShowAxes={setShowAxes}
           panelHeight={panelHeight}
           onPanelHandleStart={handlePanelResizeStart}
           activeTransformMode={activeTransformMode}
@@ -5157,6 +5160,7 @@ export default function App() {
           splitN={splitN}
           setSplitN={setSplitN}
           mergeTolerance={mergeTolerance}
+          setMergeTolerance={setMergeTolerance}
           setStatusHint={setStatusHint}
           gridCoords={gridCoords}
           setGridCoords={setGridCoords}
@@ -5177,16 +5181,8 @@ export default function App() {
         setTheme={setTheme}
         accent={accent}
         setAccent={setAccent}
-        showGrid={showGrid}
-        setShowGrid={setShowGrid}
-        showAxes={showAxes}
-        setShowAxes={setShowAxes}
         includeSelfWeight={includeSelfWeight}
         setIncludeSelfWeight={setIncludeSelfWeight}
-        snapSize={snapSize}
-        setSnapSize={setSnapSize}
-        mergeTolerance={mergeTolerance}
-        setMergeTolerance={setMergeTolerance}
       />
 
       <AboutModal isOpen={aboutOpen} onClose={() => setAboutOpen(false)} />

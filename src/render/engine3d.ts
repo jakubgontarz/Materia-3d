@@ -74,6 +74,7 @@ export class RenderEngine3D {
   public scene: THREE.Scene;
   public threeCamera: THREE.OrthographicCamera;
   public modelGroup: THREE.Group;
+  public overlayGroup: THREE.Group;
 
   // ViewCube parameters
   public cubeSize = 84;
@@ -82,7 +83,9 @@ export class RenderEngine3D {
   constructor() {
     this.scene = new THREE.Scene();
     this.modelGroup = new THREE.Group();
+    this.overlayGroup = new THREE.Group();
     this.scene.add(this.modelGroup);
+    this.scene.add(this.overlayGroup);
 
     // Setup Orthographic Camera
     this.threeCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, -2000, 2000);
@@ -485,9 +488,14 @@ export class RenderEngine3D {
   }
 
   public clearModelGroup() {
-    while (this.modelGroup.children.length > 0) {
-      const obj = this.modelGroup.children[0];
-      this.modelGroup.remove(obj);
+    this.clearGroup(this.modelGroup);
+    this.clearGroup(this.overlayGroup);
+  }
+
+  private clearGroup(group: THREE.Group) {
+    while (group.children.length > 0) {
+      const obj = group.children[0];
+      group.remove(obj);
       if ((obj as any).geometry) (obj as any).geometry.dispose();
       if ((obj as any).material) {
         if (Array.isArray((obj as any).material)) {
@@ -502,8 +510,31 @@ export class RenderEngine3D {
   public renderWebGL(isDark: boolean) {
     if (!this.renderer) return;
     this.updateThreeCamera();
-    this.scene.background = new THREE.Color(isDark ? 0x0e1520 : 0xeef2f6);
+    const bgColor = new THREE.Color(isDark ? 0x0e1520 : 0xeef2f6);
+
+    // Disable auto-clear to execute our two-layer depth-ordered passes
+    this.renderer.autoClear = false;
+    this.scene.background = bgColor;
+    this.renderer.clear();
+
+    // 1. Pass 1: Render structural model (grid, construction lines, panels, bars, supports, nodes, deform, diagrams)
+    this.modelGroup.visible = true;
+    this.overlayGroup.visible = false;
     this.renderer.render(this.scene, this.threeCamera);
+
+    // 2. Clear depth buffer so loads, axes and symbols render on top of the model
+    this.renderer.clearDepth();
+
+    // 3. Pass 2: Render 3D symbols, loads, axes with depth testing and occlusion among themselves
+    this.modelGroup.visible = false;
+    this.overlayGroup.visible = true;
+    this.scene.background = null;
+    this.renderer.render(this.scene, this.threeCamera);
+
+    // 4. Restore state
+    this.modelGroup.visible = true;
+    this.overlayGroup.visible = true;
+    this.scene.background = bgColor;
   }
 
   // --- ViewCube Drawing & Interaction ---
@@ -526,7 +557,7 @@ export class RenderEngine3D {
     const drawCornerBtn = (bx: number, by: number, isHov: boolean, drawIcon: () => void) => {
       ctx.beginPath();
       ctx.arc(bx, by, rBtn, 0, 2 * Math.PI);
-      ctx.fillStyle = isHov ? 'rgba(37, 99, 235, 0.95)' : 'rgba(30, 41, 59, 0.88)';
+      ctx.fillStyle = isHov ? '#2563eb' : 'rgba(30, 41, 59, 0.88)';
       ctx.fill();
       ctx.strokeStyle = isHov ? '#93c5fd' : 'rgba(148, 163, 184, 0.55)';
       ctx.lineWidth = 1.3;
@@ -589,7 +620,7 @@ export class RenderEngine3D {
       if (isHov) {
         ctx.beginPath();
         ctx.arc(px, py, 8, 0, 2 * Math.PI);
-        ctx.fillStyle = 'rgba(59, 130, 246, 0.85)';
+        ctx.fillStyle = '#2563eb';
         ctx.fill();
         ctx.strokeStyle = '#bfdbfe';
         ctx.lineWidth = 1.2;
@@ -641,7 +672,7 @@ export class RenderEngine3D {
       // Door cutout
       ctx.beginPath();
       ctx.rect(hx - 1.2, hy + 1.2, 2.4, 3.6);
-      ctx.fillStyle = isHomeHov ? 'rgba(37, 99, 235, 0.95)' : 'rgba(30, 41, 59, 0.88)';
+      ctx.fillStyle = isHomeHov ? '#2563eb' : 'rgba(30, 41, 59, 0.88)';
       ctx.fill();
     });
 
@@ -696,20 +727,16 @@ export class RenderEngine3D {
     drawCornerBtn(rCCWx, rCCWy, isCCWHov, () => {
       ctx.save();
       ctx.translate(rCCWx, rCCWy);
-      ctx.beginPath();
-      ctx.arc(0, 0, 4.8, Math.PI * 0.25, Math.PI * 1.6);
+      ctx.scale(0.5, 0.5);
+      ctx.translate(-12, -12);
       ctx.strokeStyle = isCCWHov ? '#ffffff' : '#f1f5f9';
-      ctx.lineWidth = 1.4;
-      ctx.stroke();
-
-      // Arrowhead
-      ctx.beginPath();
-      ctx.moveTo(-5.0, -2.0);
-      ctx.lineTo(-2.2, -5.4);
-      ctx.lineTo(-6.0, -5.8);
-      ctx.closePath();
-      ctx.fillStyle = isCCWHov ? '#ffffff' : '#f1f5f9';
-      ctx.fill();
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      const p1 = new Path2D("M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8");
+      const p2 = new Path2D("M3 3v5h5");
+      ctx.stroke(p1);
+      ctx.stroke(p2);
       ctx.restore();
     });
 
@@ -721,20 +748,16 @@ export class RenderEngine3D {
     drawCornerBtn(rCWx, rCWy, isCWHov, () => {
       ctx.save();
       ctx.translate(rCWx, rCWy);
-      ctx.beginPath();
-      ctx.arc(0, 0, 4.8, -Math.PI * 0.6, Math.PI * 0.75);
+      ctx.scale(0.5, 0.5);
+      ctx.translate(-12, -12);
       ctx.strokeStyle = isCWHov ? '#ffffff' : '#f1f5f9';
-      ctx.lineWidth = 1.4;
-      ctx.stroke();
-
-      // Arrowhead
-      ctx.beginPath();
-      ctx.moveTo(5.0, -2.0);
-      ctx.lineTo(2.2, -5.4);
-      ctx.lineTo(6.0, -5.8);
-      ctx.closePath();
-      ctx.fillStyle = isCWHov ? '#ffffff' : '#f1f5f9';
-      ctx.fill();
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      const p1 = new Path2D("M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8");
+      const p2 = new Path2D("M21 3v5h-5");
+      ctx.stroke(p1);
+      ctx.stroke(p2);
       ctx.restore();
     });
 
@@ -815,7 +838,7 @@ export class RenderEngine3D {
         const baseB = Math.round(52 * light + 24);
 
         ctx.fillStyle = isFaceHover 
-          ? 'rgba(37, 99, 235, 0.90)' 
+          ? '#2563eb' 
           : `rgba(${baseR}, ${baseG}, ${baseB}, 0.88)`;
         ctx.fill();
 
@@ -840,7 +863,7 @@ export class RenderEngine3D {
             const cp = projVerts[vIndex];
             ctx.beginPath();
             ctx.arc(cp.sx, cp.sy, 6.5, 0, 2 * Math.PI);
-            ctx.fillStyle = 'rgba(59, 130, 246, 0.95)';
+            ctx.fillStyle = '#3b82f6';
             ctx.fill();
             ctx.strokeStyle = '#bfdbfe';
             ctx.lineWidth = 1.5;
@@ -867,7 +890,7 @@ export class RenderEngine3D {
             ctx.beginPath();
             ctx.moveTo(ep1.sx, ep1.sy);
             ctx.lineTo(ep2.sx, ep2.sy);
-            ctx.strokeStyle = 'rgba(96, 165, 250, 0.95)';
+            ctx.strokeStyle = '#60a5fa';
             ctx.lineWidth = 3.5;
             ctx.stroke();
           }

@@ -42,43 +42,41 @@ export const ICONS = {
     </svg>
   ),
   neu: (
-    <svg viewBox="0 0 24 24">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M14 3H6v18h12V7l-4-4zM14 3v4h4" />
     </svg>
   ),
   ul: (
-    <svg viewBox="0 0 24 24">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M4 9V6a1 1 0 0 1 1-1h4l2 2h8a1 1 0 0 1 1 1v1M2 9h20l-2 10H4z" />
     </svg>
   ),
   dl: (
-    <svg viewBox="0 0 24 24">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M5 3h11l4 4v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM7 21v-8h10v8M8 3v5h8V3M10 5v2" />
     </svg>
   ),
   saveAs: (
-    <svg viewBox="0 0 24 24">
-      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-      <polyline points="17 21 17 13 7 13 7 21" />
-      <polyline points="7 3 7 8 15 8" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 21H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h11l4 4v4M7 21v-8h6M8 3v5h8V3M10 5v2M13 21l3-1 5-5-2-2-5 5-1 3zM19 13l2 2" />
     </svg>
   ),
   importJson: (
-    <svg viewBox="0 0 24 24">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
       <polyline points="17 8 12 3 7 8" />
       <line x1="12" y1="3" x2="12" y2="15" />
     </svg>
   ),
   exportJson: (
-    <svg viewBox="0 0 24 24">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
       <polyline points="7 10 12 15 17 10" />
       <line x1="12" y1="15" x2="12" y2="3" />
     </svg>
   ),
   info: (
-    <svg viewBox="0 0 24 24">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="10" />
       <line x1="12" y1="16" x2="12" y2="12" />
       <line x1="12" y1="8" x2="12.01" y2="8" />
@@ -235,8 +233,8 @@ export const ICONS = {
     </svg>
   ),
   pan: (
-    <svg viewBox="0 0 24 24">
-      <path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v6M10 10.5V6a2 2 0 0 0-4 0v8a6 6 0 0 0 12 0v-3a2 2 0 0 0-4 0" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2v20M2 12h20M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3" />
     </svg>
   ),
   orbit: (
@@ -337,7 +335,7 @@ export const ICONS = {
   constructionLine: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 21L21 3" strokeDasharray="3 3" />
-      <path d="M7 17v-4m-2 2h4M17 7v-4m-2 2h4" strokeWidth="1.5" />
+      <path d="M7 19v-4m-2 2h4M17 9v-4m-2 2h4" strokeWidth="1.5" />
     </svg>
   ),
   dimensionLine: (

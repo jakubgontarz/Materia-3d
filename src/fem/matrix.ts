@@ -122,36 +122,67 @@ export function pinvSymmetric(M: number[][], rcond = 1e-8): number[][] {
 
 export function solveLinSys(Ain: number[][], bin: number[]): { x: number[]; singular: boolean } {
   const n = Ain.length;
+  if (n === 0) return { x: [], singular: false };
   const A = Ain.map((r) => r.slice());
   const b = bin.slice();
   let singular = false;
 
+  // Compute row scale factors for scaled partial pivoting
+  const s = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    let maxVal = 0;
+    for (let j = 0; j < n; j++) {
+      const val = Math.abs(A[i][j]);
+      if (val > maxVal) maxVal = val;
+    }
+    s[i] = maxVal > 0 ? maxVal : 1.0;
+  }
+
   for (let col = 0; col < n; col++) {
     let piv = col;
+    let maxRatio = Math.abs(A[col][col]) / s[col];
+
     for (let r = col + 1; r < n; r++) {
-      if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+      const ratio = Math.abs(A[r][col]) / s[r];
+      if (ratio > maxRatio) {
+        maxRatio = ratio;
+        piv = r;
+      }
     }
-    if (Math.abs(A[piv][col]) < 1e-11) {
+
+    if (maxRatio < 1e-12) {
       singular = true;
       continue;
     }
-    const tmpA = A[col];
-    A[col] = A[piv];
-    A[piv] = tmpA;
-    const tmpb = b[col];
-    b[col] = b[piv];
-    b[piv] = tmpb;
+
+    if (piv !== col) {
+      const tmpA = A[col];
+      A[col] = A[piv];
+      A[piv] = tmpA;
+
+      const tmpb = b[col];
+      b[col] = b[piv];
+      b[piv] = tmpb;
+
+      const tmpS = s[col];
+      s[col] = s[piv];
+      s[piv] = tmpS;
+    }
+
     const pv = A[col][col];
     for (let j = col; j < n; j++) A[col][j] /= pv;
     b[col] /= pv;
+
     for (let r = 0; r < n; r++) {
       if (r === col) continue;
       const f = A[r][col];
-      if (f === 0) continue;
-      for (let j = col; j < n; j++) A[r][j] -= f * A[col][j];
+      if (Math.abs(f) < 1e-18) continue;
+      for (let j = col + 1; j < n; j++) A[r][j] -= f * A[col][j];
       b[r] -= f * b[col];
+      A[r][col] = 0;
     }
   }
+
   return { x: b, singular };
 }
 
