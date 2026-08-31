@@ -1,10 +1,11 @@
 import * as THREE from 'three';
-import { RenderEngine3D, ScreenPoint3D } from './engine3d';
+import { RenderEngine3D, ScreenPoint3D, GraphicsMode } from './engine3d';
 import { Vec3 } from '../fem/matrix';
-import { Node3D, Element3D, SolverResult3D, Section, Material, MemberHinges3D, Panel3D, ConstructionLine3D, DimensionLine3D } from '../fem/types';
+import { Node3D, Element3D, SolverResult3D, Section, Material, MemberHinges3D, Panel3D, ConstructionLine3D, DimensionLine3D, ElementGroupDef } from '../fem/types';
 import { computeLocalAxes } from '../fem/solver3d';
 
 export interface SceneRenderOptions {
+  graphicsMode?: GraphicsMode;
   showGrid: boolean;
   gridPlane?: 'XY' | 'XZ' | 'YZ';
   gridOffset?: number;
@@ -48,10 +49,12 @@ export interface SceneRenderOptions {
   constructionLines?: ConstructionLine3D[];
   constructionPoints?: [number, number, number][];
   dimensionLines?: DimensionLine3D[];
+  groups?: ElementGroupDef[];
   mode?: 'select' | 'addBar' | 'addPanel' | 'grid' | 'lines';
   probe: { elId: number | null; t: number };
   theme: 'light' | 'dark';
   accentColor: string;
+  momentsAsArcs?: boolean;
 }
 
 function fmtLoadVal(v: number): string {
@@ -93,7 +96,7 @@ function computeGeometryKey(
     const qKey = e.q
       ? `${e.q.coordinateSystem}:${e.q.qxStart}:${e.q.qxEnd}:${e.q.qyStart}:${e.q.qyEnd}:${e.q.qzStart}:${e.q.qzEnd}`
       : '0';
-    eSig += `${e.id}:${e.n1}-${e.n2}:${e.sectionId}:${e.rollAngle || 0}:${qKey}:${JSON.stringify(e.hinges || {})};`;
+    eSig += `${e.id}:${e.n1}-${e.n2}:${e.sectionId}:${e.groupId || ''}:${e.rollAngle || 0}:${qKey}:${JSON.stringify(e.hinges || {})};`;
   }
 
   let pSig = `${panels.length}_`;
@@ -107,7 +110,9 @@ function computeGeometryKey(
     clSig += `${cl.id}:${cl.p1.join(',')}-${cl.p2.join(',')};`;
   });
 
-  const optSig = `g:${options.showGrid ? 1 : 0}_gp:${options.gridPlane || 'XY'}_go:${options.gridOffset || 0}_a:${options.showAxes ? 1 : 0}_la:${options.showLocalAxes ? 1 : 0}_pan:${options.showPanels !== false ? 1 : 0}_supp:${options.showSupports ? 1 : 0}_prof:${options.showProfileSketches ? 1 : 0}_loads:${options.showLoads ? 1 : 0}_def:${options.showDeform ? 1 : 0}_my:${options.showMy ? 1 : 0}_mz:${options.showMz ? 1 : 0}_mx:${options.showMx ? 1 : 0}_vy:${options.showVy ? 1 : 0}_vz:${options.showVz ? 1 : 0}_n:${options.showN ? 1 : 0}_str:${options.showStress ? 1 : 0}_r:${options.showReactions ? 1 : 0}_hl:${options.hideLoadsInResults ? 1 : 0}_hs:${options.hideSupportsInResults ? 1 : 0}_ds:${options.deformScaleMult}_dgs:${options.diagramScaleMult}_t:${options.theme}_ac:${options.accentColor}`;
+  const grpSig = (options.groups || []).map((g) => `${g.id}:${g.color}:${g.name}`).join(';');
+
+  const optSig = `gm:${options.graphicsMode || 'balanced'}_g:${options.showGrid ? 1 : 0}_gp:${options.gridPlane || 'XY'}_go:${options.gridOffset || 0}_a:${options.showAxes ? 1 : 0}_la:${options.showLocalAxes ? 1 : 0}_pan:${options.showPanels !== false ? 1 : 0}_supp:${options.showSupports ? 1 : 0}_prof:${options.showProfileSketches ? 1 : 0}_loads:${options.showLoads ? 1 : 0}_def:${options.showDeform ? 1 : 0}_my:${options.showMy ? 1 : 0}_mz:${options.showMz ? 1 : 0}_mx:${options.showMx ? 1 : 0}_vy:${options.showVy ? 1 : 0}_vz:${options.showVz ? 1 : 0}_n:${options.showN ? 1 : 0}_str:${options.showStress ? 1 : 0}_r:${options.showReactions ? 1 : 0}_hl:${options.hideLoadsInResults ? 1 : 0}_hs:${options.hideSupportsInResults ? 1 : 0}_ds:${options.deformScaleMult}_dgs:${options.diagramScaleMult}_t:${options.theme}_ac:${options.accentColor}_ma:${options.momentsAsArcs ? 1 : 0}_grps:${grpSig}`;
 
   const solvedSig = solved ? `${solved.type}_${(solved as any).currentMode || 0}` : 'none';
 
@@ -159,7 +164,10 @@ function updateVisualStates(engine: RenderEngine3D, options: SceneRenderOptions,
           } else if (isHov) {
             (mesh.material as any).color.copy(hoverColorObj);
           } else {
-            (mesh.material as any).color.copy(elemDefaultColorObj);
+            const elGroupId = obj.userData.groupId;
+            const grp = elGroupId ? options.groups?.find((g) => g.id === elGroupId) : undefined;
+            const elementColor = grp ? new THREE.Color(grp.color) : elemDefaultColorObj;
+            (mesh.material as any).color.copy(elementColor);
           }
         }
       }
@@ -214,8 +222,128 @@ function updateVisualStates(engine: RenderEngine3D, options: SceneRenderOptions,
 
 export interface DepthLabel2D {
   depth: number;
+  layer?: number;
+  subPriority?: number;
   priority?: number;
   draw: (ctx: CanvasRenderingContext2D) => void;
+}
+
+export const RENDER_LAYER = {
+  GEOMETRY: 10,       // Bars (2D lines), Nodes (2D circles), Hinges (2D circles) - unified depth sorting
+  LOADS_AND_AXES: 20,  // Nodal Forces, Moments, Continuous Loads, Thermal, Reactions, Local Axes - unified depth sorting
+  LABELS: 30,          // All text labels, numbers, badges, dimensions - strictly depth sorted
+  HOVER_FOCUS: 40,     // Interactive hover & focus highlights
+} as const;
+
+function draw2DArrowHelper(
+  ctx: CanvasRenderingContext2D,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  color: string,
+  lineWidth = 2.0,
+  headLen = 9.0,
+  headWidth = 6.0
+) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-3) return;
+
+  const ux = dx / len;
+  const uy = dy / len;
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  // Shaft
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+
+  // Arrowhead at (x2, y2)
+  const leftX = x2 - ux * headLen + uy * (headWidth / 2);
+  const leftY = y2 - uy * headLen - ux * (headWidth / 2);
+  const rightX = x2 - ux * headLen - uy * (headWidth / 2);
+  const rightY = y2 - uy * headLen + ux * (headWidth / 2);
+
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(leftX, leftY);
+  ctx.lineTo(rightX, rightY);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function draw2DDoubleArrowHelper(
+  ctx: CanvasRenderingContext2D,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  color: string,
+  lineWidth = 1.8,
+  headLen = 7.5,
+  headWidth = 5.0
+) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-3) return;
+
+  const ux = dx / len;
+  const uy = dy / len;
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  // Shaft
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+
+  // Tip 1 at (x2, y2)
+  const l1X = x2 - ux * headLen + uy * (headWidth / 2);
+  const l1Y = y2 - uy * headLen - ux * (headWidth / 2);
+  const r1X = x2 - ux * headLen - uy * (headWidth / 2);
+  const r1Y = y2 - uy * headLen + ux * (headWidth / 2);
+
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(l1X, l1Y);
+  ctx.lineTo(r1X, r1Y);
+  ctx.closePath();
+  ctx.fill();
+
+  // Tip 2 behind tip 1
+  const b2X = x2 - ux * (headLen * 0.85);
+  const b2Y = y2 - uy * (headLen * 0.85);
+  const l2X = b2X - ux * headLen + uy * (headWidth / 2);
+  const l2Y = b2Y - uy * headLen - ux * (headWidth / 2);
+  const r2X = b2X - ux * headLen - uy * (headWidth / 2);
+  const r2Y = b2Y - uy * headLen + ux * (headWidth / 2);
+
+  ctx.beginPath();
+  ctx.moveTo(b2X, b2Y);
+  ctx.lineTo(l2X, l2Y);
+  ctx.lineTo(r2X, r2Y);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
 }
 
 export function drawScene3D(
@@ -249,6 +377,460 @@ export function drawScene3D(
 
   const labelQueue: DepthLabel2D[] = [];
 
+  // Performance mode 2D rendering: Unified Geometry layer (bars, nodes, hinges), Loads & Local Axes layer, and Labels layer
+  if (options.graphicsMode === 'performance') {
+    // 1. Bars as crisp 2D screen lines (Layer: GEOMETRY, subPriority: 0)
+    elements.forEach((el) => {
+      const sec = sections.find((s) => s.id === el.sectionId);
+      if (options.showProfileSketches && sec) {
+        // Rendered via 3D extruded mesh in Three.js
+        return;
+      }
+      const n1 = nodes.find((n) => n.id === el.n1);
+      const n2 = nodes.find((n) => n.id === el.n2);
+      if (!n1 || !n2) return;
+
+      const p1 = engine.project([n1.x, n1.y, n1.z]);
+      const p2 = engine.project([n2.x, n2.y, n2.z]);
+      if (!p1.visible && !p2.visible) return;
+
+      const isSel = options.selectedElemIds.includes(el.id);
+      const isHov = options.hoverElemId === el.id;
+      const grp = el.groupId ? options.groups?.find((g) => g.id === el.groupId) : undefined;
+      const groupColor = grp ? grp.color : (isDark ? '#94a3b8' : '#334155');
+      const color = isSel ? options.accentColor : isHov ? '#38bdf8' : groupColor;
+      const lineWidth = isSel ? 4.5 : isHov ? 4.0 : 3.2;
+      const opacity = options.showDeform && solved ? 0.35 : 1.0;
+      const midDepth = (p1.depth + p2.depth) / 2;
+
+      labelQueue.push({
+        depth: midDepth,
+        layer: RENDER_LAYER.GEOMETRY,
+        subPriority: 0,
+        draw: (ctx) => {
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.strokeStyle = color;
+          ctx.lineWidth = lineWidth;
+          ctx.lineCap = 'round';
+          if (opacity < 1.0) ctx.globalAlpha = opacity;
+          ctx.stroke();
+          ctx.restore();
+        },
+      });
+    });
+
+    // 2. Nodes as circles facing the viewer (Layer: GEOMETRY, subPriority: 1)
+    // Sorted with bars by real 3D depth - nodes in background are drawn behind foreground bars!
+    nodes.forEach((n) => {
+      const sp = engine.project([n.x, n.y, n.z]);
+      if (!sp.visible) return;
+
+      const isSel = options.selectedNodeIds.includes(n.id);
+      const isHov = options.hoverNodeId === n.id;
+      const r = isSel ? 6.5 : isHov ? 5.8 : 4.5;
+      const fill = isSel ? options.accentColor : isHov ? '#38bdf8' : (isDark ? '#cbd5e1' : '#0f172a');
+      const stroke = isDark ? '#0f172a' : '#ffffff';
+
+      labelQueue.push({
+        depth: sp.depth,
+        layer: RENDER_LAYER.GEOMETRY,
+        subPriority: 1,
+        draw: (ctx) => {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, r, 0, Math.PI * 2);
+          ctx.fillStyle = fill;
+          ctx.fill();
+          ctx.lineWidth = 1.4;
+          ctx.strokeStyle = stroke;
+          ctx.stroke();
+          ctx.restore();
+        },
+      });
+    });
+
+    // 3. Hinges as hollow circles (Layer: GEOMETRY, subPriority: 2)
+    // Sorted with bars by real 3D depth; drawn cleanly over its own bar end close to the node
+    elements.forEach((el) => {
+      const h = el.hinges || {};
+      const hasStartHinge = h.start_rx || h.start_ry || h.start_rz || h.start_ux || h.start_uy || h.start_uz;
+      const hasEndHinge = h.end_rx || h.end_ry || h.end_rz || h.end_ux || h.end_uy || h.end_uz;
+      if (!hasStartHinge && !hasEndHinge) return;
+
+      const n1 = nodes.find((n) => n.id === el.n1);
+      const n2 = nodes.find((n) => n.id === el.n2);
+      if (!n1 || !n2) return;
+
+      const spNode1 = engine.project([n1.x, n1.y, n1.z]);
+      const spNode2 = engine.project([n2.x, n2.y, n2.z]);
+      if (!spNode1.visible && !spNode2.visible) return;
+
+      // Project bar vector onto 2D screen
+      const sdx = spNode2.x - spNode1.x;
+      const sdy = spNode2.y - spNode1.y;
+      const sLen = Math.hypot(sdx, sdy);
+      if (sLen < 1e-4) return;
+
+      const sDirX = sdx / sLen;
+      const sDirY = sdy / sLen;
+
+      // Maximum pixel distance from node center to hinge:
+      // Node radius is ~4.5px-6.5px, so 11px ensures it sits just right next to node without being far away
+      const maxScreenDist = 11;
+      const screenOffset = Math.min(maxScreenDist, sLen * 0.25);
+
+      if (hasStartHinge && spNode1.visible) {
+        const hx = spNode1.x + sDirX * screenOffset;
+        const hy = spNode1.y + sDirY * screenOffset;
+        labelQueue.push({
+          depth: spNode1.depth,
+          layer: RENDER_LAYER.GEOMETRY,
+          subPriority: 2,
+          draw: (ctx) => {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(hx, hy, 4.0, 0, Math.PI * 2);
+            ctx.fillStyle = isDark ? '#0e1520' : '#eef2f6';
+            ctx.fill();
+            ctx.lineWidth = 1.6;
+            ctx.strokeStyle = isDark ? '#cbd5e1' : '#0f172a';
+            ctx.stroke();
+            ctx.restore();
+          },
+        });
+      }
+
+      if (hasEndHinge && spNode2.visible) {
+        const hx = spNode2.x - sDirX * screenOffset;
+        const hy = spNode2.y - sDirY * screenOffset;
+        labelQueue.push({
+          depth: spNode2.depth,
+          layer: RENDER_LAYER.GEOMETRY,
+          subPriority: 2,
+          draw: (ctx) => {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(hx, hy, 4.0, 0, Math.PI * 2);
+            ctx.fillStyle = isDark ? '#0e1520' : '#eef2f6';
+            ctx.fill();
+            ctx.lineWidth = 1.6;
+            ctx.strokeStyle = isDark ? '#cbd5e1' : '#0f172a';
+            ctx.stroke();
+            ctx.restore();
+          },
+        });
+      }
+    });
+
+    // 4. Loads & Reactions rendered above geometry (Layer: LOADS_AND_AXES)
+    const hasResults = !!solved && (options.showDeform || options.showMy || options.showMz || options.showN || options.showReactions);
+    if (options.showLoads && (!options.hideLoadsInResults || !hasResults)) {
+      // 4a. Nodal Forces (Red arrows)
+      nodes.forEach((n) => {
+        if (n.force) {
+          const { Fx = 0, Fy = 0, Fz = 0 } = n.force;
+          const len = 0.75;
+          const gapF = 0.25;
+          const color = '#dc2626';
+
+          const drawComp = (dx: number, dy: number, dz: number, val: number) => {
+            if (Math.abs(val) < 1e-4) return;
+            const sign = Math.sign(val);
+            const orig3D: Vec3 = [n.x - sign * dx * (gapF + len), n.y - sign * dy * (gapF + len), n.z - sign * dz * (gapF + len)];
+            const tip3D: Vec3 = [n.x - sign * dx * gapF, n.y - sign * dy * gapF, n.z - sign * dz * gapF];
+            const pOrig = engine.project(orig3D);
+            const pTip = engine.project(tip3D);
+            if (pOrig.visible || pTip.visible) {
+              labelQueue.push({
+                depth: (pOrig.depth + pTip.depth) / 2,
+                layer: RENDER_LAYER.LOADS_AND_AXES,
+                subPriority: 0,
+                draw: (ctx) => draw2DArrowHelper(ctx, pOrig.x, pOrig.y, pTip.x, pTip.y, color, 2.2, 10, 6),
+              });
+            }
+          };
+
+          drawComp(1, 0, 0, Fx);
+          drawComp(0, 1, 0, Fy);
+          drawComp(0, 0, 1, Fz);
+        }
+
+        // 4b. Nodal Moments (Purple double arrows)
+        if (n.moment) {
+          const { Mx = 0, My = 0, Mz = 0 } = n.moment;
+          const lenM = 0.70;
+          const baseGapM = 0.25;
+          const color = '#a855f7';
+
+          const drawMomComp = (dx: number, dy: number, dz: number, val: number) => {
+            if (Math.abs(val) < 1e-4) return;
+            const sign = Math.sign(val);
+            const orig3D: Vec3 = [n.x - sign * dx * (baseGapM + lenM), n.y - sign * dy * (baseGapM + lenM), n.z - sign * dz * (baseGapM + lenM)];
+            const tip3D: Vec3 = [n.x - sign * dx * baseGapM, n.y - sign * dy * baseGapM, n.z - sign * dz * baseGapM];
+            const pOrig = engine.project(orig3D);
+            const pTip = engine.project(tip3D);
+            if (pOrig.visible || pTip.visible) {
+              labelQueue.push({
+                depth: (pOrig.depth + pTip.depth) / 2,
+                layer: RENDER_LAYER.LOADS_AND_AXES,
+                subPriority: 0,
+                draw: (ctx) => draw2DDoubleArrowHelper(ctx, pOrig.x, pOrig.y, pTip.x, pTip.y, color, 2.0, 8, 5.5),
+              });
+            }
+          };
+
+          drawMomComp(1, 0, 0, Mx);
+          drawMomComp(0, 1, 0, My);
+          drawMomComp(0, 0, 1, Mz);
+        }
+      });
+
+      // 4c. Distributed loads (Cyan arrows + dashed connection line)
+      elements.forEach((el) => {
+        if (!el.q) return;
+        const n1 = nodes.find((n) => n.id === el.n1);
+        const n2 = nodes.find((n) => n.id === el.n2);
+        if (!n1 || !n2) return;
+
+        const { vx, vy, vz } = computeLocalAxes(n1, n2, el.rollAngle || 0);
+        const isLocal = el.q.coordinateSystem === 'local';
+        const color = '#0891b2';
+
+        const components: { dir: Vec3; qStart: number; qEnd: number }[] = isLocal
+          ? [
+              { dir: vx, qStart: el.q.qxStart ?? 0, qEnd: el.q.qxEnd ?? 0 },
+              { dir: vy, qStart: el.q.qyStart ?? 0, qEnd: el.q.qyEnd ?? 0 },
+              { dir: vz, qStart: el.q.qzStart ?? 0, qEnd: el.q.qzEnd ?? 0 },
+            ]
+          : [
+              { dir: [1, 0, 0], qStart: el.q.qxStart ?? 0, qEnd: el.q.qxEnd ?? 0 },
+              { dir: [0, 1, 0], qStart: el.q.qyStart ?? 0, qEnd: el.q.qyEnd ?? 0 },
+              { dir: [0, 0, 1], qStart: el.q.qzStart ?? 0, qEnd: el.q.qzEnd ?? 0 },
+            ];
+
+        components.forEach((comp) => {
+          const maxVal = Math.max(Math.abs(comp.qStart), Math.abs(comp.qEnd));
+          if (maxVal < 1e-4) return;
+
+          const nArrows = 5;
+          const topPts2D: { x: number; y: number }[] = [];
+          const arrowDraws: { x1: number; y1: number; x2: number; y2: number }[] = [];
+          let sumDepth = 0;
+          let count = 0;
+
+          for (let i = 0; i <= nArrows; i++) {
+            const t = i / nArrows;
+            const qVal = comp.qStart + (comp.qEnd - comp.qStart) * t;
+            if (Math.abs(qVal) < 1e-4) continue;
+
+            const sign = Math.sign(qVal);
+            const scale = 0.35 + 0.35 * (Math.abs(qVal) / maxVal);
+            const arrowLen = Math.min(Math.max(scale, 0.3), 0.8);
+
+            const mx = n1.x + (n2.x - n1.x) * t;
+            const my = n1.y + (n2.y - n1.y) * t;
+            const mz = n1.z + (n2.z - n1.z) * t;
+
+            const ox = mx - comp.dir[0] * sign * arrowLen;
+            const oy = my - comp.dir[1] * sign * arrowLen;
+            const oz = mz - comp.dir[2] * sign * arrowLen;
+
+            const pOrig = engine.project([ox, oy, oz]);
+            const pTip = engine.project([mx, my, mz]);
+            if (pOrig.visible || pTip.visible) {
+              topPts2D.push({ x: pOrig.x, y: pOrig.y });
+              arrowDraws.push({ x1: pOrig.x, y1: pOrig.y, x2: pTip.x, y2: pTip.y });
+              sumDepth += pOrig.depth;
+              count++;
+            }
+          }
+
+          if (count > 0) {
+            labelQueue.push({
+              depth: sumDepth / count,
+              layer: RENDER_LAYER.LOADS_AND_AXES,
+              subPriority: 0,
+              draw: (ctx) => {
+                arrowDraws.forEach((a) => {
+                  draw2DArrowHelper(ctx, a.x1, a.y1, a.x2, a.y2, color, 1.8, 8, 5);
+                });
+                if (topPts2D.length > 1) {
+                  ctx.save();
+                  ctx.strokeStyle = color;
+                  ctx.lineWidth = 1.4;
+                  ctx.setLineDash([4, 3]);
+                  ctx.beginPath();
+                  ctx.moveTo(topPts2D[0].x, topPts2D[0].y);
+                  for (let k = 1; k < topPts2D.length; k++) {
+                    ctx.lineTo(topPts2D[k].x, topPts2D[k].y);
+                  }
+                  ctx.stroke();
+                  ctx.restore();
+                }
+              },
+            });
+          }
+        });
+      });
+    }
+
+    // 4d. Reactions in 2D (Layer: LOADS_AND_AXES)
+    if (options.showReactions && solved && solved.type === 'linear_static' && solved.Rglobal) {
+      const Rglobal = solved.Rglobal;
+      nodes.forEach((n, idx) => {
+        if (!n.support) return;
+        const Rx = Rglobal[6 * idx + 0] || 0;
+        const Ry = Rglobal[6 * idx + 1] || 0;
+        const Rz = Rglobal[6 * idx + 2] || 0;
+        const Mx = Rglobal[6 * idx + 3] || 0;
+        const My = Rglobal[6 * idx + 4] || 0;
+        const Mz = Rglobal[6 * idx + 5] || 0;
+
+        const gapF = 0.30;
+        const lenF = 0.70;
+        const colorF = '#d97706';
+
+        const gapM = options.momentsAsArcs ? gapF : (gapF + lenF + 0.12);
+        const lenM = 0.65;
+        const colorM = '#9333ea';
+
+        let rotMatrix: THREE.Matrix4 | null = null;
+        if (n.support && (n.support.rotX || n.support.rotY || n.support.rotZ)) {
+          rotMatrix = new THREE.Matrix4();
+          const rx = (n.support.rotX || 0) * Math.PI / 180;
+          const ry = (n.support.rotY || 0) * Math.PI / 180;
+          const rz = (n.support.rotZ || 0) * Math.PI / 180;
+          rotMatrix.makeRotationFromEuler(new THREE.Euler(rx, ry, rz, 'XYZ'));
+        }
+
+        const getRotatedPosition = (offsetLocal: THREE.Vector3): [number, number, number] => {
+          const off = offsetLocal.clone();
+          if (rotMatrix) off.applyMatrix4(rotMatrix);
+          return [n.x + off.x, n.y + off.y, n.z + off.z];
+        };
+
+        const drawReactionArrow = (sign: number, axisIdx: number, val: number) => {
+          if (Math.abs(val) < 1e-4) return;
+          const offsetTail = new THREE.Vector3();
+          const offsetTip = new THREE.Vector3();
+          if (axisIdx === 0) {
+            offsetTail.set(-sign * (gapF + lenF), 0, 0);
+            offsetTip.set(-sign * gapF, 0, 0);
+          } else if (axisIdx === 1) {
+            offsetTail.set(0, -sign * (gapF + lenF), 0);
+            offsetTip.set(0, -sign * gapF, 0);
+          } else {
+            offsetTail.set(0, 0, -sign * (gapF + lenF));
+            offsetTip.set(0, 0, -sign * gapF);
+          }
+          const pTail = engine.project(getRotatedPosition(offsetTail));
+          const pTip = engine.project(getRotatedPosition(offsetTip));
+          if (pTail.visible || pTip.visible) {
+            labelQueue.push({
+              depth: (pTail.depth + pTip.depth) / 2,
+              layer: RENDER_LAYER.LOADS_AND_AXES,
+              subPriority: 0,
+              draw: (ctx) => draw2DArrowHelper(ctx, pTail.x, pTail.y, pTip.x, pTip.y, colorF, 2.2, 10, 6),
+            });
+          }
+        };
+
+        drawReactionArrow(Math.sign(Rx), 0, Rx);
+        drawReactionArrow(Math.sign(Ry), 1, Ry);
+        drawReactionArrow(Math.sign(Rz), 2, Rz);
+
+        const drawReactionMoment = (sign: number, axisIdx: number, val: number) => {
+          if (Math.abs(val) < 1e-4) return;
+          const offsetTail = new THREE.Vector3();
+          const offsetTip = new THREE.Vector3();
+          if (axisIdx === 0) {
+            offsetTail.set(-sign * (gapM + lenM), 0, 0);
+            offsetTip.set(-sign * gapM, 0, 0);
+          } else if (axisIdx === 1) {
+            offsetTail.set(0, -sign * (gapM + lenM), 0);
+            offsetTip.set(0, -sign * gapM, 0);
+          } else {
+            offsetTail.set(0, 0, -sign * (gapM + lenM));
+            offsetTip.set(0, 0, -sign * gapM);
+          }
+          const pTail = engine.project(getRotatedPosition(offsetTail));
+          const pTip = engine.project(getRotatedPosition(offsetTip));
+          if (pTail.visible || pTip.visible) {
+            labelQueue.push({
+              depth: (pTail.depth + pTip.depth) / 2,
+              layer: RENDER_LAYER.LOADS_AND_AXES,
+              subPriority: 0,
+              draw: (ctx) => draw2DDoubleArrowHelper(ctx, pTail.x, pTail.y, pTip.x, pTip.y, colorM, 2.0, 8, 5.5),
+            });
+          }
+        };
+
+        drawReactionMoment(Math.sign(Mx), 0, Mx);
+        drawReactionMoment(Math.sign(My), 1, My);
+        drawReactionMoment(Math.sign(Mz), 2, Mz);
+      });
+    }
+
+    // 4e. Local Axes in 2D Performance Mode (Layer: LOADS_AND_AXES)
+    if (options.showLocalAxes) {
+      elements.forEach((el) => {
+        const n1 = nodes.find((n) => n.id === el.n1);
+        const n2 = nodes.find((n) => n.id === el.n2);
+        if (!n1 || !n2) return;
+        const mx = (n1.x + n2.x) / 2;
+        const my = (n1.y + n2.y) / 2;
+        const mz = (n1.z + n2.z) / 2;
+        const { vx, vy, vz } = computeLocalAxes(n1, n2, el.rollAngle || 0);
+        const aLen = 0.45;
+        const pOrig = engine.project([mx, my, mz]);
+        if (!pOrig.visible) return;
+
+        const pX = engine.project([mx + vx[0] * aLen, my + vx[1] * aLen, mz + vx[2] * aLen]);
+        const pY = engine.project([mx + vy[0] * aLen, my + vy[1] * aLen, mz + vy[2] * aLen]);
+        const pZ = engine.project([mx + vz[0] * aLen, my + vz[1] * aLen, mz + vz[2] * aLen]);
+
+        labelQueue.push({
+          depth: pOrig.depth,
+          layer: RENDER_LAYER.LOADS_AND_AXES,
+          subPriority: 0,
+          draw: (ctx) => {
+            if (pX.visible) draw2DArrowHelper(ctx, pOrig.x, pOrig.y, pX.x, pX.y, '#ef4444', 2.0, 7.5, 5);
+            if (pY.visible) draw2DArrowHelper(ctx, pOrig.x, pOrig.y, pY.x, pY.y, '#22c55e', 2.0, 7.5, 5);
+            if (pZ.visible) draw2DArrowHelper(ctx, pOrig.x, pOrig.y, pZ.x, pZ.y, '#3b82f6', 2.0, 7.5, 5);
+          },
+        });
+      });
+
+      if (options.showPanels !== false) {
+        panels.forEach((p) => {
+          const axes = computePanelLocalAxes(p, nodes);
+          if (!axes) return;
+          const [cx, cy, cz] = axes.centroid;
+          const aLen = 0.55;
+          const pOrig = engine.project([cx, cy, cz]);
+          if (!pOrig.visible) return;
+          const pX = engine.project([cx + axes.vx[0] * aLen, cy + axes.vx[1] * aLen, cz + axes.vx[2] * aLen]);
+          const pY = engine.project([cx + axes.vy[0] * aLen, cy + axes.vy[1] * aLen, cz + axes.vy[2] * aLen]);
+          const pZ = engine.project([cx + axes.vz[0] * aLen, cy + axes.vz[1] * aLen, cz + axes.vz[2] * aLen]);
+
+          labelQueue.push({
+            depth: pOrig.depth,
+            layer: RENDER_LAYER.LOADS_AND_AXES,
+            subPriority: 0,
+            draw: (ctx) => {
+              if (pX.visible) draw2DArrowHelper(ctx, pOrig.x, pOrig.y, pX.x, pX.y, '#ef4444', 2.0, 7.5, 5);
+              if (pY.visible) draw2DArrowHelper(ctx, pOrig.x, pOrig.y, pY.x, pY.y, '#22c55e', 2.0, 7.5, 5);
+              if (pZ.visible) draw2DArrowHelper(ctx, pOrig.x, pOrig.y, pZ.x, pZ.y, '#3b82f6', 2.0, 7.5, 5);
+            },
+          });
+        });
+      }
+    }
+  }
+
   // Instant 2D Hover & Focus highlight overlay (geometry drawn immediately, floating tags queued by depth)
   drawHoverAndSelection2DOverlay(overlayCtx, engine, nodes, elements, sections, options, isDark, panels, labelQueue);
 
@@ -265,7 +847,8 @@ export function drawScene3D(
         if (sp.visible) {
           labelQueue.push({
             depth: sp.depth,
-            priority: 0,
+            layer: RENDER_LAYER.LABELS,
+            subPriority: 0,
             draw: (ctx) => {
               ctx.save();
               ctx.strokeStyle = color;
@@ -292,7 +875,8 @@ export function drawScene3D(
       if (sp.visible) {
         labelQueue.push({
           depth: sp.depth,
-          priority: 0,
+          layer: RENDER_LAYER.LABELS,
+          subPriority: 0,
           draw: (ctx) => {
             ctx.save();
             ctx.strokeStyle = strokeStyle;
@@ -343,7 +927,7 @@ export function drawScene3D(
     collectHingeLabels2DOverlay(labelQueue, engine, nodes, elements, isDark);
   }
 
-  // Load values & Reactions values
+  // Load values & Reactions values (Strict Depth-Sorted Labels Layer)
   const occluders = engine.modelGroup.children.filter(
     (obj) => obj.userData?.type === 'element' || obj.userData?.type === 'panel'
   );
@@ -389,7 +973,8 @@ export function drawScene3D(
               const dirStr = pDir === 'normal' ? 'prostopadle' : `globalne ${pDir}`;
               labelQueue.push({
                 depth: pLabelPos.depth,
-                priority: 2,
+                layer: RENDER_LAYER.LABELS,
+                subPriority: 0,
                 draw: (ctx) =>
                   drawPillTag(
                     ctx,
@@ -427,7 +1012,8 @@ export function drawScene3D(
           if (pTail.visible) {
             labelQueue.push({
               depth: pTail.depth,
-              priority: 3,
+              layer: RENDER_LAYER.LABELS,
+              subPriority: 0,
               draw: (ctx) =>
                 drawPillTag(ctx, pTail.x, pTail.y - 12, `Fx=${Fx > 0 ? '+' : ''}${fmtLoadVal(Fx)}kN`, fColor, fColor, isDark, 12),
             });
@@ -440,7 +1026,8 @@ export function drawScene3D(
           if (pTail.visible) {
             labelQueue.push({
               depth: pTail.depth,
-              priority: 3,
+              layer: RENDER_LAYER.LABELS,
+              subPriority: 0,
               draw: (ctx) =>
                 drawPillTag(ctx, pTail.x, pTail.y - 12, `Fy=${Fy > 0 ? '+' : ''}${fmtLoadVal(Fy)}kN`, fColor, fColor, isDark, 12),
             });
@@ -453,7 +1040,8 @@ export function drawScene3D(
           if (pTail.visible) {
             labelQueue.push({
               depth: pTail.depth,
-              priority: 3,
+              layer: RENDER_LAYER.LABELS,
+              subPriority: 0,
               draw: (ctx) =>
                 drawPillTag(ctx, pTail.x, pTail.y - 12, `Fz=${Fz > 0 ? '+' : ''}${fmtLoadVal(Fz)}kN`, fColor, fColor, isDark, 12),
             });
@@ -464,9 +1052,9 @@ export function drawScene3D(
       // Nodal moments text tags
       if (n.moment) {
         const { Mx = 0, My = 0, Mz = 0 } = n.moment;
-        const gapMx = (n.force && Math.abs(n.force.Fx || 0) > 1e-4) ? (gapF + lenF + 0.15) : baseGapM;
-        const gapMy = (n.force && Math.abs(n.force.Fy || 0) > 1e-4) ? (gapF + lenF + 0.15) : baseGapM;
-        const gapMz = (n.force && Math.abs(n.force.Fz || 0) > 1e-4) ? (gapF + lenF + 0.15) : baseGapM;
+        const gapMx = (n.force && Math.abs(n.force.Fx || 0) > 1e-4 && !options.momentsAsArcs) ? (gapF + lenF + 0.15) : baseGapM;
+        const gapMy = (n.force && Math.abs(n.force.Fy || 0) > 1e-4 && !options.momentsAsArcs) ? (gapF + lenF + 0.15) : baseGapM;
+        const gapMz = (n.force && Math.abs(n.force.Fz || 0) > 1e-4 && !options.momentsAsArcs) ? (gapF + lenF + 0.15) : baseGapM;
 
         if (Math.abs(Mx) > 1e-4) {
           const sign = Math.sign(Mx);
@@ -475,7 +1063,8 @@ export function drawScene3D(
           if (pTail.visible) {
             labelQueue.push({
               depth: pTail.depth,
-              priority: 3,
+              layer: RENDER_LAYER.LABELS,
+              subPriority: 0,
               draw: (ctx) =>
                 drawPillTag(ctx, pTail.x, pTail.y - 12, `Mx=${Mx > 0 ? '+' : ''}${fmtLoadVal(Mx)}kNm`, mColor, mColor, isDark, 12),
             });
@@ -488,7 +1077,8 @@ export function drawScene3D(
           if (pTail.visible) {
             labelQueue.push({
               depth: pTail.depth,
-              priority: 3,
+              layer: RENDER_LAYER.LABELS,
+              subPriority: 0,
               draw: (ctx) =>
                 drawPillTag(ctx, pTail.x, pTail.y - 12, `My=${My > 0 ? '+' : ''}${fmtLoadVal(My)}kNm`, mColor, mColor, isDark, 12),
             });
@@ -501,7 +1091,8 @@ export function drawScene3D(
           if (pTail.visible) {
             labelQueue.push({
               depth: pTail.depth,
-              priority: 3,
+              layer: RENDER_LAYER.LABELS,
+              subPriority: 0,
               draw: (ctx) =>
                 drawPillTag(ctx, pTail.x, pTail.y - 12, `Mz=${Mz > 0 ? '+' : ''}${fmtLoadVal(Mz)}kNm`, mColor, mColor, isDark, 12),
             });
@@ -550,7 +1141,8 @@ export function drawScene3D(
       if (pMass.visible) {
         labelQueue.push({
           depth: pMass.depth,
-          priority: 3,
+          layer: RENDER_LAYER.LABELS,
+          subPriority: 0,
           draw: (ctx) => drawPillTag(ctx, pMass.x, pMass.y, text, mColor, mColor, isDark, 12),
         });
       }
@@ -574,7 +1166,7 @@ export function drawScene3D(
 
       const gapF = 0.30;
       const lenF = 0.70;
-      const gapM = gapF + lenF + 0.12;
+      const gapM = options.momentsAsArcs ? gapF : (gapF + lenF + 0.12);
       const lenM = 0.65;
 
       let rotMatrix: THREE.Matrix4 | null = null;
@@ -600,7 +1192,8 @@ export function drawScene3D(
         if (pTail.visible) {
           labelQueue.push({
             depth: pTail.depth,
-            priority: 4,
+            layer: RENDER_LAYER.LABELS,
+            subPriority: 0,
             draw: (ctx) => drawPillTag(ctx, pTail.x, pTail.y + 12, `Rx=${Rx.toFixed(1)}kN`, rfColor, rfColor, isDark, 12),
           });
         }
@@ -612,7 +1205,8 @@ export function drawScene3D(
         if (pTail.visible) {
           labelQueue.push({
             depth: pTail.depth,
-            priority: 4,
+            layer: RENDER_LAYER.LABELS,
+            subPriority: 0,
             draw: (ctx) => drawPillTag(ctx, pTail.x, pTail.y + 12, `Ry=${Ry.toFixed(1)}kN`, rfColor, rfColor, isDark, 12),
           });
         }
@@ -624,7 +1218,8 @@ export function drawScene3D(
         if (pTail.visible) {
           labelQueue.push({
             depth: pTail.depth,
-            priority: 4,
+            layer: RENDER_LAYER.LABELS,
+            subPriority: 0,
             draw: (ctx) => drawPillTag(ctx, pTail.x, pTail.y + 12, `Rz=${Rz.toFixed(1)}kN`, rfColor, rfColor, isDark, 12),
           });
         }
@@ -637,7 +1232,8 @@ export function drawScene3D(
         if (pTail.visible) {
           labelQueue.push({
             depth: pTail.depth,
-            priority: 4,
+            layer: RENDER_LAYER.LABELS,
+            subPriority: 0,
             draw: (ctx) => drawPillTag(ctx, pTail.x, pTail.y - 12, `Mx=${Mx.toFixed(1)}kNm`, rmColor, rmColor, isDark, 12),
           });
         }
@@ -649,7 +1245,8 @@ export function drawScene3D(
         if (pTail.visible) {
           labelQueue.push({
             depth: pTail.depth,
-            priority: 4,
+            layer: RENDER_LAYER.LABELS,
+            subPriority: 0,
             draw: (ctx) => drawPillTag(ctx, pTail.x, pTail.y - 12, `My=${My.toFixed(1)}kNm`, rmColor, rmColor, isDark, 12),
           });
         }
@@ -661,7 +1258,8 @@ export function drawScene3D(
         if (pTail.visible) {
           labelQueue.push({
             depth: pTail.depth,
-            priority: 4,
+            layer: RENDER_LAYER.LABELS,
+            subPriority: 0,
             draw: (ctx) => drawPillTag(ctx, pTail.x, pTail.y - 12, `Mz=${Mz.toFixed(1)}kNm`, rmColor, rmColor, isDark, 12),
           });
         }
@@ -682,13 +1280,26 @@ export function drawScene3D(
     collectProbe2DOverlay(labelQueue, engine, nodes, elements, options, isDark);
   }
 
-  // 5. Unified Depth-Sorted 2D Label Stack (Painter's Algorithm)
-  // Sort from largest depth (furthest from camera / background) to smallest depth (closest to camera / foreground)
+  // 5. Unified Depth-Sorted 2D Stack (Painter's Algorithm with Clear Semantic Layers)
+  // Layer Hierarchy:
+  // Layer 1 (RENDER_LAYER.GEOMETRY): Bars (2D lines), Nodes (2D circles), Hinges (2D circles)
+  //   -> Sorted by 3D depth! Nodes behind bars are drawn behind bars, nodes in front are drawn in front.
+  // Layer 2 (RENDER_LAYER.LOADS_AND_AXES): Nodal forces, moments, distributed loads, thermal, reactions, local axes
+  //   -> Sorted by 3D depth!
+  // Layer 3 (RENDER_LAYER.LABELS): ALL text labels and values (forces, moments, continuous loads, node/bar names, reactions, dimensions)
+  //   -> Sorted strictly by 3D depth! Labels in the background are drawn first, labels in the foreground are drawn on top.
+  // Layer 4 (RENDER_LAYER.HOVER_FOCUS): Interactive mouse hover/focus highlights
   labelQueue.sort((a, b) => {
-    if (Math.abs(b.depth - a.depth) < 1e-4) {
-      return (a.priority || 0) - (b.priority || 0);
+    const layerA = a.layer ?? RENDER_LAYER.LABELS;
+    const layerB = b.layer ?? RENDER_LAYER.LABELS;
+    if (layerA !== layerB) {
+      return layerA - layerB;
     }
-    return b.depth - a.depth;
+    // Within the same layer, sort by 3D depth from largest (furthest from camera) to smallest (closest)
+    if (Math.abs(b.depth - a.depth) > 1e-4) {
+      return b.depth - a.depth;
+    }
+    return (a.subPriority ?? a.priority ?? 0) - (b.subPriority ?? b.priority ?? 0);
   });
 
   // Render all queued labels in depth order (furthest drawn first, closest drawn on top)
@@ -708,6 +1319,9 @@ function rebuild3DModelGroup(
   isDark: boolean,
   panels: Panel3D[] = []
 ) {
+  // Update lighting & tone mapping for current graphics mode
+  engine.setGraphicsMode(options.graphicsMode || 'balanced');
+
   // Clear previous Three.js 3D model geometry
   engine.clearModelGroup();
 
@@ -760,8 +1374,8 @@ function rebuild3DModelGroup(
     });
   }
 
-  // Loads
-  if (options.showLoads && (!options.hideLoadsInResults || !hasResults)) {
+  // Loads (WebGL 3D objects in Balanced & Quality modes)
+  if (options.graphicsMode !== 'performance' && options.showLoads && (!options.hideLoadsInResults || !hasResults)) {
     // Nodal Forces & Nodal Moments
     nodes.forEach((n) => {
       if (n.force) {
@@ -798,27 +1412,39 @@ function rebuild3DModelGroup(
         const baseGapM = 0.25;
         const color = 0xa855f7; // purple-500
 
-        const gapMx = (n.force && Math.abs(n.force.Fx || 0) > 1e-4) ? (gapF + lenF + 0.15) : baseGapM;
-        const gapMy = (n.force && Math.abs(n.force.Fy || 0) > 1e-4) ? (gapF + lenF + 0.15) : baseGapM;
-        const gapMz = (n.force && Math.abs(n.force.Fz || 0) > 1e-4) ? (gapF + lenF + 0.15) : baseGapM;
+        const gapMx = (n.force && Math.abs(n.force.Fx || 0) > 1e-4 && !options.momentsAsArcs) ? (gapF + lenF + 0.15) : baseGapM;
+        const gapMy = (n.force && Math.abs(n.force.Fy || 0) > 1e-4 && !options.momentsAsArcs) ? (gapF + lenF + 0.15) : baseGapM;
+        const gapMz = (n.force && Math.abs(n.force.Fz || 0) > 1e-4 && !options.momentsAsArcs) ? (gapF + lenF + 0.15) : baseGapM;
 
         if (Math.abs(Mx) > 1e-4) {
           const sign = Math.sign(Mx);
           const dir = new THREE.Vector3(sign, 0, 0);
           const origin = new THREE.Vector3(n.x - sign * (gapMx + lenM), n.y, n.z);
-          buildDoubleHeadedArrow(engine, origin, dir, lenM, color);
+          if (options.momentsAsArcs) {
+            buildMomentArc(engine, origin, dir, lenM, color);
+          } else {
+            buildDoubleHeadedArrow(engine, origin, dir, lenM, color);
+          }
         }
         if (Math.abs(My) > 1e-4) {
           const sign = Math.sign(My);
           const dir = new THREE.Vector3(0, sign, 0);
           const origin = new THREE.Vector3(n.x, n.y - sign * (gapMy + lenM), n.z);
-          buildDoubleHeadedArrow(engine, origin, dir, lenM, color);
+          if (options.momentsAsArcs) {
+            buildMomentArc(engine, origin, dir, lenM, color);
+          } else {
+            buildDoubleHeadedArrow(engine, origin, dir, lenM, color);
+          }
         }
         if (Math.abs(Mz) > 1e-4) {
           const sign = Math.sign(Mz);
           const dir = new THREE.Vector3(0, 0, sign);
           const origin = new THREE.Vector3(n.x, n.y, n.z - sign * (gapMz + lenM));
-          buildDoubleHeadedArrow(engine, origin, dir, lenM, color);
+          if (options.momentsAsArcs) {
+            buildMomentArc(engine, origin, dir, lenM, color);
+          } else {
+            buildDoubleHeadedArrow(engine, origin, dir, lenM, color);
+          }
         }
       }
     });
@@ -863,8 +1489,8 @@ function rebuild3DModelGroup(
     build3DSingleNode(engine, n, options);
   });
 
-  // Reactions (separate directional components, offset from node, with double-headed moment reactions behind)
-  if (options.showReactions && solved && solved.type === 'linear_static' && solved.Rglobal) {
+  // Reactions (WebGL 3D objects in Balanced & Quality modes)
+  if (options.graphicsMode !== 'performance' && options.showReactions && solved && solved.type === 'linear_static' && solved.Rglobal) {
     const Rglobal = solved.Rglobal;
     nodes.forEach((n, idx) => {
       if (!n.support) return;
@@ -879,7 +1505,7 @@ function rebuild3DModelGroup(
       const lenF = 0.70;
       const colorF = 0xd97706; // amber-600
 
-      const gapM = gapF + lenF + 0.12;
+      const gapM = options.momentsAsArcs ? gapF : (gapF + lenF + 0.12);
       const lenM = 0.65;
       const colorM = 0x9333ea; // purple-600
 
@@ -939,7 +1565,11 @@ function rebuild3DModelGroup(
           new THREE.Vector3(sign, 0, 0),
           new THREE.Vector3(-sign * (gapM + lenM), 0, 0)
         );
-        buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09);
+        if (options.momentsAsArcs) {
+          buildMomentArc(engine, origin, dir, lenM, colorM, 0.18, 0.09);
+        } else {
+          buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09);
+        }
       }
       if (Math.abs(My) > 1e-4) {
         const sign = Math.sign(My);
@@ -947,7 +1577,11 @@ function rebuild3DModelGroup(
           new THREE.Vector3(0, sign, 0),
           new THREE.Vector3(0, -sign * (gapM + lenM), 0)
         );
-        buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09);
+        if (options.momentsAsArcs) {
+          buildMomentArc(engine, origin, dir, lenM, colorM, 0.18, 0.09);
+        } else {
+          buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09);
+        }
       }
       if (Math.abs(Mz) > 1e-4) {
         const sign = Math.sign(Mz);
@@ -955,7 +1589,11 @@ function rebuild3DModelGroup(
           new THREE.Vector3(0, 0, sign),
           new THREE.Vector3(0, 0, -sign * (gapM + lenM))
         );
-        buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09);
+        if (options.momentsAsArcs) {
+          buildMomentArc(engine, origin, dir, lenM, colorM, 0.18, 0.09);
+        } else {
+          buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09);
+        }
       }
     });
   }
@@ -1602,14 +2240,17 @@ function build3DSingleElement(
   const isDark = options.theme === 'dark';
   const isSelected = options.selectedElemIds.includes(el.id);
   const isHover = options.hoverElemId === el.id;
+  const isPerformance = options.graphicsMode === 'performance';
+  const isQuality = options.graphicsMode === 'quality';
+
+  const group = el.groupId ? options.groups?.find((g) => g.id === el.groupId) : undefined;
+  const baseColor = group ? group.color : isDark ? '#94a3b8' : '#334155';
 
   const hexColor = isSelected
     ? options.accentColor
     : isHover
     ? '#38bdf8'
-    : isDark
-    ? '#94a3b8'
-    : '#334155';
+    : baseColor;
 
   const opacity = options.showDeform && solved ? 0.35 : 1.0;
 
@@ -1637,14 +2278,21 @@ function build3DSingleElement(
       )
     );
 
-    const mat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(hexColor),
-      roughness: 0.4,
-      metalness: 0.2,
-      transparent: opacity < 1.0,
-      opacity,
-      side: THREE.DoubleSide,
-    });
+    const mat = isPerformance
+      ? new THREE.MeshLambertMaterial({
+          color: new THREE.Color(hexColor),
+          transparent: opacity < 1.0,
+          opacity,
+          side: THREE.DoubleSide,
+        })
+      : new THREE.MeshStandardMaterial({
+          color: new THREE.Color(hexColor),
+          roughness: isQuality ? 0.35 : 0.4,
+          metalness: isQuality ? 0.25 : 0.2,
+          transparent: opacity < 1.0,
+          opacity,
+          side: THREE.DoubleSide,
+        });
 
     const mesh = new THREE.Mesh(geom, mat);
     mesh.matrixAutoUpdate = false;
@@ -1654,7 +2302,7 @@ function build3DSingleElement(
       vx[2], vy[2], vz[2], mid.z,
       0,     0,     0,     1
     );
-    mesh.userData = { type: 'element', id: el.id, isEdge: false };
+    mesh.userData = { type: 'element', id: el.id, isEdge: false, groupId: el.groupId };
 
     engine.modelGroup.add(mesh);
 
@@ -1668,16 +2316,25 @@ function build3DSingleElement(
     const edgeMesh = new THREE.LineSegments(edgeGeom, edgeMat);
     edgeMesh.matrixAutoUpdate = false;
     edgeMesh.matrix.copy(mesh.matrix);
-    edgeMesh.userData = { type: 'element', id: el.id, isEdge: true };
+    edgeMesh.userData = { type: 'element', id: el.id, isEdge: true, groupId: el.groupId };
     engine.modelGroup.add(edgeMesh);
+  } else if (isPerformance) {
+    // In Performance mode: bars without profiles are drawn as crisp 2D screen lines in overlayCtx (Layer 1, Priority -100).
+    // We add a lightweight anchor object in modelGroup so picking & traverse still know the element exists.
+    const lineGeom = new THREE.BufferGeometry().setFromPoints([start, end]);
+    const lineMat = new THREE.LineBasicMaterial({ visible: false });
+    const lineMesh = new THREE.Line(lineGeom, lineMat);
+    lineMesh.userData = { type: 'element', id: el.id, isEdge: false, groupId: el.groupId };
+    engine.modelGroup.add(lineMesh);
   } else {
-    // Render element as 3D Cylinder / Solid Bar fallback
-    const radius = isSelected ? 0.08 : isHover ? 0.07 : 0.05;
-    const geom = new THREE.CylinderGeometry(radius, radius, len, 8);
+    // Render element as 3D Cylinder / Solid Bar fallback (Balanced / Quality)
+    const radius = 0.05;
+    const radialSegments = isQuality ? 24 : 8;
+    const geom = new THREE.CylinderGeometry(radius, radius, len, radialSegments);
     const mat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(hexColor),
-      roughness: 0.4,
-      metalness: 0.2,
+      roughness: isQuality ? 0.35 : 0.4,
+      metalness: isQuality ? 0.25 : 0.2,
       transparent: opacity < 1.0,
       opacity,
     });
@@ -1691,48 +2348,64 @@ function build3DSingleElement(
     rotation.makeRotationX(Math.PI / 2);
     orientation.multiply(rotation);
     mesh.setRotationFromMatrix(orientation);
-    mesh.userData = { type: 'element', id: el.id, isEdge: false };
+    mesh.userData = { type: 'element', id: el.id, isEdge: false, groupId: el.groupId };
 
     engine.modelGroup.add(mesh);
   }
 
-  // End hinges / releases
-  const h = el.hinges || {};
-  const hasStartHinge = h.start_rx || h.start_ry || h.start_rz || h.start_ux || h.start_uy || h.start_uz;
-  const hasEndHinge = h.end_rx || h.end_ry || h.end_rz || h.end_ux || h.end_uy || h.end_uz;
+  // End hinges / releases in 3D (in Performance mode, these are drawn as 2D hollow circles)
+  if (!isPerformance) {
+    const h = el.hinges || {};
+    const hasStartHinge = h.start_rx || h.start_ry || h.start_rz || h.start_ux || h.start_uy || h.start_uz;
+    const hasEndHinge = h.end_rx || h.end_ry || h.end_rz || h.end_ux || h.end_uy || h.end_uz;
 
-  const hingeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-  const hingeGeom = new THREE.SphereGeometry(0.12, 12, 12);
+    const hingeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const hingeGeom = new THREE.SphereGeometry(0.10, isQuality ? 20 : 12, isQuality ? 20 : 12);
+    const offsetDist3D = Math.min(0.15, len * 0.2);
 
-  if (hasStartHinge) {
-    const dir = vec.clone().normalize();
-    const hPos = start.clone().add(dir.multiplyScalar(0.25));
-    const hMesh = new THREE.Mesh(hingeGeom, hingeMat);
-    hMesh.position.copy(hPos);
-    engine.modelGroup.add(hMesh);
-  }
+    if (hasStartHinge) {
+      const dir = vec.clone().normalize();
+      const hPos = start.clone().add(dir.multiplyScalar(offsetDist3D));
+      const hMesh = new THREE.Mesh(hingeGeom, hingeMat);
+      hMesh.position.copy(hPos);
+      engine.modelGroup.add(hMesh);
+    }
 
-  if (hasEndHinge) {
-    const dir = vec.clone().normalize();
-    const hPos = end.clone().sub(dir.multiplyScalar(0.25));
-    const hMesh = new THREE.Mesh(hingeGeom, hingeMat);
-    hMesh.position.copy(hPos);
-    engine.modelGroup.add(hMesh);
+    if (hasEndHinge) {
+      const dir = vec.clone().normalize();
+      const hPos = end.clone().sub(dir.multiplyScalar(offsetDist3D));
+      const hMesh = new THREE.Mesh(hingeGeom, hingeMat);
+      hMesh.position.copy(hPos);
+      engine.modelGroup.add(hMesh);
+    }
   }
 }
 
 function build3DSingleNode(engine: RenderEngine3D, n: Node3D, options: SceneRenderOptions) {
+  const isPerformance = options.graphicsMode === 'performance';
+  if (isPerformance) {
+    // In Performance mode: nodes are drawn as 2D billboard circles in overlayCtx.
+    const obj = new THREE.Object3D();
+    obj.position.set(n.x, n.y, n.z);
+    obj.userData = { type: 'node', id: n.id };
+    engine.modelGroup.add(obj);
+    return;
+  }
+
   const isSelected = options.selectedNodeIds.includes(n.id);
   const isHover = options.hoverNodeId === n.id;
   const isDark = options.theme === 'dark';
+  const isQuality = options.graphicsMode === 'quality';
 
   const hexColor = isSelected ? options.accentColor : isHover ? '#38bdf8' : (isDark ? '#cbd5e1' : '#0f172a');
   const radius = 0.12;
+  const segs = isQuality ? 28 : 16;
 
-  const geom = new THREE.SphereGeometry(radius, 16, 16);
+  const geom = new THREE.SphereGeometry(radius, segs, segs);
   const mat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(hexColor),
-    roughness: 0.3,
+    roughness: isQuality ? 0.25 : 0.3,
+    metalness: isQuality ? 0.2 : 0.0,
   });
 
   const mesh = new THREE.Mesh(geom, mat);
@@ -2207,6 +2880,67 @@ function buildSingleArrow(
   const arrow = new THREE.ArrowHelper(dir.clone().normalize(), origin, length, color, headLength, headWidth);
   makeOnTop(arrow, 1);
   engine.overlayGroup.add(arrow);
+}
+
+function buildMomentArc(
+  engine: RenderEngine3D,
+  origin: THREE.Vector3,
+  dir: THREE.Vector3,
+  length: number,
+  color: number,
+  headLength = 0.16,
+  headWidth = 0.08
+) {
+  const normDir = dir.clone().normalize();
+  const center = origin.clone().addScaledVector(normDir, length * 0.5);
+
+  let v1 = new THREE.Vector3(0, 1, 0);
+  if (Math.abs(normDir.dot(v1)) > 0.9) {
+    v1.set(1, 0, 0);
+  }
+  const tangent1 = new THREE.Vector3().crossVectors(normDir, v1).normalize();
+  const tangent2 = new THREE.Vector3().crossVectors(normDir, tangent1).normalize();
+
+  const radius = length * 0.40;
+  const points: THREE.Vector3[] = [];
+  const steps = 32;
+  const thetaStart = -0.75 * Math.PI;
+  const thetaEnd = 0.75 * Math.PI;
+
+  for (let i = 0; i <= steps; i++) {
+    const theta = thetaStart + (thetaEnd - thetaStart) * (i / steps);
+    const p = center.clone()
+      .addScaledVector(tangent1, radius * Math.cos(theta))
+      .addScaledVector(tangent2, radius * Math.sin(theta));
+    points.push(p);
+  }
+
+  const arcGeom = new THREE.BufferGeometry().setFromPoints(points);
+  const arcMat = new THREE.LineBasicMaterial({ color, depthTest: true, depthWrite: true });
+  const arcLine = new THREE.Line(arcGeom, arcMat);
+  arcLine.renderOrder = 1;
+  engine.overlayGroup.add(arcLine);
+
+  const endPoint = center.clone()
+    .addScaledVector(tangent1, radius * Math.cos(thetaEnd))
+    .addScaledVector(tangent2, radius * Math.sin(thetaEnd));
+
+  const tangentDir = new THREE.Vector3()
+    .addScaledVector(tangent1, -Math.sin(thetaEnd))
+    .addScaledVector(tangent2, Math.cos(thetaEnd))
+    .normalize();
+
+  const coneGeom = new THREE.ConeGeometry(headWidth * 0.7, headLength, 12);
+  coneGeom.translate(0, -headLength / 2, 0);
+  const coneMat = new THREE.MeshBasicMaterial({ color, depthTest: true, depthWrite: true });
+  const head = new THREE.Mesh(coneGeom, coneMat);
+  head.position.copy(endPoint);
+
+  const q = new THREE.Quaternion();
+  q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangentDir);
+  head.quaternion.copy(q);
+  head.renderOrder = 1;
+  engine.overlayGroup.add(head);
 }
 
 function buildDoubleHeadedArrow(
@@ -2818,7 +3552,8 @@ function collectContinuousLoads2DOverlay(
         const tagColor = isDark ? '#38bdf8' : '#0284c7';
         labelQueue.push({
           depth: projected.depth,
-          priority: 2,
+          layer: RENDER_LAYER.LABELS,
+          subPriority: 0,
           draw: (ctx) => drawPillTag(ctx, projected.x, projected.y, tagText, tagColor, tagColor, isDark, 12),
         });
       }
@@ -2869,7 +3604,8 @@ function collectThermalLoads2DOverlay(
       const tagColor = isDark ? '#fb923c' : '#ea580c';
       labelQueue.push({
         depth: projected.depth,
-        priority: 2,
+        layer: RENDER_LAYER.LABELS,
+        subPriority: 0,
         draw: (ctx) => drawPillTag(ctx, projected.x, projected.y - 14, tagText, tagColor, tagColor, isDark, 12),
       });
     }
@@ -2908,7 +3644,8 @@ function collectProbe2DOverlay(
 
   labelQueue.push({
     depth: pt.depth,
-    priority: 20,
+    layer: RENDER_LAYER.LABELS,
+    subPriority: 0,
     draw: (ctx) => {
       // Cyan target indicator
       ctx.save();
@@ -3009,7 +3746,8 @@ function collectDiagramValues2DOverlay(
 
         labelQueue.push({
           depth: screenPt.depth,
-          priority: 5,
+          layer: RENDER_LAYER.LABELS,
+          subPriority: 0,
           draw: (ctx) => drawPillTag(ctx, screenPt.x, screenPt.y, tagText, cfg.cssColor, cfg.cssColor, isDark, 12),
         });
       });
@@ -3058,7 +3796,8 @@ function collectLabels2DOverlay(
         const text = parts.join(' | ');
         labelQueue.push({
           depth: p.depth,
-          priority: 0,
+          layer: RENDER_LAYER.LABELS,
+          subPriority: 0,
           draw: (ctx) => drawPillTag(ctx, p.x, p.y, text, labelColor, labelColor, isDark, 12),
         });
       }
@@ -3072,7 +3811,8 @@ function collectLabels2DOverlay(
         const text = `W${n.id}`;
         labelQueue.push({
           depth: p.depth,
-          priority: 0,
+          layer: RENDER_LAYER.LABELS,
+          subPriority: 0,
           draw: (ctx) => drawPillTag(ctx, p.x + 16, p.y - 10, text, nodeTextColor, isDark ? '#475569' : '#94a3b8', isDark, 12),
         });
       }
@@ -3107,35 +3847,43 @@ function collectHingeLabels2DOverlay(
     const n2 = nodes.find((n) => n.id === el.n2);
     if (!n1 || !n2) return;
 
-    const start = new THREE.Vector3(n1.x, n1.y, n1.z);
-    const end = new THREE.Vector3(n2.x, n2.y, n2.z);
-    const vec = new THREE.Vector3().subVectors(end, start);
-    const len = vec.length();
-    if (len < 1e-6) return;
-    const dir = vec.clone().normalize();
+    const spNode1 = engine.project([n1.x, n1.y, n1.z]);
+    const spNode2 = engine.project([n2.x, n2.y, n2.z]);
+    if (!spNode1.visible && !spNode2.visible) return;
+
+    const sdx = spNode2.x - spNode1.x;
+    const sdy = spNode2.y - spNode1.y;
+    const sLen = Math.hypot(sdx, sdy);
+    if (sLen < 1e-4) return;
+
+    const sDirX = sdx / sLen;
+    const sDirY = sdy / sLen;
+    const screenOffset = Math.min(11, sLen * 0.25);
 
     const startLabel = getHingeLabel(h, 'start');
-    if (startLabel) {
-      const hPos = start.clone().add(dir.clone().multiplyScalar(0.25));
-      const p = engine.project([hPos.x, hPos.y, hPos.z]);
-      if (p.visible && p.x >= 0 && p.x <= engine.width && p.y >= 0 && p.y <= engine.height) {
+    if (startLabel && spNode1.visible) {
+      const hx = spNode1.x + sDirX * screenOffset;
+      const hy = spNode1.y + sDirY * screenOffset;
+      if (hx >= 0 && hx <= engine.width && hy >= 0 && hy <= engine.height) {
         labelQueue.push({
-          depth: p.depth,
-          priority: 1,
-          draw: (ctx) => drawHingePillTag(ctx, p.x, p.y - 14, startLabel, isDark),
+          depth: spNode1.depth,
+          layer: RENDER_LAYER.LABELS,
+          subPriority: 0,
+          draw: (ctx) => drawHingePillTag(ctx, hx, hy - 14, startLabel, isDark),
         });
       }
     }
 
     const endLabel = getHingeLabel(h, 'end');
-    if (endLabel) {
-      const hPos = end.clone().sub(dir.clone().multiplyScalar(0.25));
-      const p = engine.project([hPos.x, hPos.y, hPos.z]);
-      if (p.visible && p.x >= 0 && p.x <= engine.width && p.y >= 0 && p.y <= engine.height) {
+    if (endLabel && spNode2.visible) {
+      const hx = spNode2.x - sDirX * screenOffset;
+      const hy = spNode2.y - sDirY * screenOffset;
+      if (hx >= 0 && hx <= engine.width && hy >= 0 && hy <= engine.height) {
         labelQueue.push({
-          depth: p.depth,
-          priority: 1,
-          draw: (ctx) => drawHingePillTag(ctx, p.x, p.y - 14, endLabel, isDark),
+          depth: spNode2.depth,
+          layer: RENDER_LAYER.LABELS,
+          subPriority: 0,
+          draw: (ctx) => drawHingePillTag(ctx, hx, hy - 14, endLabel, isDark),
         });
       }
     }
@@ -3225,7 +3973,8 @@ function drawHoverAndSelection2DOverlay(
           if (labelQueue) {
             labelQueue.push({
               depth: midDepth,
-              priority: 50,
+              layer: RENDER_LAYER.HOVER_FOCUS,
+              subPriority: 0,
               draw: (c) => drawPillTag(c, midX, midY - 14, label, isDark ? '#38bdf8' : '#0284c7', '#38bdf8', isDark, 11),
             });
           } else {
@@ -3264,7 +4013,8 @@ function drawHoverAndSelection2DOverlay(
           if (labelQueue) {
             labelQueue.push({
               depth: p.depth,
-              priority: 50,
+              layer: RENDER_LAYER.HOVER_FOCUS,
+              subPriority: 0,
               draw: (c) => drawPillTag(c, p.x, p.y - 18, tag, isDark ? '#38bdf8' : '#0284c7', '#38bdf8', isDark, 11),
             });
           } else {
@@ -3304,7 +4054,8 @@ function drawHoverAndSelection2DOverlay(
         if (labelQueue) {
           labelQueue.push({
             depth: avgDepth,
-            priority: 50,
+            layer: RENDER_LAYER.HOVER_FOCUS,
+            subPriority: 0,
             draw: (c) => drawPillTag(c, cx, cy - 10, tag, isDark ? '#38bdf8' : '#0284c7', '#38bdf8', isDark, 11),
           });
         } else {
@@ -3364,7 +4115,8 @@ export function drawSegmentDimensionPoints(
   if (labelQueue) {
     labelQueue.push({
       depth: midDepth,
-      priority: 0,
+      layer: RENDER_LAYER.LOADS_AND_AXES,
+      subPriority: 0,
       draw: drawLines,
     });
   } else {
@@ -3408,7 +4160,8 @@ export function drawSegmentDimensionPoints(
   if (labelQueue) {
     labelQueue.push({
       depth: midDepth,
-      priority: 1,
+      layer: RENDER_LAYER.LABELS,
+      subPriority: 0,
       draw: drawBadge,
     });
   } else {

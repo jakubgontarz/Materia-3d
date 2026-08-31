@@ -15,6 +15,7 @@ export interface StoredModelRecord {
     panels?: Panel3D[];
     sections: Section[];
     materials: Material[];
+    groups?: import('../fem/types').ElementGroupDef[];
     analysisSettings: any;
     defaultSectionId?: number;
     defaultMaterialId?: number;

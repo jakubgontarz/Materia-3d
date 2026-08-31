@@ -171,10 +171,10 @@ export const CATALOG_DEFS: Record<string, { label: string; data: CatalogProfileD
 export const CATALOG_ORDER = ['IPE', 'HEA', 'HEB', 'IPN', 'UPN', 'UPE', 'T', 'SHS', 'RHS', 'CHS', 'L'];
 
 export const INITIAL_MATERIALS = [
-  { id: 1, name: 'Stal S235 / S355', E: 210, nu: 0.3, G: 80.77, alpha: 1.2, density: 7850 },
-  { id: 2, name: 'Beton C25/30', E: 31, nu: 0.2, G: 12.92, alpha: 1.0, density: 2500 },
-  { id: 3, name: 'Drewno C24', E: 11, nu: 0.05, G: 0.69, alpha: 0.5, density: 420 },
-  { id: 4, name: 'Aluminium 6061-T6', E: 70, nu: 0.33, G: 26.32, alpha: 2.3, density: 2700 },
+  { id: 1, name: 'Stal S235 / S355', E: 210, nu: 0.3, G: 80.77, alpha: 1.2, density: 7850, fd: 235 },
+  { id: 2, name: 'Beton C25/30', E: 31, nu: 0.2, G: 12.92, alpha: 1.0, density: 2500, fd: 16.7 },
+  { id: 3, name: 'Drewno C24', E: 11, nu: 0.05, G: 0.69, alpha: 0.5, density: 420, fd: 16.0 },
+  { id: 4, name: 'Aluminium 6061-T6', E: 70, nu: 0.33, G: 26.32, alpha: 2.3, density: 2700, fd: 150 },
 ];
 
 export const INITIAL_SECTIONS: Section[] = [
@@ -256,3 +256,17 @@ export const INITIAL_SECTIONS: Section[] = [
     cBotZ: 15.0
   }
 ];
+
+export const PALETTE_COLORS: string[] = [
+  '#2563eb', '#1d4ed8', '#1e40af', '#3b82f6', '#60a5fa', '#93c5fd', // Blues
+  '#0284c7', '#0369a1', '#0891b2', '#0e7490', '#06b6d4', '#22d3ee', // Cyans / Teals
+  '#059669', '#047857', '#10b981', '#34d399', '#15803d', '#166534', // Greens
+  '#84cc16', '#65a30d', '#eab308', '#ca8a04', '#d97706', '#b45309', // Lime / Yellow / Amber
+  '#ea580c', '#c2410c', '#f97316', '#ef4444', '#dc2626', '#b91c1c', // Orange / Red
+  '#e11d48', '#be123c', '#ec4899', '#db2777', '#be185d', '#a21caf', // Rose / Pink / Fuchsia
+  '#9333ea', '#7e22ce', '#6b21a8', '#8b5cf6', '#7c3aed', '#5b21b6', // Purple / Violet
+  '#475569', '#334155', '#1e293b', '#64748b', '#94a3b8', '#71717a'  // Slate / Steel / Gray
+];
+
+export const INITIAL_GROUPS: import('./types').ElementGroupDef[] = [];
+

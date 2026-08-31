@@ -1,4 +1,5 @@
 import React from 'react';
+import { GraphicsMode } from '../render/engine3d';
 
 export const APP_ACCENTS: Record<
   string,
@@ -21,12 +22,16 @@ interface OptionsModalProps {
   setTheme: (t: 'light' | 'dark') => void;
   accent: string;
   setAccent: (a: string) => void;
+  graphicsMode: GraphicsMode;
+  setGraphicsMode: (mode: GraphicsMode) => void;
   showGrid?: boolean;
   setShowGrid?: (v: boolean) => void;
   includeSelfWeight: boolean;
   setIncludeSelfWeight: (v: boolean) => void;
   snapSize?: number;
   setSnapSize?: (v: number) => void;
+  momentsAsArcs: boolean;
+  setMomentsAsArcs: (v: boolean) => void;
 }
 
 export const OptionsModal: React.FC<OptionsModalProps> = ({
@@ -36,8 +41,12 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
   setTheme,
   accent,
   setAccent,
+  graphicsMode,
+  setGraphicsMode,
   includeSelfWeight,
   setIncludeSelfWeight,
+  momentsAsArcs,
+  setMomentsAsArcs,
 }) => {
   if (!isOpen) return null;
 
@@ -100,6 +109,55 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
         </div>
 
         <div style={{ padding: '16px 18px', fontSize: '12.5px' }}>
+          {/* Tryb grafiki (Wydajność, Zrównoważony, Jakość) */}
+          <div style={{ marginBottom: '16px' }}>
+            <div style={{ fontSize: '12.5px', fontWeight: 600, marginBottom: '6px' }}>
+              Tryb grafiki
+            </div>
+            <div className="btnrow" style={{ marginTop: 0, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px' }}>
+              <button
+                className={`mini ${graphicsMode === 'performance' ? 'on' : ''}`}
+                onClick={() => setGraphicsMode('performance')}
+                style={{ textAlign: 'center', justifyContent: 'center' }}
+              >
+                Wydajność
+              </button>
+              <button
+                className={`mini ${graphicsMode === 'balanced' ? 'on' : ''}`}
+                onClick={() => setGraphicsMode('balanced')}
+                style={{ textAlign: 'center', justifyContent: 'center' }}
+              >
+                Zrównoważony
+              </button>
+              <button
+                className={`mini ${graphicsMode === 'quality' ? 'on' : ''}`}
+                onClick={() => setGraphicsMode('quality')}
+                style={{ textAlign: 'center', justifyContent: 'center' }}
+              >
+                Jakość
+              </button>
+            </div>
+            <div className="muted" style={{ marginTop: '5px', fontSize: '11.5px', lineHeight: '1.4' }}>
+              {graphicsMode === 'performance' && (
+                <span>
+                  <strong>Tryb wydajności:</strong> Pręty jako estetyczne linie 2D (nie bryły 3D), obciążenia renderowane nad modelem, przeguby 2D zawsze nad prętami, a etykiety na samym wierzchu (maksymalna płynność i natychmiastowa responsywność).
+                </span>
+              )}
+              {graphicsMode === 'balanced' && (
+                <span>
+                  <strong>Tryb zrównoważony:</strong> Zoptymalizowany standardowy rendering bryłowy 3D.
+                </span>
+              )}
+              {graphicsMode === 'quality' && (
+                <span>
+                  <strong>Tryb jakości:</strong> Zaawansowane trójpunktowe oświetlenie, filmowe mapowanie tonów (ACES) oraz wysokie wygładzenie geometrii brył.
+                </span>
+              )}
+            </div>
+          </div>
+
+          <hr className="sep" />
+
           {/* Motyw i Kolory */}
           <div style={{ marginBottom: '16px' }}>
             <div
@@ -188,6 +246,32 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
             </label>
             <div className="muted" style={{ marginTop: '3px' }}>
               Dolicza do każdego pręta obciążenie pionowe w dół (-Z): gęstość materiału × pole przekroju × g.
+            </div>
+          </div>
+
+          <hr className="sep" />
+
+          {/* Rysowanie momentów jako łuk */}
+          <div style={{ marginBottom: '14px' }}>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                cursor: 'pointer',
+                gap: '10px',
+              }}
+            >
+              <span style={{ fontSize: '12.5px', fontWeight: 600 }}>Momenty skupione jako łuk</span>
+              <input
+                type="checkbox"
+                checked={momentsAsArcs}
+                onChange={(e) => setMomentsAsArcs(e.target.checked)}
+                style={{ width: '18px', height: '18px', flex: '0 0 auto', accentColor: 'var(--accent)' }}
+              />
+            </label>
+            <div className="muted" style={{ marginTop: '3px' }}>
+              Rysuje momenty skupione i reakcje jako tradycyjne łuki z grotem w płaszczyźnie obrotu (zgodnie z zasadą prawej dłoni) zamiast strzałek o podwójnym grocie.
             </div>
           </div>
         </div>

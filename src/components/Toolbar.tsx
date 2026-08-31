@@ -402,6 +402,9 @@ interface ToolbarProps {
   setDefaultSectionId: (id: number) => void;
   defaultMaterialId: number;
   setDefaultMaterialId: (id: number) => void;
+  groups?: import('../fem/types').ElementGroupDef[];
+  defaultGroupId?: string;
+  setDefaultGroupId?: (id: string) => void;
   drawConstructionGrid?: boolean;
   setDrawConstructionGrid?: (v: boolean) => void;
   drawOuterDimensionLines?: boolean;
@@ -461,10 +464,29 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   setDefaultSectionId,
   defaultMaterialId,
   setDefaultMaterialId,
+  groups = [],
+  defaultGroupId,
+  setDefaultGroupId,
   snapSize = 0.5,
 }) => {
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const selectedDrawingGroup = React.useMemo(() => {
+    return (groups || []).find((g) => g.id === defaultGroupId);
+  }, [groups, defaultGroupId]);
+
+  const activeSectionIdForDrawing = React.useMemo(() => {
+    return (selectedDrawingGroup && selectedDrawingGroup.sectionId !== undefined)
+      ? selectedDrawingGroup.sectionId
+      : defaultSectionId;
+  }, [selectedDrawingGroup, defaultSectionId]);
+
+  const activeMaterialIdForDrawing = React.useMemo(() => {
+    return (selectedDrawingGroup && selectedDrawingGroup.materialId !== undefined)
+      ? selectedDrawingGroup.materialId
+      : defaultMaterialId;
+  }, [selectedDrawingGroup, defaultMaterialId]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent | TouchEvent) => {
@@ -755,8 +777,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <select
             id="defSectionSel"
             className="tb-select"
-            value={defaultSectionId}
+            value={activeSectionIdForDrawing}
             onChange={(e) => setDefaultSectionId(parseInt(e.target.value))}
+            disabled={selectedDrawingGroup?.sectionId !== undefined}
+            title={selectedDrawingGroup?.sectionId !== undefined ? "Przekrój narzucony przez grupę" : "Domyślny przekrój"}
           >
             {sections.map((s) => (
               <option key={s.id} value={s.id}>
@@ -768,8 +792,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <select
             id="defMaterialSel"
             className="tb-select"
-            value={defaultMaterialId}
+            value={activeMaterialIdForDrawing}
             onChange={(e) => setDefaultMaterialId(parseInt(e.target.value))}
+            disabled={selectedDrawingGroup?.materialId !== undefined}
+            title={selectedDrawingGroup?.materialId !== undefined ? "Materiał narzucony przez grupę" : "Domyślny materiał"}
           >
             {materials.map((m) => (
               <option key={m.id} value={m.id}>
@@ -777,6 +803,25 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               </option>
             ))}
           </select>
+          {groups.length > 0 && (
+            <>
+              <span className="tb-label" style={{ marginLeft: '4px' }}>Grupa</span>
+              <select
+                id="defGroupSel"
+                className="tb-select"
+                value={defaultGroupId}
+                onChange={(e) => setDefaultGroupId?.(e.target.value)}
+                title="Domyślna grupa"
+              >
+                <option value="">(brak grupy)</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
           <div className="tb-sep" />
           <button
             className={`tb-btn ${snapEnabled ? 'active' : ''}`}

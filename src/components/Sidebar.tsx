@@ -13,7 +13,16 @@ import {
   PanelShape,
   PanelLoadTransferDir,
   PanelPressureLoad,
+  ElementGroupDef,
 } from '../fem/types';
+
+export const GROUP_PALETTE_COLORS = [
+  '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16',
+  '#f97316', '#6366f1', '#14b8a6', '#d97706', '#0284c7', '#dc2626', '#059669', '#7c3aed',
+  '#db2777', '#0891b2', '#65a30d', '#ea580c', '#4f46e5', '#0d9488', '#b45309', '#0369a1',
+  '#b91c1c', '#047857', '#6d28d9', '#be185d', '#0e7490', '#4d7c0f', '#c2410c', '#3730a3',
+  '#0f766e', '#92400e', '#1e3a8a', '#831843'
+];
 import { ICONS } from './Toolbar';
 import { CATALOG_DEFS, CATALOG_ORDER } from '../fem/catalogs';
 import { SmartNumberInput } from './SmartNumberInput';
@@ -564,6 +573,10 @@ interface SidebarProps {
   setDrawConstructionGrid?: React.Dispatch<React.SetStateAction<boolean>>;
   drawOuterDimensionLines?: boolean;
   setDrawOuterDimensionLines?: React.Dispatch<React.SetStateAction<boolean>>;
+  groups?: ElementGroupDef[];
+  setGroups?: React.Dispatch<React.SetStateAction<ElementGroupDef[]>>;
+  defaultGroupId?: string;
+  setDefaultGroupId?: (id: string) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -707,6 +720,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setDrawConstructionGrid = (_val: boolean | ((prev: boolean) => boolean)) => {},
   drawOuterDimensionLines = true,
   setDrawOuterDimensionLines = (_val: boolean | ((prev: boolean) => boolean)) => {},
+  groups = [],
+  setGroups = (_val: any) => {},
+  defaultGroupId,
+  setDefaultGroupId,
 }) => {
   const [addBarCoordsCollapsed, setAddBarCoordsCollapsed] = useState(false);
   const [nodesGroupCollapsed, setNodesGroupCollapsed] = useState(false);
@@ -715,6 +732,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [calcGroupCollapsed, setCalcGroupCollapsed] = useState(false);
   const [analysisCollapsed, setAnalysisCollapsed] = useState(false);
   const [libraryCollapsed, setLibraryCollapsed] = useState(false);
+
+  // Collapsed states for results sub-panels
+  const [reactionsCollapsed, setReactionsCollapsed] = useState(false);
+  const [stabilityCollapsed, setStabilityCollapsed] = useState(false);
+  const [modalCollapsed, setModalCollapsed] = useState(false);
+  const [resultsViewCollapsed, setResultsViewCollapsed] = useState(false);
+  const [probeCollapsed, setProbeCollapsed] = useState(false);
+  const [utilizationCollapsed, setUtilizationCollapsed] = useState(false);
+
+  // State for Group management
+  const [addGroupFormOpen, setAddGroupFormOpen] = useState(false);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupColor, setNewGroupColor] = useState('#3b82f6');
+  const [newGroupSectionId, setNewGroupSectionId] = useState<number | undefined>(undefined);
+  const [newGroupMaterialId, setNewGroupMaterialId] = useState<number | undefined>(undefined);
 
   // State for axis grid custom coordinate input
   const [newCoordVal, setNewCoordVal] = useState<string>('');
@@ -880,6 +913,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [newMatNu, setNewMatNu] = useState(0.3);
   const [newMatAlpha, setNewMatAlpha] = useState(1.2);
   const [newMatDensity, setNewMatDensity] = useState(7850);
+  const [newMatFd, setNewMatFd] = useState(235);
 
   const [addSecFormOpen, setAddSecFormOpen] = useState(false);
   const [newSecName, setNewSecName] = useState('Nowy przekrój');
@@ -1986,13 +2020,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
         setAddBarValY(0);
         setAddBarValZ(0);
       } else {
+        const selectedDrawingGroup = groups ? groups.find((g) => g.id === defaultGroupId) : undefined;
+        const activeSectionId = (selectedDrawingGroup && selectedDrawingGroup.sectionId !== undefined)
+          ? selectedDrawingGroup.sectionId
+          : defaultSectionId;
+        const activeMaterialId = (selectedDrawingGroup && selectedDrawingGroup.materialId !== undefined)
+          ? selectedDrawingGroup.materialId
+          : defaultMaterialId;
+
         const nextElemId = elements.length > 0 ? Math.max(...elements.map((e) => e.id)) + 1 : 1;
         const newElem: Element3D = {
           id: nextElemId,
           n1: barStartNodeId,
           n2: targetNodeId,
-          sectionId: defaultSectionId,
-          materialId: defaultMaterialId,
+          sectionId: activeSectionId,
+          materialId: activeMaterialId,
+          groupId: defaultGroupId || undefined,
           rollAngle: 0,
           hinges: {},
           q: null,
@@ -2193,6 +2236,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       G: G,
       alpha: newMatAlpha,
       density: newMatDensity,
+      fd: newMatFd,
     };
     setMaterials((prev) => [...prev, mat]);
     setAddMatFormOpen(false);
@@ -2804,7 +2848,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <label style={{ flex: '0 0 auto', width: '68px', fontSize: '11px', whiteSpace: 'nowrap' }}>
                       {gridPlane === 'XY' ? 'Poziom Z' : gridPlane === 'XZ' ? 'Położenie Y' : 'Położenie X'}
                     </label>
-                    <div className="inp-unit" style={{ flex: 1, minWidth: 0 }}>
+                    <div className="inp-unit">
                       <SmartNumberInput
                         step="0.5"
                         value={gridOffset}
@@ -2826,7 +2870,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {/* Krok dociągania (Snap) przeniesiony z opcji */}
                   <div className="row" style={{ marginBottom: '10px' }}>
                     <label style={{ minWidth: '70px', fontSize: '11px', whiteSpace: 'nowrap' }}>Krok snapu</label>
-                    <div className="inp-unit" style={{ flex: 1, minWidth: 0 }}>
+                    <div className="inp-unit">
                       <SmartNumberInput
                         min={0.01}
                         step="0.05"
@@ -2942,7 +2986,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <label style={{ minWidth: '70px', fontSize: '11px', whiteSpace: 'nowrap' }} title="Tolerancja łączenia węzłów (m)">
                       Łączenie węzłów
                     </label>
-                    <div className="inp-unit" style={{ flex: 1, minWidth: 0 }}>
+                    <div className="inp-unit">
                       <SmartNumberInput
                         min={0}
                         step="0.001"
@@ -4854,7 +4898,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     {(() => {
                       const commonSecId = commonVal(selectedElements, (e) => e.sectionId);
                       const commonMatId = commonVal(selectedElements, (e) => e.materialId);
+                      const commonGrpId = commonVal(selectedElements, (e) => e.groupId || '');
                       const commonRollAngle = commonVal(selectedElements, (e) => e.rollAngle ?? 0);
+
+                      const isSectionLocked = selectedElements.some((el) => {
+                        if (!el.groupId) return false;
+                        const g = groups.find((grp) => grp.id === el.groupId);
+                        return g && g.sectionId !== undefined;
+                      });
+                      const isMaterialLocked = selectedElements.some((el) => {
+                        if (!el.groupId) return false;
+                        const g = groups.find((grp) => grp.id === el.groupId);
+                        return g && g.materialId !== undefined;
+                      });
 
                       return (
                         <div className="panel">
@@ -4863,6 +4919,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             <label>Przekrój</label>
                             <select
                               value={commonSecId ?? ''}
+                              disabled={isSectionLocked}
+                              title={isSectionLocked ? "Przekrój jest narzucony przez grupę pręta" : "Przekrój"}
                               onChange={(e) => {
                                 const val = parseInt(e.target.value);
                                 setElements((prev) =>
@@ -4887,6 +4945,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             <label>Materiał</label>
                             <select
                               value={commonMatId ?? ''}
+                              disabled={isMaterialLocked}
+                              title={isMaterialLocked ? "Materiał jest narzucony przez grupę pręta" : "Materiał"}
                               onChange={(e) => {
                                 const val = parseInt(e.target.value);
                                 setElements((prev) =>
@@ -4908,9 +4968,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             </select>
                           </div>
                           <div className="row">
-                            <label>Obrót osi β</label>
-                            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flex: 1 }}>
-                              <div className="inp-unit" style={{ flex: 1 }}>
+                            <label>Grupa</label>
+                            <select
+                              value={commonGrpId === undefined ? 'mixed' : (commonGrpId ?? '')}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === 'mixed') return;
+                                const targetGrp = groups.find((grp) => grp.id === val);
+                                setElements((prev) =>
+                                  prev.map((el) => {
+                                    if (!selectedElemIds.includes(el.id)) return el;
+                                    const nextSecId = targetGrp?.sectionId !== undefined ? targetGrp.sectionId : el.sectionId;
+                                    const nextMatId = targetGrp?.materialId !== undefined ? targetGrp.materialId : el.materialId;
+                                    return {
+                                      ...el,
+                                      groupId: val || undefined,
+                                      sectionId: nextSecId,
+                                      materialId: nextMatId,
+                                    };
+                                  })
+                                );
+                                onInvalidateResults();
+                              }}
+                            >
+                              <option value="">(brak grupy)</option>
+                              {commonGrpId === undefined && (
+                                <option value="mixed" disabled hidden>
+                                  — różne —
+                                </option>
+                              )}
+                              {groups.map((g) => (
+                                <option key={g.id} value={g.id}>
+                                  {g.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="row">
+                            <label style={{ flexShrink: 0 }}>Obrót osi β</label>
+                            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flex: 1, minWidth: 0, flexWrap: 'nowrap' }}>
+                              <div className="inp-unit" style={{ flex: '1 1 0px', minWidth: 0, width: 0, overflow: 'hidden' }}>
                                 <SmartNumberInput
                                   step="15"
                                   value={commonRollAngle}
@@ -5827,88 +5924,102 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {/* REAKCJE PODPOROWE */}
                   {solved.type === 'linear_static' && (
                     <div className="panel">
-                      <h3>
-                        Reakcje podporowe <span className="tag">rozwiązano</span>
+                      <h3
+                        className="collapsible-head"
+                        onClick={() => setReactionsCollapsed(!reactionsCollapsed)}
+                        style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                      >
+                        <span>Reakcje podporowe <span className="tag">rozwiązano</span></span>
+                        <span className="subtle-icon">{reactionsCollapsed ? '▸' : '▾'}</span>
                       </h3>
-                      <div style={{ overflowX: 'auto' }}>
-                        <table className="rtab">
-                          <thead>
-                            <tr>
-                              <th>Węzeł</th>
-                              <th>Rx [kN]</th>
-                              <th>Ry [kN]</th>
-                              <th>Rz [kN]</th>
-                              <th>Mx [kNm]</th>
-                              <th>My [kNm]</th>
-                              <th>Mz [kNm]</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {nodes
-                              .filter((n) => n.support)
-                              .map((n) => {
-                                const r = solved.reactions?.[n.id] || { Rx: 0, Ry: 0, Rz: 0, Mx: 0, My: 0, Mz: 0 };
-                                return (
-                                  <tr key={n.id}>
-                                    <td>W{n.id}</td>
-                                    <td>{fmtSmart(r.Rx)}</td>
-                                    <td>{fmtSmart(r.Ry)}</td>
-                                    <td>{fmtSmart(r.Rz)}</td>
-                                    <td>{fmtSmart(r.Mx)}</td>
-                                    <td>{fmtSmart(r.My)}</td>
-                                    <td>{fmtSmart(r.Mz)}</td>
-                                  </tr>
-                                );
-                              })}
-                          </tbody>
-                        </table>
-                      </div>
+                      {!reactionsCollapsed && (
+                        <div style={{ overflowX: 'auto' }}>
+                          <table className="rtab">
+                            <thead>
+                              <tr>
+                                <th>Węzeł</th>
+                                <th>Rx [kN]</th>
+                                <th>Ry [kN]</th>
+                                <th>Rz [kN]</th>
+                                <th>Mx [kNm]</th>
+                                <th>My [kNm]</th>
+                                <th>Mz [kNm]</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {nodes
+                                .filter((n) => n.support)
+                                .map((n) => {
+                                  const r = solved.reactions?.[n.id] || { Rx: 0, Ry: 0, Rz: 0, Mx: 0, My: 0, Mz: 0 };
+                                  return (
+                                    <tr key={n.id}>
+                                      <td>W{n.id}</td>
+                                      <td>{fmtSmart(r.Rx)}</td>
+                                      <td>{fmtSmart(r.Ry)}</td>
+                                      <td>{fmtSmart(r.Rz)}</td>
+                                      <td>{fmtSmart(r.Mx)}</td>
+                                      <td>{fmtSmart(r.My)}</td>
+                                      <td>{fmtSmart(r.Mz)}</td>
+                                    </tr>
+                                  );
+                                })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
                     </div>
                   )}
 
                   {/* WYNIKI STATECZNOŚCI 3D */}
                   {solved.type === 'stability' && (
                     <div className="panel">
-                      <h3>
-                        Stateczność <span className="tag">α_cr</span>
+                      <h3
+                        className="collapsible-head"
+                        onClick={() => setStabilityCollapsed(!stabilityCollapsed)}
+                        style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                      >
+                        <span>Stateczność <span className="tag">α_cr</span></span>
+                        <span className="subtle-icon">{stabilityCollapsed ? '▸' : '▾'}</span>
                       </h3>
-                      {solved.modes.length === 0 ? (
-                        <div className="warn">
-                          {solved.noCompression
-                            ? 'Brak ściskanych elementów w konstrukcji (α_cr = ∞).'
-                            : 'Nie wyznaczono form wyboczenia (osobliwość układu).'}
-                        </div>
-                      ) : (
-                        <div style={{ overflowX: 'auto' }}>
-                          <table className="rtab">
-                            <thead>
-                              <tr>
-                                <th>Forma</th>
-                                <th>α_cr</th>
-                                <th>N_cr [kN]</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {solved.modes.map((m, idx) => (
-                                <tr
-                                  key={idx}
-                                  style={{
-                                    cursor: 'pointer',
-                                    fontWeight: (solved.currentMode || 0) === idx ? 'bold' : 'normal',
-                                    background: (solved.currentMode || 0) === idx ? 'var(--accent-soft)' : 'transparent',
-                                  }}
-                                  onClick={() => {
-                                    setSolved?.({ ...solved, currentMode: idx });
-                                  }}
-                                >
-                                  <td>Forma {idx + 1}</td>
-                                  <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{fmtSmart(m.alphaCr, 3)}</td>
-                                  <td>{fmtSmart(m.maxNcr, 1)}</td>
+                      {!stabilityCollapsed && (
+                        solved.modes.length === 0 ? (
+                          <div className="warn">
+                            {solved.noCompression
+                              ? 'Brak ściskanych elementów w konstrukcji (α_cr = ∞).'
+                              : 'Nie wyznaczono form wyboczenia (osobliwość układu).'}
+                          </div>
+                        ) : (
+                          <div style={{ overflowX: 'auto' }}>
+                            <table className="rtab">
+                              <thead>
+                                <tr>
+                                  <th>Forma</th>
+                                  <th>α_cr</th>
+                                  <th>N_cr [kN]</th>
                                 </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                              </thead>
+                              <tbody>
+                                {solved.modes.map((m, idx) => (
+                                  <tr
+                                    key={idx}
+                                    style={{
+                                      cursor: 'pointer',
+                                      fontWeight: (solved.currentMode || 0) === idx ? 'bold' : 'normal',
+                                      background: (solved.currentMode || 0) === idx ? 'var(--accent-soft)' : 'transparent',
+                                    }}
+                                    onClick={() => {
+                                      setSolved?.({ ...solved, currentMode: idx });
+                                    }}
+                                  >
+                                    <td>Forma {idx + 1}</td>
+                                    <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{fmtSmart(m.alphaCr, 3)}</td>
+                                    <td>{fmtSmart(m.maxNcr, 1)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )
                       )}
                     </div>
                   )}
@@ -5916,376 +6027,616 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {/* WYNIKI DRGAŃ WŁASNYCH 3D */}
                   {solved.type === 'modal' && (
                     <div className="panel">
-                      <h3>
-                        Drgania własne <span className="tag">modalna</span>
+                      <h3
+                        className="collapsible-head"
+                        onClick={() => setModalCollapsed(!modalCollapsed)}
+                        style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                      >
+                        <span>Drgania własne <span className="tag">modalna</span></span>
+                        <span className="subtle-icon">{modalCollapsed ? '▸' : '▾'}</span>
                       </h3>
-                      {solved.modes.length === 0 ? (
-                        <div className="warn">
-                          {solved.noMass
-                            ? 'Brak zdefiniowanej masy w konstrukcji (M = 0).'
-                            : 'Nie wyznaczono częstości drgań (osobliwość).'}
-                        </div>
-                      ) : (
-                        <div style={{ overflowX: 'auto' }}>
-                          <table className="rtab">
-                            <thead>
-                              <tr>
-                                <th>Forma</th>
-                                <th>f [Hz]</th>
-                                <th>T [s]</th>
-                                <th>ω [rad/s]</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {solved.modes.map((m, idx) => (
-                                <tr
-                                  key={idx}
-                                  style={{
-                                    cursor: 'pointer',
-                                    fontWeight: (solved.currentMode || 0) === idx ? 'bold' : 'normal',
-                                    background: (solved.currentMode || 0) === idx ? 'var(--accent-soft)' : 'transparent',
-                                  }}
-                                  onClick={() => {
-                                    setSolved?.({ ...solved, currentMode: idx });
-                                  }}
-                                >
-                                  <td>Forma {idx + 1}</td>
-                                  <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{fmtSmart(m.f, 2)}</td>
-                                  <td>{fmtSmart(m.T, 3)}</td>
-                                  <td>{fmtSmart(m.omega, 2)}</td>
+                      {!modalCollapsed && (
+                        solved.modes.length === 0 ? (
+                          <div className="warn">
+                            {solved.noMass
+                              ? 'Brak zdefiniowanej masy w konstrukcji (M = 0).'
+                              : 'Nie wyznaczono częstości drgań (osobliwość).'}
+                          </div>
+                        ) : (
+                          <div style={{ overflowX: 'auto' }}>
+                            <table className="rtab">
+                              <thead>
+                                <tr>
+                                  <th>Forma</th>
+                                  <th>f [Hz]</th>
+                                  <th>T [s]</th>
+                                  <th>ω [rad/s]</th>
                                 </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                              </thead>
+                              <tbody>
+                                {solved.modes.map((m, idx) => (
+                                  <tr
+                                    key={idx}
+                                    style={{
+                                      cursor: 'pointer',
+                                      fontWeight: (solved.currentMode || 0) === idx ? 'bold' : 'normal',
+                                      background: (solved.currentMode || 0) === idx ? 'var(--accent-soft)' : 'transparent',
+                                    }}
+                                    onClick={() => {
+                                      setSolved?.({ ...solved, currentMode: idx });
+                                    }}
+                                  >
+                                    <td>Forma {idx + 1}</td>
+                                    <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{fmtSmart(m.f, 2)}</td>
+                                    <td>{fmtSmart(m.T, 3)}</td>
+                                    <td>{fmtSmart(m.omega, 2)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )
                       )}
                     </div>
                   )}
 
                   {/* WIDOK WYNIKÓW / TOGGLES */}
                   <div className="panel">
-                    <h3>Widok wyników</h3>
-                    <div className={`diagToggle ${showReactions ? 'active' : ''}`}>
-                      <span className="lbl">
-                        <span className="swatch" style={{ background: 'var(--react-color)' }}></span>
-                        Reakcje podporowe
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={showReactions}
-                        onChange={(e) => setShowReactions(e.target.checked)}
-                      />
-                    </div>
+                    <h3
+                      className="collapsible-head"
+                      onClick={() => setResultsViewCollapsed(!resultsViewCollapsed)}
+                      style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                    >
+                      <span>Widok wyników</span>
+                      <span className="subtle-icon">{resultsViewCollapsed ? '▸' : '▾'}</span>
+                    </h3>
+                    {!resultsViewCollapsed && (
+                      <>
+                        <div className={`diagToggle ${showReactions ? 'active' : ''}`}>
+                          <span className="lbl">
+                            <span className="swatch" style={{ background: 'var(--react-color)' }}></span>
+                            Reakcje podporowe
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={showReactions}
+                            onChange={(e) => setShowReactions(e.target.checked)}
+                          />
+                        </div>
 
-                    <div className={`diagToggle ${showDeform ? 'active' : ''}`}>
-                      <span className="lbl">
-                        <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
-                        Forma odkształcenia (ugięcie)
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={showDeform}
-                        onChange={(e) => setShowDeform(e.target.checked)}
-                      />
-                    </div>
-                    {showDeform && (
-                      <div className="row">
-                        <label style={{ minWidth: '96px' }}>Skala odkszt.</label>
-                        <input
-                          type="range"
-                          min="0.1"
-                          max="5"
-                          step="0.1"
-                          value={deformScaleMult}
-                          onChange={(e) => setDeformScaleMult(parseFloat(e.target.value))}
-                        />
-                        <span className="unit" style={{ width: '34px' }}>
-                          {deformScaleMult.toFixed(1)}×
-                        </span>
-                      </div>
-                    )}
+                        <div className={`diagToggle ${showDeform ? 'active' : ''}`}>
+                          <span className="lbl">
+                            <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
+                            Forma odkształcenia (ugięcie)
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={showDeform}
+                            onChange={(e) => setShowDeform(e.target.checked)}
+                          />
+                        </div>
+                        {showDeform && (
+                          <div className="row">
+                            <label style={{ minWidth: '96px' }}>Skala odkszt.</label>
+                            <input
+                              type="range"
+                              min="0.1"
+                              max="5"
+                              step="0.1"
+                              value={deformScaleMult}
+                              onChange={(e) => setDeformScaleMult(parseFloat(e.target.value))}
+                            />
+                            <span className="unit" style={{ width: '34px' }}>
+                              {deformScaleMult.toFixed(1)}×
+                            </span>
+                          </div>
+                        )}
 
-                    <div className={`diagToggle ${showMy ? 'active' : ''}`}>
-                      <span className="lbl">
-                        <span className="swatch" style={{ background: '#dc2626' }}></span>
-                        <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#22c55e', marginRight: '6px', marginLeft: '1px', flexShrink: 0 }} title="Oś lokalna y" />
-                        Moment zginający My
-                      </span>
-                      <input type="checkbox" checked={showMy} onChange={(e) => setShowMy(e.target.checked)} />
-                    </div>
+                        <div className={`diagToggle ${showMy ? 'active' : ''}`}>
+                          <span className="lbl">
+                            <span className="swatch" style={{ background: '#dc2626' }}></span>
+                            <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#22c55e', marginRight: '6px', marginLeft: '1px', flexShrink: 0 }} title="Oś lokalna y" />
+                            Moment zginający My
+                          </span>
+                          <input type="checkbox" checked={showMy} onChange={(e) => setShowMy(e.target.checked)} />
+                        </div>
 
-                    <div className={`diagToggle ${showMz ? 'active' : ''}`}>
-                      <span className="lbl">
-                        <span className="swatch" style={{ background: '#ea580c' }}></span>
-                        <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', marginRight: '6px', marginLeft: '1px', flexShrink: 0 }} title="Oś lokalna z" />
-                        Moment zginający Mz
-                      </span>
-                      <input type="checkbox" checked={showMz} onChange={(e) => setShowMz(e.target.checked)} />
-                    </div>
+                        <div className={`diagToggle ${showMz ? 'active' : ''}`}>
+                          <span className="lbl">
+                            <span className="swatch" style={{ background: '#ea580c' }}></span>
+                            <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', marginRight: '6px', marginLeft: '1px', flexShrink: 0 }} title="Oś lokalna z" />
+                            Moment zginający Mz
+                          </span>
+                          <input type="checkbox" checked={showMz} onChange={(e) => setShowMz(e.target.checked)} />
+                        </div>
 
-                    <div className={`diagToggle ${showMx ? 'active' : ''}`}>
-                      <span className="lbl">
-                        <span className="swatch" style={{ background: '#9333ea' }}></span>
-                        <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#ef4444', marginRight: '6px', marginLeft: '1px', flexShrink: 0 }} title="Oś lokalna x" />
-                        Moment skręcający Mx
-                      </span>
-                      <input type="checkbox" checked={showMx} onChange={(e) => setShowMx(e.target.checked)} />
-                    </div>
+                        <div className={`diagToggle ${showMx ? 'active' : ''}`}>
+                          <span className="lbl">
+                            <span className="swatch" style={{ background: '#9333ea' }}></span>
+                            <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#ef4444', marginRight: '6px', marginLeft: '1px', flexShrink: 0 }} title="Oś lokalna x" />
+                            Moment skręcający Mx
+                          </span>
+                          <input type="checkbox" checked={showMx} onChange={(e) => setShowMx(e.target.checked)} />
+                        </div>
 
-                    <div className={`diagToggle ${showVy ? 'active' : ''}`}>
-                      <span className="lbl">
-                        <span className="swatch" style={{ background: '#0284c7' }}></span>
-                        <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#22c55e', marginRight: '6px', marginLeft: '1px', flexShrink: 0 }} title="Oś lokalna y" />
-                        Siła tnąca Vy
-                      </span>
-                      <input type="checkbox" checked={showVy} onChange={(e) => setShowVy(e.target.checked)} />
-                    </div>
+                        <div className={`diagToggle ${showVy ? 'active' : ''}`}>
+                          <span className="lbl">
+                            <span className="swatch" style={{ background: '#0284c7' }}></span>
+                            <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#22c55e', marginRight: '6px', marginLeft: '1px', flexShrink: 0 }} title="Oś lokalna y" />
+                            Siła tnąca Vy
+                          </span>
+                          <input type="checkbox" checked={showVy} onChange={(e) => setShowVy(e.target.checked)} />
+                        </div>
 
-                    <div className={`diagToggle ${showVz ? 'active' : ''}`}>
-                      <span className="lbl">
-                        <span className="swatch" style={{ background: '#0d9488' }}></span>
-                        <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', marginRight: '6px', marginLeft: '1px', flexShrink: 0 }} title="Oś lokalna z" />
-                        Siła tnąca Vz
-                      </span>
-                      <input type="checkbox" checked={showVz} onChange={(e) => setShowVz(e.target.checked)} />
-                    </div>
+                        <div className={`diagToggle ${showVz ? 'active' : ''}`}>
+                          <span className="lbl">
+                            <span className="swatch" style={{ background: '#0d9488' }}></span>
+                            <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', marginRight: '6px', marginLeft: '1px', flexShrink: 0 }} title="Oś lokalna z" />
+                            Siła tnąca Vz
+                          </span>
+                          <input type="checkbox" checked={showVz} onChange={(e) => setShowVz(e.target.checked)} />
+                        </div>
 
-                    <div className={`diagToggle ${showN ? 'active' : ''}`}>
-                      <span className="lbl">
-                        <span className="swatch" style={{ background: '#16a34a' }}></span>
-                        <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#ef4444', marginRight: '6px', marginLeft: '1px', flexShrink: 0 }} title="Oś lokalna x" />
-                        Siła osiowa N
-                      </span>
-                      <input type="checkbox" checked={showN} onChange={(e) => setShowN(e.target.checked)} />
-                    </div>
+                        <div className={`diagToggle ${showN ? 'active' : ''}`}>
+                          <span className="lbl">
+                            <span className="swatch" style={{ background: '#16a34a' }}></span>
+                            <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#ef4444', marginRight: '6px', marginLeft: '1px', flexShrink: 0 }} title="Oś lokalna x" />
+                            Siła osiowa N
+                          </span>
+                          <input type="checkbox" checked={showN} onChange={(e) => setShowN(e.target.checked)} />
+                        </div>
 
-                    <div className={`diagToggle ${showStress ? 'active' : ''}`}>
-                      <span className="lbl">
-                        <span className="swatch" style={{ background: '#d97706' }}></span>
-                        Naprężenia zredukowane σ
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={showStress}
-                        onChange={(e) => setShowStress(e.target.checked)}
-                      />
-                    </div>
+                        <div className={`diagToggle ${showStress ? 'active' : ''}`}>
+                          <span className="lbl">
+                            <span className="swatch" style={{ background: '#d97706' }}></span>
+                            Naprężenia zredukowane σ
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={showStress}
+                            onChange={(e) => setShowStress(e.target.checked)}
+                          />
+                        </div>
 
-                    {(showMy || showMz || showMx || showVy || showVz || showN || showStress) && (
-                      <div className="row" style={{ marginTop: '6px' }}>
-                        <label style={{ minWidth: '96px' }}>Skala wykresów</label>
-                        <input
-                          type="range"
-                          min="0.1"
-                          max="5"
-                          step="0.1"
-                          value={diagramScaleMult}
-                          onChange={(e) => setDiagramScaleMult(parseFloat(e.target.value))}
-                        />
-                        <span className="unit" style={{ width: '34px' }}>
-                          {diagramScaleMult.toFixed(1)}×
-                        </span>
-                      </div>
+                        {(showMy || showMz || showMx || showVy || showVz || showN || showStress) && (
+                          <div className="row" style={{ marginTop: '6px' }}>
+                            <label style={{ minWidth: '96px' }}>Skala wykresów</label>
+                            <input
+                              type="range"
+                              min="0.1"
+                              max="5"
+                              step="0.1"
+                              value={diagramScaleMult}
+                              onChange={(e) => setDiagramScaleMult(parseFloat(e.target.value))}
+                            />
+                            <span className="unit" style={{ width: '34px' }}>
+                              {diagramScaleMult.toFixed(1)}×
+                            </span>
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
 
                   {/* SONDA WYNIKÓW 3D */}
                   <div className="panel">
-                    <h3>
-                      Sonda wyników <span className="tag">dokładny odczyt</span>
+                    <h3
+                      className="collapsible-head"
+                      onClick={() => setProbeCollapsed(!probeCollapsed)}
+                      style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                    >
+                      <span>Sonda wyników <span className="tag">dokładny odczyt</span></span>
+                      <span className="subtle-icon">{probeCollapsed ? '▸' : '▾'}</span>
                     </h3>
-                    <div className="row">
-                      <label>Pręt</label>
-                      <select
-                        value={probe.elId ?? ''}
-                        onChange={(e) => {
-                          const val = e.target.value === '' ? null : parseInt(e.target.value);
-                          setProbe({ elId: isNaN(val as number) ? null : val, t: probe.t });
-                        }}
-                      >
-                        <option value="">— wybierz pręt lub kliknij na modelu —</option>
-                        {elements.map((e) => (
-                          <option key={e.id} value={e.id}>
-                            P{e.id} (W{e.n1}→W{e.n2})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    {probe.elId != null ? (
-                      <div className="row">
-                        <label>Pozycja x</label>
-                        <input
-                          type="range"
-                          min="0"
-                          max="100"
-                          step="1"
-                          value={probe.t * 100}
-                          onChange={(e) => setProbe({ elId: probe.elId, t: parseFloat(e.target.value) / 100 })}
-                        />
-                        <span className="unit" style={{ width: '56px' }}>
-                          {(probe.t * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                    ) : (
-                      <div style={{ fontSize: '11px', color: 'var(--text-dim)', padding: '6px 2px', lineHeight: '1.4' }}>
-                        Kliknij pręt na modelu lub wybierz z listy powyżej, aby odczytać siły i ugięcia.
-                      </div>
-                    )}
+                    {!probeCollapsed && (
+                      <>
+                        <div className="row">
+                          <label>Pręt</label>
+                          <select
+                            value={probe.elId ?? ''}
+                            onChange={(e) => {
+                              const val = e.target.value === '' ? null : parseInt(e.target.value);
+                              setProbe({ elId: isNaN(val as number) ? null : val, t: probe.t });
+                            }}
+                          >
+                            <option value="">— wybierz pręt lub kliknij na modelu —</option>
+                            {elements.map((e) => (
+                              <option key={e.id} value={e.id}>
+                                P{e.id} (W{e.n1}→W{e.n2})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        {probe.elId != null ? (
+                          <div className="row">
+                            <label>Pozycja x</label>
+                            <input
+                              type="range"
+                              min="0"
+                              max="100"
+                              step="1"
+                              value={probe.t * 100}
+                              onChange={(e) => setProbe({ elId: probe.elId, t: parseFloat(e.target.value) / 100 })}
+                            />
+                            <span className="unit" style={{ width: '56px' }}>
+                              {(probe.t * 100).toFixed(0)}%
+                            </span>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '11px', color: 'var(--text-dim)', padding: '6px 2px', lineHeight: '1.4' }}>
+                            Kliknij pręt na modelu lub wybierz z listy powyżej, aby odczytać siły i ugięcia.
+                          </div>
+                        )}
 
-                    {probe.elId != null && (solved.elements?.[probe.elId] || (solved.type === 'linear_static' && solved.results[elements.findIndex((e) => e.id === probe.elId)])) && (
-                      <div style={{ marginTop: '8px' }}>
-                        {(() => {
-                          const resPts = solved.elements?.[probe.elId]?.points || (solved.type === 'linear_static' ? solved.results[elements.findIndex((e) => e.id === probe.elId)]?.pts : []);
-                          if (!resPts || resPts.length === 0) return null;
-                          const ptIdx = Math.min(
-                            resPts.length - 1,
-                            Math.max(0, Math.round(probe.t * (resPts.length - 1)))
-                          );
-                          const pt = resPts[ptIdx];
-                          if (!pt) return null;
-                          return (
-                            <table className="probetable">
+                        {probe.elId != null && (solved.elements?.[probe.elId] || (solved.type === 'linear_static' && solved.results[elements.findIndex((e) => e.id === probe.elId)])) && (
+                          <div style={{ marginTop: '8px' }}>
+                            {(() => {
+                              const resPts = solved.elements?.[probe.elId]?.points || (solved.type === 'linear_static' ? solved.results[elements.findIndex((e) => e.id === probe.elId)]?.pts : []);
+                              if (!resPts || resPts.length === 0) return null;
+                              const ptIdx = Math.min(
+                                resPts.length - 1,
+                                Math.max(0, Math.round(probe.t * (resPts.length - 1)))
+                              );
+                              const pt = resPts[ptIdx];
+                              if (!pt) return null;
+                              return (
+                                <table className="probetable">
+                                  <thead>
+                                    <tr>
+                                      <th>Wielkość</th>
+                                      <th style={{ color: 'var(--text)', textAlign: 'right' }}>Wartość</th>
+                                      <th style={{ color: 'var(--text-dim)', textAlign: 'right', width: '45px' }}>
+                                        Jedn.
+                                      </th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    <tr>
+                                      <td>
+                                        <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
+                                        <strong>|u|</strong> <span className="muted">u wypadkowe</span>
+                                      </td>
+                                      <td style={{ color: 'var(--def-color)', fontWeight: 600 }}>
+                                        {fmtSmart(Math.hypot(pt.Ux_global || 0, pt.Uy_global || 0, pt.Uz_global || 0) * 1000, 3)}
+                                      </td>
+                                      <td className="muted">mm</td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
+                                        <strong>ux</strong> <span className="muted">lokalne u_x</span>
+                                      </td>
+                                      <td>{fmtSmart((pt.ux_local || 0) * 1000, 3)}</td>
+                                      <td className="muted">mm</td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
+                                        <strong>uy</strong> <span className="muted">lokalne u_y</span>
+                                      </td>
+                                      <td style={{ color: 'var(--def-color)', fontWeight: 600 }}>
+                                        {fmtSmart((pt.uy_local || 0) * 1000, 3)}
+                                      </td>
+                                      <td className="muted">mm</td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
+                                        <strong>uz</strong> <span className="muted">lokalne u_z</span>
+                                      </td>
+                                      <td style={{ color: 'var(--def-color)', fontWeight: 600 }}>
+                                        {fmtSmart((pt.uz_local || 0) * 1000, 3)}
+                                      </td>
+                                      <td className="muted">mm</td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
+                                        <strong>Ux, Uy, Uz</strong> <span className="muted">globalne</span>
+                                      </td>
+                                      <td>
+                                        {fmtSmart((pt.Ux_global || 0) * 1000, 2)}, {fmtSmart((pt.Uy_global || 0) * 1000, 2)}, {fmtSmart((pt.Uz_global || 0) * 1000, 2)}
+                                      </td>
+                                      <td className="muted">mm</td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
+                                        <strong>θx, θy, θz</strong> <span className="muted">obrót</span>
+                                      </td>
+                                      <td>
+                                        {fmtSmart((pt.rotx_local || 0) * 1000, 2)}, {fmtSmart((pt.roty_local || 0) * 1000, 2)}, {fmtSmart((pt.rotz_local || 0) * 1000, 2)}
+                                      </td>
+                                      <td className="muted">mrad</td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <span className="swatch" style={{ background: 'var(--m-color)' }}></span>
+                                        <strong>My</strong> <span className="muted">zginający y</span>
+                                      </td>
+                                      <td style={{ color: 'var(--m-color)', fontWeight: 600 }}>
+                                        {fmtSmart(pt.My, 3)}
+                                      </td>
+                                      <td className="muted">kNm</td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <span className="swatch" style={{ background: 'var(--m-color)' }}></span>
+                                        <strong>Mz</strong> <span className="muted">zginający z</span>
+                                      </td>
+                                      <td style={{ color: 'var(--m-color)', fontWeight: 600 }}>
+                                        {fmtSmart(pt.Mz, 3)}
+                                      </td>
+                                      <td className="muted">kNm</td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <span className="swatch" style={{ background: 'var(--m-color)' }}></span>
+                                        <strong>Mx</strong> <span className="muted">skręcający</span>
+                                      </td>
+                                      <td>{fmtSmart(pt.Mx, 3)}</td>
+                                      <td className="muted">kNm</td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <span className="swatch" style={{ background: 'var(--t-color)' }}></span>
+                                        <strong>Vy</strong> <span className="muted">tnąca y</span>
+                                      </td>
+                                      <td style={{ color: 'var(--t-color)', fontWeight: 600 }}>
+                                        {fmtSmart(pt.Vy, 3)}
+                                      </td>
+                                      <td className="muted">kN</td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <span className="swatch" style={{ background: 'var(--t-color)' }}></span>
+                                        <strong>Vz</strong> <span className="muted">tnąca z</span>
+                                      </td>
+                                      <td style={{ color: 'var(--t-color)', fontWeight: 600 }}>
+                                        {fmtSmart(pt.Vz, 3)}
+                                      </td>
+                                      <td className="muted">kN</td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <span className="swatch" style={{ background: 'var(--n-color)' }}></span>
+                                        <strong>N</strong> <span className="muted">osiowa</span>
+                                      </td>
+                                      <td style={{ color: 'var(--n-color)', fontWeight: 600 }}>
+                                        {fmtSmart(pt.N, 3)}
+                                      </td>
+                                      <td className="muted">kN</td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <span className="swatch" style={{ background: 'var(--s-color)' }}></span>
+                                        <strong>σ_max</strong> <span className="muted">naprężenie</span>
+                                      </td>
+                                      <td>{fmtSmart((pt.sigMax || 0) / 1000, 2)}</td>
+                                      <td className="muted">MPa</td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              );
+                            })()}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  {/* WYKORZYSTANIE PRZEKROJÓW */}
+                  {(() => {
+                    const staticResult = solved.type === 'linear_static'
+                      ? solved
+                      : solved.type === 'stability'
+                      ? solved.staticSolved
+                      : null;
+
+                    if (!staticResult) return null;
+
+                    const utilizationData = (() => {
+                      const rows: {
+                        id: string;
+                        name: string;
+                        color: string;
+                        maxStress: number;
+                        fd: number;
+                        ratio: number;
+                        criticalElemId: number | null;
+                      }[] = [];
+
+                      // 1. Defined groups
+                      groups.forEach((g) => {
+                        const groupElems = elements.filter((el) => el.groupId === g.id);
+                        if (groupElems.length === 0) return;
+
+                        let maxStressGroup = 0;
+                        let criticalFd = 235;
+                        let maxRatio = 0;
+                        let criticalElemId: number | null = null;
+
+                        groupElems.forEach((el) => {
+                          const resPts = staticResult.elements?.[el.id]?.points || 
+                            (staticResult.type === 'linear_static' ? staticResult.results[elements.findIndex((e) => e.id === el.id)]?.pts : []);
+                          
+                          let maxStressEl = 0;
+                          if (resPts && resPts.length > 0) {
+                            resPts.forEach((pt) => {
+                              const stress = Math.max(Math.abs(pt.sigMax || 0), Math.abs(pt.sigMin || 0)) / 1000.0; // convert kPa to MPa
+                              if (stress > maxStressEl) {
+                                maxStressEl = stress;
+                              }
+                            });
+                          }
+
+                          const matId = g.materialId !== undefined ? g.materialId : el.materialId;
+                          const mat = materials.find((m) => m.id === matId);
+                          const fd = mat?.fd || 235;
+
+                          const ratio = fd > 0 ? (maxStressEl / fd) * 100 : 0;
+                          if (ratio > maxRatio || criticalElemId === null) {
+                            maxRatio = ratio;
+                            maxStressGroup = maxStressEl;
+                            criticalFd = fd;
+                            criticalElemId = el.id;
+                          }
+                        });
+
+                        rows.push({
+                          id: g.id,
+                          name: g.name,
+                          color: g.color,
+                          maxStress: maxStressGroup,
+                          fd: criticalFd,
+                          ratio: maxRatio,
+                          criticalElemId,
+                        });
+                      });
+
+                      // 2. Elements with no group
+                      const noGroupElems = elements.filter((el) => !el.groupId);
+                      if (noGroupElems.length > 0) {
+                        let maxStressGroup = 0;
+                        let criticalFd = 235;
+                        let maxRatio = 0;
+                        let criticalElemId: number | null = null;
+
+                        noGroupElems.forEach((el) => {
+                          const resPts = staticResult.elements?.[el.id]?.points || 
+                            (staticResult.type === 'linear_static' ? staticResult.results[elements.findIndex((e) => e.id === el.id)]?.pts : []);
+                          
+                          let maxStressEl = 0;
+                          if (resPts && resPts.length > 0) {
+                            resPts.forEach((pt) => {
+                              const stress = Math.max(Math.abs(pt.sigMax || 0), Math.abs(pt.sigMin || 0)) / 1000.0;
+                              if (stress > maxStressEl) {
+                                maxStressEl = stress;
+                              }
+                            });
+                          }
+
+                          const mat = materials.find((m) => m.id === el.materialId);
+                          const fd = mat?.fd || 235;
+
+                          const ratio = fd > 0 ? (maxStressEl / fd) * 100 : 0;
+                          if (ratio > maxRatio || criticalElemId === null) {
+                            maxRatio = ratio;
+                            maxStressGroup = maxStressEl;
+                            criticalFd = fd;
+                            criticalElemId = el.id;
+                          }
+                        });
+
+                        rows.push({
+                          id: 'no-group',
+                          name: 'Brak grupy',
+                          color: '#94a3b8',
+                          maxStress: maxStressGroup,
+                          fd: criticalFd,
+                          ratio: maxRatio,
+                          criticalElemId,
+                        });
+                      }
+
+                      return rows;
+                    })();
+
+                    if (utilizationData.length === 0) return null;
+
+                    return (
+                      <div className="panel">
+                        <h3
+                          className="collapsible-head"
+                          onClick={() => setUtilizationCollapsed(!utilizationCollapsed)}
+                          style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                        >
+                          <span>Wykorzystanie przekrojów <span className="tag">wytrzymałość</span></span>
+                          <span className="subtle-icon">{utilizationCollapsed ? '▸' : '▾'}</span>
+                        </h3>
+                        {!utilizationCollapsed && (
+                          <div style={{ overflowX: 'auto' }}>
+                            <table className="rtab">
                               <thead>
                                 <tr>
-                                  <th>Wielkość</th>
-                                  <th style={{ color: 'var(--text)', textAlign: 'right' }}>Wartość</th>
-                                  <th style={{ color: 'var(--text-dim)', textAlign: 'right', width: '45px' }}>
-                                    Jedn.
-                                  </th>
+                                  <th>Grupa</th>
+                                  <th>Pręt kryt.</th>
+                                  <th>σ_max [MPa]</th>
+                                  <th>f_d [MPa]</th>
+                                  <th>Wykorzystanie</th>
                                 </tr>
                               </thead>
                               <tbody>
-                                <tr>
-                                  <td>
-                                    <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
-                                    <strong>|u|</strong> <span className="muted">u wypadkowe</span>
-                                  </td>
-                                  <td style={{ color: 'var(--def-color)', fontWeight: 600 }}>
-                                    {fmtSmart(Math.hypot(pt.Ux_global || 0, pt.Uy_global || 0, pt.Uz_global || 0) * 1000, 3)}
-                                  </td>
-                                  <td className="muted">mm</td>
-                                </tr>
-                                <tr>
-                                  <td>
-                                    <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
-                                    <strong>ux</strong> <span className="muted">lokalne u_x</span>
-                                  </td>
-                                  <td>{fmtSmart((pt.ux_local || 0) * 1000, 3)}</td>
-                                  <td className="muted">mm</td>
-                                </tr>
-                                <tr>
-                                  <td>
-                                    <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
-                                    <strong>uy</strong> <span className="muted">lokalne u_y</span>
-                                  </td>
-                                  <td style={{ color: 'var(--def-color)', fontWeight: 600 }}>
-                                    {fmtSmart((pt.uy_local || 0) * 1000, 3)}
-                                  </td>
-                                  <td className="muted">mm</td>
-                                </tr>
-                                <tr>
-                                  <td>
-                                    <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
-                                    <strong>uz</strong> <span className="muted">lokalne u_z</span>
-                                  </td>
-                                  <td style={{ color: 'var(--def-color)', fontWeight: 600 }}>
-                                    {fmtSmart((pt.uz_local || 0) * 1000, 3)}
-                                  </td>
-                                  <td className="muted">mm</td>
-                                </tr>
-                                <tr>
-                                  <td>
-                                    <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
-                                    <strong>Ux, Uy, Uz</strong> <span className="muted">globalne</span>
-                                  </td>
-                                  <td>
-                                    {fmtSmart((pt.Ux_global || 0) * 1000, 2)}, {fmtSmart((pt.Uy_global || 0) * 1000, 2)}, {fmtSmart((pt.Uz_global || 0) * 1000, 2)}
-                                  </td>
-                                  <td className="muted">mm</td>
-                                </tr>
-                                <tr>
-                                  <td>
-                                    <span className="swatch" style={{ background: 'var(--def-color)' }}></span>
-                                    <strong>θx, θy, θz</strong> <span className="muted">obrót</span>
-                                  </td>
-                                  <td>
-                                    {fmtSmart((pt.rotx_local || 0) * 1000, 2)}, {fmtSmart((pt.roty_local || 0) * 1000, 2)}, {fmtSmart((pt.rotz_local || 0) * 1000, 2)}
-                                  </td>
-                                  <td className="muted">mrad</td>
-                                </tr>
-                                <tr>
-                                  <td>
-                                    <span className="swatch" style={{ background: 'var(--m-color)' }}></span>
-                                    <strong>My</strong> <span className="muted">zginający y</span>
-                                  </td>
-                                  <td style={{ color: 'var(--m-color)', fontWeight: 600 }}>
-                                    {fmtSmart(pt.My, 3)}
-                                  </td>
-                                  <td className="muted">kNm</td>
-                                </tr>
-                                <tr>
-                                  <td>
-                                    <span className="swatch" style={{ background: 'var(--m-color)' }}></span>
-                                    <strong>Mz</strong> <span className="muted">zginający z</span>
-                                  </td>
-                                  <td style={{ color: 'var(--m-color)', fontWeight: 600 }}>
-                                    {fmtSmart(pt.Mz, 3)}
-                                  </td>
-                                  <td className="muted">kNm</td>
-                                </tr>
-                                <tr>
-                                  <td>
-                                    <span className="swatch" style={{ background: 'var(--m-color)' }}></span>
-                                    <strong>Mx</strong> <span className="muted">skręcający</span>
-                                  </td>
-                                  <td>{fmtSmart(pt.Mx, 3)}</td>
-                                  <td className="muted">kNm</td>
-                                </tr>
-                                <tr>
-                                  <td>
-                                    <span className="swatch" style={{ background: 'var(--t-color)' }}></span>
-                                    <strong>Vy</strong> <span className="muted">tnąca y</span>
-                                  </td>
-                                  <td style={{ color: 'var(--t-color)', fontWeight: 600 }}>
-                                    {fmtSmart(pt.Vy, 3)}
-                                  </td>
-                                  <td className="muted">kN</td>
-                                </tr>
-                                <tr>
-                                  <td>
-                                    <span className="swatch" style={{ background: 'var(--t-color)' }}></span>
-                                    <strong>Vz</strong> <span className="muted">tnąca z</span>
-                                  </td>
-                                  <td style={{ color: 'var(--t-color)', fontWeight: 600 }}>
-                                    {fmtSmart(pt.Vz, 3)}
-                                  </td>
-                                  <td className="muted">kN</td>
-                                </tr>
-                                <tr>
-                                  <td>
-                                    <span className="swatch" style={{ background: 'var(--n-color)' }}></span>
-                                    <strong>N</strong> <span className="muted">osiowa</span>
-                                  </td>
-                                  <td style={{ color: 'var(--n-color)', fontWeight: 600 }}>
-                                    {fmtSmart(pt.N, 3)}
-                                  </td>
-                                  <td className="muted">kN</td>
-                                </tr>
-                                <tr>
-                                  <td>
-                                    <span className="swatch" style={{ background: 'var(--s-color)' }}></span>
-                                    <strong>σ_max</strong> <span className="muted">naprężenie</span>
-                                  </td>
-                                  <td>{fmtSmart((pt.sigMax || 0) / 1000, 2)}</td>
-                                  <td className="muted">MPa</td>
-                                </tr>
+                                {utilizationData.map((row) => {
+                                  const isOver = row.ratio > 100;
+                                  const barColor = isOver ? '#ef4444' : 'var(--accent)';
+                                  const barWidth = Math.min(100, row.ratio);
+
+                                  return (
+                                    <tr key={row.id}>
+                                      <td>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                          <span
+                                            style={{
+                                              display: 'inline-block',
+                                              width: '10px',
+                                              height: '10px',
+                                              borderRadius: '50%',
+                                              backgroundColor: row.color,
+                                              flexShrink: 0
+                                            }}
+                                          ></span>
+                                          <span style={{ fontSize: '11px', whiteSpace: 'nowrap' }}>{row.name}</span>
+                                        </div>
+                                      </td>
+                                      <td style={{ textAlign: 'center' }}>
+                                        {row.criticalElemId !== null ? `P${row.criticalElemId}` : '-'}
+                                      </td>
+                                      <td style={{ textAlign: 'right' }}>{row.maxStress.toFixed(1)}</td>
+                                      <td style={{ textAlign: 'right' }}>{row.fd.toFixed(1)}</td>
+                                      <td>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '100px' }}>
+                                          <div
+                                            style={{
+                                              flex: 1,
+                                              height: '6px',
+                                              backgroundColor: 'rgba(0,0,0,0.1)',
+                                              borderRadius: '3px',
+                                              overflow: 'hidden',
+                                              position: 'relative',
+                                            }}
+                                          >
+                                            <div
+                                              style={{
+                                                width: `${barWidth}%`,
+                                                height: '100%',
+                                                backgroundColor: barColor,
+                                                borderRadius: '3px',
+                                              }}
+                                            ></div>
+                                          </div>
+                                          <span
+                                            style={{
+                                              fontSize: '11px',
+                                              fontWeight: isOver ? 'bold' : 'normal',
+                                              color: isOver ? '#ef4444' : 'inherit',
+                                              whiteSpace: 'nowrap',
+                                            }}
+                                          >
+                                            {row.ratio.toFixed(1)}%
+                                          </span>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
                               </tbody>
                             </table>
-                          );
-                        })()}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
+                    );
+                  })()}
                 </>
               )}
 
@@ -6399,13 +6750,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
-        {/* GROUP 3: BIBLIOTEKA (Materiały & Przekroje) */}
+        {/* GROUP 3: BIBLIOTEKA (Materiały & Przekroje & Grupy) */}
         <div className="sidebar-group">
           <div className="group-header" onClick={() => setLibraryCollapsed(!libraryCollapsed)}>
             <div className="group-title">
               <span>Biblioteka</span>
               <span className="group-tag">
-                {materials.length} mat. / {sections.length} przekr.
+                {materials.length} mat. / {sections.length} przekr. / {groups.length} gr.
               </span>
             </div>
             <span className="subtle-icon">{libraryCollapsed ? '▸' : '▾'}</span>
@@ -6424,7 +6775,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       {m.name}
                       <br />
                       <span className="muted">
-                        E={m.E} GPa, ν={m.nu ?? 0.3}, ρ={m.density || 0} kg/m³
+                        E={m.E} GPa, ν={m.nu ?? 0.3}, ρ={m.density || 0} kg/m³, f_d={m.fd !== undefined ? m.fd : 235} MPa
                       </span>
                     </span>
                     {materials.length > 1 && (
@@ -6460,7 +6811,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       <div className="half">
                         <label>E</label>
                         <div className="inp-unit">
-                          <SmartNumberInput
+                           <SmartNumberInput
                             step="5"
                             value={newMatE}
                             onChange={(v) => setNewMatE(v)}
@@ -6479,6 +6830,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           <span className="unit">—</span>
                         </div>
                       </div>
+                    </div>
+                    <div className="row">
+                      <label>Wytrzymałość f_d</label>
+                      <SmartNumberInput
+                        step="10"
+                        value={newMatFd}
+                        onChange={(v) => setNewMatFd(v)}
+                      />
+                      <span className="unit">MPa</span>
                     </div>
                     <div className="row">
                       <label>Gęstość</label>
@@ -7339,6 +7699,258 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <div className="btnrow">
                     <button className="mini" onClick={() => setAddSecFormOpen(true)}>
                       + Dodaj przekrój
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* GRUPY */}
+              <div className="panel">
+                <h3>
+                  Grupy <span className="tag">{groups.length}</span>
+                </h3>
+                {groups.map((g) => (
+                  <div key={g.id} className="listitem" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+                      <span
+                        style={{
+                          width: '14px',
+                          height: '14px',
+                          borderRadius: '3px',
+                          backgroundColor: g.color,
+                          display: 'inline-block',
+                          border: '1px solid rgba(0,0,0,0.2)',
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={g.name}>
+                        {g.name}
+                      </span>
+                      {g.sectionId !== undefined && (
+                        <span className="tag" style={{ fontSize: '9px', padding: '1px 3px', whiteSpace: 'nowrap' }} title="Narzucony przekrój">
+                          {sections.find((s) => s.id === g.sectionId)?.name || 'Profil'}
+                        </span>
+                      )}
+                      {g.materialId !== undefined && (
+                        <span className="tag" style={{ fontSize: '9px', padding: '1px 3px', whiteSpace: 'nowrap' }} title="Narzucony materiał">
+                          {materials.find((m) => m.id === g.materialId)?.name || 'Mat'}
+                        </span>
+                      )}
+                    </span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                      <span
+                        className="del"
+                        style={{ color: 'var(--text-dim)', cursor: 'pointer' }}
+                        onClick={() => {
+                          setEditingGroupId(g.id);
+                          setNewGroupName(g.name);
+                          setNewGroupColor(g.color);
+                          setNewGroupSectionId(g.sectionId);
+                          setNewGroupMaterialId(g.materialId);
+                          setAddGroupFormOpen(true);
+                        }}
+                        title="Edytuj grupę"
+                      >
+                        ✎
+                      </span>
+                      <span
+                        className="del"
+                        onClick={() => {
+                          const remaining = groups.filter((item) => item.id !== g.id);
+                          setGroups(remaining);
+                          setElements((prev) =>
+                            prev.map((el) => (el.groupId === g.id ? { ...el, groupId: undefined } : el))
+                          );
+                          onInvalidateResults();
+                        }}
+                        title="Usuń grupę"
+                      >
+                        ✕
+                      </span>
+                    </span>
+                  </div>
+                ))}
+
+                {addGroupFormOpen ? (
+                  <div
+                    className="card"
+                    style={{
+                      marginTop: '6px',
+                      background: 'var(--surface)',
+                      borderColor: 'var(--input-border)',
+                      padding: '10px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: '12px', marginBottom: '8px', color: 'var(--text)' }}>
+                      {editingGroupId ? 'Edycja grupy' : 'Nowa grupa'}
+                    </div>
+                    <div className="row">
+                      <label>Nazwa</label>
+                      <input
+                        type="text"
+                        value={newGroupName}
+                        onChange={(e) => setNewGroupName(e.target.value)}
+                        placeholder="Nazwa grupy"
+                      />
+                    </div>
+                    <div className="row">
+                      <label>Profil</label>
+                      <select
+                        style={{ flex: 1, minWidth: 0, padding: '2px 4px', fontSize: '11px' }}
+                        value={newGroupSectionId ?? ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setNewGroupSectionId(val ? parseInt(val) : undefined);
+                        }}
+                      >
+                        <option value="">(brak - dowolny)</option>
+                        {sections.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="row">
+                      <label>Materiał</label>
+                      <select
+                        style={{ flex: 1, minWidth: 0, padding: '2px 4px', fontSize: '11px' }}
+                        value={newGroupMaterialId ?? ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setNewGroupMaterialId(val ? parseInt(val) : undefined);
+                        }}
+                      >
+                        <option value="">(brak - dowolny)</option>
+                        {materials.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px' }}>
+                      <label style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Wybierz kolor</label>
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(9, 1fr)',
+                          gap: '4px',
+                          width: '100%',
+                        }}
+                      >
+                        {GROUP_PALETTE_COLORS.map((col) => (
+                          <button
+                            key={col}
+                            type="button"
+                            onClick={() => setNewGroupColor(col)}
+                            style={{
+                              width: '100%',
+                              height: '18px',
+                              borderRadius: '3px',
+                              backgroundColor: col,
+                              border: newGroupColor === col ? '2px solid var(--text)' : '1px solid rgba(0,0,0,0.15)',
+                              cursor: 'pointer',
+                              padding: 0,
+                              outline: 'none',
+                              transform: newGroupColor === col ? 'scale(1.15)' : 'none',
+                              zIndex: newGroupColor === col ? 1 : 0,
+                              transition: 'transform 0.1s',
+                            }}
+                            title={col}
+                          />
+                        ))}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', width: '100%' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Własny kolor:</span>
+                        <input
+                          type="color"
+                          value={newGroupColor}
+                          onChange={(e) => setNewGroupColor(e.target.value)}
+                          style={{
+                            width: '28px',
+                            height: '22px',
+                            border: 'none',
+                            padding: 0,
+                            background: 'none',
+                            cursor: 'pointer',
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div className="btnrow" style={{ marginTop: '10px' }}>
+                      <button
+                        className="mini on"
+                        onClick={() => {
+                          const name = newGroupName.trim() || `Grupa ${groups.length + 1}`;
+                          if (editingGroupId) {
+                            setGroups((prev) =>
+                              prev.map((g) =>
+                                g.id === editingGroupId
+                                  ? {
+                                      ...g,
+                                      name,
+                                      color: newGroupColor,
+                                      sectionId: newGroupSectionId,
+                                      materialId: newGroupMaterialId,
+                                    }
+                                  : g
+                              )
+                            );
+                            setElements((prev) =>
+                              prev.map((el) => {
+                                if (el.groupId === editingGroupId) {
+                                  return {
+                                    ...el,
+                                    sectionId: newGroupSectionId !== undefined ? newGroupSectionId : el.sectionId,
+                                    materialId: newGroupMaterialId !== undefined ? newGroupMaterialId : el.materialId,
+                                  };
+                                }
+                                return el;
+                              })
+                            );
+                          } else {
+                            const newGrp: ElementGroupDef = {
+                              id: 'group-' + Date.now(),
+                              name,
+                              color: newGroupColor || '#3b82f6',
+                              sectionId: newGroupSectionId,
+                              materialId: newGroupMaterialId,
+                            };
+                            setGroups((prev) => [...prev, newGrp]);
+                          }
+                          setAddGroupFormOpen(false);
+                          setEditingGroupId(null);
+                          onInvalidateResults();
+                        }}
+                      >
+                        {editingGroupId ? 'Zapisz' : 'Dodaj'}
+                      </button>
+                      <button
+                        className="mini"
+                        onClick={() => {
+                          setAddGroupFormOpen(false);
+                          setEditingGroupId(null);
+                        }}
+                      >
+                        Anuluj
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="btnrow">
+                    <button
+                      className="mini"
+                      onClick={() => {
+                        setNewGroupName(`Grupa ${groups.length + 1}`);
+                        setNewGroupColor(GROUP_PALETTE_COLORS[(groups.length * 3) % GROUP_PALETTE_COLORS.length]);
+                        setNewGroupSectionId(undefined);
+                        setNewGroupMaterialId(undefined);
+                        setEditingGroupId(null);
+                        setAddGroupFormOpen(true);
+                      }}
+                    >
+                      + Dodaj grupę
                     </button>
                   </div>
                 )}

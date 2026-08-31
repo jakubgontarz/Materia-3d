@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { RenderEngine3D, ViewCubeHit } from './render/engine3d';
+import { RenderEngine3D, ViewCubeHit, GraphicsMode } from './render/engine3d';
 import { drawScene3D, SceneRenderOptions, getPanelCorners } from './render/scene3d';
 import {
   Node3D,
@@ -116,12 +116,15 @@ const TOGGLE_ICONS = {
   ),
 };
 
+const INITIAL_GROUPS: import('./fem/types').ElementGroupDef[] = [];
+
 interface HistoryState {
   nodes: Node3D[];
   elements: Element3D[];
   panels: Panel3D[];
   sections: Section[];
   materials: Material[];
+  groups?: import('./fem/types').ElementGroupDef[];
   analysisSettings: AnalysisSettings;
   constructionLines?: ConstructionLine3D[];
   dimensionLines?: DimensionLine3D[];
@@ -130,6 +133,7 @@ interface HistoryState {
 interface UserPreferences {
   theme?: 'light' | 'dark';
   accent?: string;
+  graphicsMode?: GraphicsMode;
   showAxes?: boolean;
   includeSelfWeight?: boolean;
 
@@ -166,6 +170,7 @@ interface UserPreferences {
   allowNewNodesInBarMode?: boolean;
   drawConstructionGrid?: boolean;
   drawOuterDimensionLines?: boolean;
+  momentsAsArcs?: boolean;
 }
 
 const PREFS_KEY = 'materia3d_user_preferences';
@@ -1474,9 +1479,11 @@ export default function App() {
   const [panelPoints, setPanelPoints] = useState<number[]>([]);
   const [sections, setSections] = useState<Section[]>(INITIAL_SECTIONS);
   const [materials, setMaterials] = useState<Material[]>(INITIAL_MATERIALS);
+  const [groups, setGroups] = useState<import('./fem/types').ElementGroupDef[]>(INITIAL_GROUPS);
 
   const [defaultSectionId, setDefaultSectionId] = useState<number>(1);
   const [defaultMaterialId, setDefaultMaterialId] = useState<number>(1);
+  const [defaultGroupId, setDefaultGroupId] = useState<string>('');
 
   // Interaction Mode & 3D Navigation Mode
   const [mode, setMode] = useState<ToolMode>('select');
@@ -1489,6 +1496,22 @@ export default function App() {
     z: []
   });
   const [activeGridAxis, setActiveGridAxis] = useState<'X' | 'Y' | 'Z'>('X');
+
+  const selectedDrawingGroup = useMemo(() => {
+    return groups.find((g) => g.id === defaultGroupId);
+  }, [groups, defaultGroupId]);
+
+  const activeSectionIdForDrawing = useMemo(() => {
+    return (selectedDrawingGroup && selectedDrawingGroup.sectionId !== undefined)
+      ? selectedDrawingGroup.sectionId
+      : defaultSectionId;
+  }, [selectedDrawingGroup, defaultSectionId]);
+
+  const activeMaterialIdForDrawing = useMemo(() => {
+    return (selectedDrawingGroup && selectedDrawingGroup.materialId !== undefined)
+      ? selectedDrawingGroup.materialId
+      : defaultMaterialId;
+  }, [selectedDrawingGroup, defaultMaterialId]);
 
   // Dynamically compute construction points (intersections) and construction lines
   const { constructionPoints, constructionLines } = useMemo(() => {
@@ -1630,6 +1653,7 @@ export default function App() {
 
   const [theme, setTheme] = useState<'light' | 'dark'>(initialPrefs.theme ?? 'light');
   const [accent, setAccent] = useState<string>(initialPrefs.accent ?? 'blue');
+  const [graphicsMode, setGraphicsMode] = useState<GraphicsMode>(initialPrefs.graphicsMode ?? 'balanced');
   const [showGrid, setShowGrid] = useState<boolean>(initialPrefs.showGrid ?? true);
   const [showAxes, setShowAxes] = useState<boolean>(initialPrefs.showAxes ?? true);
   const [showLocalAxes, setShowLocalAxes] = useState<boolean>(initialPrefs.showLocalAxes ?? false);
@@ -1671,6 +1695,7 @@ export default function App() {
   const [showCanvasUI, setShowCanvasUI] = useState<boolean>(true);
 
   const [includeSelfWeight, setIncludeSelfWeight] = useState<boolean>(initialPrefs.includeSelfWeight ?? false);
+  const [momentsAsArcs, setMomentsAsArcs] = useState<boolean>(initialPrefs.momentsAsArcs ?? false);
 
   // Transform Tools (Przenieś, Obróć, Lustro, Skaluj) & Vector/Point Picking State
   const [activeTransformMode, setActiveTransformMode] = useState<'none' | 'move' | 'rotate' | 'mirror' | 'scale'>('none');
@@ -1810,6 +1835,7 @@ export default function App() {
     saveUserPreferences({
       theme,
       accent,
+      graphicsMode,
       showAxes,
       includeSelfWeight,
       showNodeNumbers,
@@ -1842,10 +1868,12 @@ export default function App() {
       allowNewNodesInBarMode,
       drawConstructionGrid,
       drawOuterDimensionLines,
+      momentsAsArcs,
     });
   }, [
     theme,
     accent,
+    graphicsMode,
     showAxes,
     includeSelfWeight,
     showNodeNumbers,
@@ -1878,6 +1906,7 @@ export default function App() {
     allowNewNodesInBarMode,
     drawConstructionGrid,
     drawOuterDimensionLines,
+    momentsAsArcs,
   ]);
   const [probe, setProbe] = useState<{ elId: number | null; t: number }>({ elId: null, t: 0.5 });
 
@@ -1983,6 +2012,7 @@ export default function App() {
       panels,
       sections,
       materials,
+      groups,
       analysisSettings,
     };
 
@@ -2006,7 +2036,7 @@ export default function App() {
 
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
-  }, [nodes, elements, panels, sections, materials, analysisSettings]);
+  }, [nodes, elements, panels, sections, materials, groups, analysisSettings]);
 
   const resetHistoryWithModel = useCallback(
     (
@@ -2015,7 +2045,8 @@ export default function App() {
       p: Panel3D[],
       sec: Section[],
       mat: Material[],
-      ans: AnalysisSettings
+      ans: AnalysisSettings,
+      grp?: import('./fem/types').ElementGroupDef[]
     ) => {
       isUndoingOrRedoingRef.current = true;
       const initialSnap: HistoryState = {
@@ -2024,6 +2055,7 @@ export default function App() {
         panels: JSON.parse(JSON.stringify(p)),
         sections: JSON.parse(JSON.stringify(sec)),
         materials: JSON.parse(JSON.stringify(mat)),
+        groups: JSON.parse(JSON.stringify(grp || INITIAL_GROUPS)),
         analysisSettings: JSON.parse(JSON.stringify(ans)),
       };
       setHistory([initialSnap]);
@@ -2046,6 +2078,7 @@ export default function App() {
         panels,
         sections,
         materials,
+        groups,
         analysisSettings,
       };
       setHistory([JSON.parse(JSON.stringify(initialSnap))]);
@@ -2058,7 +2091,7 @@ export default function App() {
     }
 
     commitHistory();
-  }, [nodes, elements, panels, sections, materials, analysisSettings, commitHistory]);
+  }, [nodes, elements, panels, sections, materials, groups, analysisSettings, commitHistory]);
 
   // Commit history when focus leaves input fields (finish typing edit)
   useEffect(() => {
@@ -2097,6 +2130,7 @@ export default function App() {
       setPanels(restoredPanels);
       setSections(JSON.parse(JSON.stringify(prevState.sections)));
       setMaterials(JSON.parse(JSON.stringify(prevState.materials)));
+      if (prevState.groups) setGroups(JSON.parse(JSON.stringify(prevState.groups)));
       setAnalysisSettings(JSON.parse(JSON.stringify(prevState.analysisSettings)));
       setHistoryIndex(currIdx - 1);
       setSolved(null);
@@ -2133,6 +2167,7 @@ export default function App() {
       setPanels(restoredPanels);
       setSections(JSON.parse(JSON.stringify(nextState.sections)));
       setMaterials(JSON.parse(JSON.stringify(nextState.materials)));
+      if (nextState.groups) setGroups(JSON.parse(JSON.stringify(nextState.groups)));
       setAnalysisSettings(JSON.parse(JSON.stringify(nextState.analysisSettings)));
       setHistoryIndex(currIdx + 1);
       setSolved(null);
@@ -2174,7 +2209,7 @@ export default function App() {
     if (currentModelId) {
       const list = getStoredModelsList();
       const idx = list.findIndex((m) => m.id === currentModelId);
-      const data = { nodes, elements, panels, sections, materials, analysisSettings };
+      const data = { nodes, elements, panels, sections, materials, groups, analysisSettings };
       const now = new Date().toISOString();
       if (idx !== -1) {
         list[idx] = {
@@ -2211,7 +2246,7 @@ export default function App() {
       existingIdx >= 0
         ? list[existingIdx].id
         : 'model_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-    const data = { nodes, elements, panels, sections, materials, analysisSettings };
+    const data = { nodes, elements, panels, sections, materials, groups, analysisSettings };
     const now = new Date().toISOString();
     const record: StoredModelRecord = {
       id,
@@ -2240,6 +2275,7 @@ export default function App() {
       const loadedPanels = record.data.panels || [];
       const loadedSections = record.data.sections || sections;
       const loadedMaterials = record.data.materials || materials;
+      const loadedGroups = record.data.groups || INITIAL_GROUPS;
       const loadedAnalysis = record.data.analysisSettings || analysisSettings;
 
       setNodes(loadedNodes);
@@ -2247,6 +2283,7 @@ export default function App() {
       setPanels(loadedPanels);
       setSections(loadedSections);
       setMaterials(loadedMaterials);
+      setGroups(loadedGroups);
       setAnalysisSettings(loadedAnalysis);
       setSolved(null);
       setSelectedNodeIds([]);
@@ -2259,7 +2296,8 @@ export default function App() {
         loadedPanels,
         loadedSections,
         loadedMaterials,
-        loadedAnalysis
+        loadedAnalysis,
+        loadedGroups
       );
 
       if (loadedNodes.length > 0) {
@@ -2292,6 +2330,7 @@ export default function App() {
           const loadedPanels = parsed.panels || [];
           const loadedSections = parsed.sections || sections;
           const loadedMaterials = parsed.materials || materials;
+          const loadedGroups = parsed.groups || INITIAL_GROUPS;
           const loadedAnalysis = parsed.analysisSettings || analysisSettings;
 
           setNodes(loadedNodes);
@@ -2299,6 +2338,7 @@ export default function App() {
           setPanels(loadedPanels);
           setSections(loadedSections);
           setMaterials(loadedMaterials);
+          setGroups(loadedGroups);
           setAnalysisSettings(loadedAnalysis);
           setSolved(null);
           setSelectedNodeIds([]);
@@ -2311,7 +2351,8 @@ export default function App() {
             loadedPanels,
             loadedSections,
             loadedMaterials,
-            loadedAnalysis
+            loadedAnalysis,
+            loadedGroups
           );
 
           if (loadedNodes.length > 0) {
@@ -2338,7 +2379,7 @@ export default function App() {
 
   const handleConfirmExportJson = (filename: string) => {
     const cleanName = filename.trim().replace(/\.json$/i, '') || 'model-3d';
-    const data = { nodes, elements, panels, sections, materials, analysisSettings };
+    const data = { nodes, elements, panels, sections, materials, groups, analysisSettings };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -2655,12 +2696,15 @@ export default function App() {
       hoverDimensionLineId: hoverDimensionLineIdRef.current,
       constructionLines: drawConstructionGrid ? constructionLines : [],
       dimensionLines: [...dimensionLines, ...(drawOuterDimensionLines ? autoDimensionLines : [])],
+      groups,
       mode,
       probe,
       theme,
       accentColor: accentDef.hex,
+      graphicsMode,
       gridPlane,
       gridOffset,
+      momentsAsArcs,
     };
 
     // 1. Draw 3D Three.js WebGL Scene & 2D Text/Overlay Labels
@@ -2830,6 +2874,8 @@ export default function App() {
     constructionPoints,
     drawOuterDimensionLines,
     autoDimensionLines,
+    momentsAsArcs,
+    graphicsMode,
   ]);
 
   useEffect(() => {
@@ -3764,8 +3810,9 @@ export default function App() {
               id: nextElemId,
               n1: barStartNodeId,
               n2: clickedNodeId,
-              sectionId: defaultSectionId,
-              materialId: defaultMaterialId,
+              sectionId: activeSectionIdForDrawing,
+              materialId: activeMaterialIdForDrawing,
+              groupId: defaultGroupId || undefined,
               rollAngle: 0,
               hinges: {},
               q: null,
@@ -3845,8 +3892,9 @@ export default function App() {
                 id: nextElemId,
                 n1: barStartNodeId,
                 n2: targetNodeId,
-                sectionId: defaultSectionId,
-                materialId: defaultMaterialId,
+                sectionId: activeSectionIdForDrawing,
+                materialId: activeMaterialIdForDrawing,
+                groupId: defaultGroupId || undefined,
                 rollAngle: 0,
                 hinges: {},
                 q: null,
@@ -4657,10 +4705,13 @@ export default function App() {
         setAllowNewNodesInBarMode={setAllowNewNodesInBarMode}
         sections={sections}
         materials={materials}
+        groups={groups}
         defaultSectionId={defaultSectionId}
         setDefaultSectionId={setDefaultSectionId}
         defaultMaterialId={defaultMaterialId}
         setDefaultMaterialId={setDefaultMaterialId}
+        defaultGroupId={defaultGroupId}
+        setDefaultGroupId={setDefaultGroupId}
         snapSize={snapSize}
       />
 
@@ -4744,9 +4795,10 @@ export default function App() {
               <>
                 <select
                   className="zselect"
-                  value={defaultSectionId}
+                  value={activeSectionIdForDrawing}
                   onChange={(e) => setDefaultSectionId(parseInt(e.target.value))}
-                  title="Domyślny przekrój"
+                  disabled={selectedDrawingGroup?.sectionId !== undefined}
+                  title={selectedDrawingGroup?.sectionId !== undefined ? "Przekrój narzucony przez grupę" : "Domyślny przekrój"}
                 >
                   {sections.map((s) => (
                     <option key={s.id} value={s.id}>
@@ -4757,13 +4809,28 @@ export default function App() {
 
                 <select
                   className="zselect"
-                  value={defaultMaterialId}
+                  value={activeMaterialIdForDrawing}
                   onChange={(e) => setDefaultMaterialId(parseInt(e.target.value))}
-                  title="Domyślny materiał"
+                  disabled={selectedDrawingGroup?.materialId !== undefined}
+                  title={selectedDrawingGroup?.materialId !== undefined ? "Materiał narzucony przez grupę" : "Domyślny materiał"}
                 >
                   {materials.map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  className="zselect"
+                  value={defaultGroupId}
+                  onChange={(e) => setDefaultGroupId(e.target.value)}
+                  title="Domyślna grupa"
+                >
+                  <option value="">(brak grupy)</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
                     </option>
                   ))}
                 </select>
@@ -5044,6 +5111,8 @@ export default function App() {
           setSections={setSections}
           materials={materials}
           setMaterials={setMaterials}
+          groups={groups}
+          setGroups={setGroups}
           selectedNodeIds={selectedNodeIds}
           setSelectedNodeIds={setSelectedNodeIds}
           selectedElemIds={selectedElemIds}
@@ -5088,6 +5157,8 @@ export default function App() {
           onElemDrawn={(id) => setLastDrawnElemId(id)}
           defaultSectionId={defaultSectionId}
           defaultMaterialId={defaultMaterialId}
+          defaultGroupId={defaultGroupId}
+          setDefaultGroupId={setDefaultGroupId}
           gridPlane={gridPlane}
           setGridPlane={setGridPlane}
           gridOffset={gridOffset}
@@ -5181,8 +5252,12 @@ export default function App() {
         setTheme={setTheme}
         accent={accent}
         setAccent={setAccent}
+        graphicsMode={graphicsMode}
+        setGraphicsMode={setGraphicsMode}
         includeSelfWeight={includeSelfWeight}
         setIncludeSelfWeight={setIncludeSelfWeight}
+        momentsAsArcs={momentsAsArcs}
+        setMomentsAsArcs={setMomentsAsArcs}
       />
 
       <AboutModal isOpen={aboutOpen} onClose={() => setAboutOpen(false)} />
@@ -5224,6 +5299,7 @@ export default function App() {
         elements={elements}
         sections={sections}
         materials={materials}
+        groups={groups}
         onSelectElements={(elemIds, desc) => {
           setSelectedElemIds(elemIds);
           setSelectedNodeIds([]);

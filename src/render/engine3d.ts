@@ -55,9 +55,11 @@ export type ViewCubeHit =
   | 'HOME'
   | 'FIT';
 
+export type GraphicsMode = 'performance' | 'balanced' | 'quality';
+
 export class RenderEngine3D {
   public camera: Camera3D = {
-    azimuth: -45,
+    azimuth: 135,
     elevation: 30,
     scale: 60,
     panX: 0,
@@ -68,6 +70,7 @@ export class RenderEngine3D {
   public width = 800;
   public height = 600;
   public dpr = 1;
+  public graphicsMode: GraphicsMode = 'balanced';
 
   // Three.js Core
   public renderer: THREE.WebGLRenderer | null = null;
@@ -75,6 +78,14 @@ export class RenderEngine3D {
   public threeCamera: THREE.OrthographicCamera;
   public modelGroup: THREE.Group;
   public overlayGroup: THREE.Group;
+
+  // Lighting
+  public ambLight: THREE.AmbientLight;
+  public dirLight1: THREE.DirectionalLight;
+  public dirLight2: THREE.DirectionalLight;
+  public dirLightFill: THREE.DirectionalLight;
+  public dirLightRim: THREE.DirectionalLight;
+  public hemiLight: THREE.HemisphereLight;
 
   // ViewCube parameters
   public cubeSize = 84;
@@ -91,17 +102,78 @@ export class RenderEngine3D {
     this.threeCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, -2000, 2000);
     this.scene.add(this.threeCamera);
 
-    // Lighting setup for realistic 3D shading
-    const ambLight = new THREE.AmbientLight(0xffffff, 0.85);
-    this.scene.add(ambLight);
+    // Lighting setup
+    this.ambLight = new THREE.AmbientLight(0xffffff, 0.85);
+    this.scene.add(this.ambLight);
 
-    const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.9);
-    dirLight1.position.set(10, -20, 30);
-    this.scene.add(dirLight1);
+    this.dirLight1 = new THREE.DirectionalLight(0xffffff, 0.9);
+    this.dirLight1.position.set(10, -20, 30);
+    this.scene.add(this.dirLight1);
 
-    const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
-    dirLight2.position.set(-10, 20, -10);
-    this.scene.add(dirLight2);
+    this.dirLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
+    this.dirLight2.position.set(-10, 20, -10);
+    this.scene.add(this.dirLight2);
+
+    this.dirLightFill = new THREE.DirectionalLight(0x93c5fd, 0.55);
+    this.dirLightFill.position.set(-20, 25, 15);
+    this.dirLightFill.visible = false;
+    this.scene.add(this.dirLightFill);
+
+    this.dirLightRim = new THREE.DirectionalLight(0xfef08a, 0.4);
+    this.dirLightRim.position.set(-15, -15, -30);
+    this.dirLightRim.visible = false;
+    this.scene.add(this.dirLightRim);
+
+    this.hemiLight = new THREE.HemisphereLight(0xffffff, 0x334155, 0.6);
+    this.hemiLight.visible = false;
+    this.scene.add(this.hemiLight);
+
+    this.setGraphicsMode('balanced');
+  }
+
+  public setGraphicsMode(mode: GraphicsMode) {
+    this.graphicsMode = mode;
+    if (mode === 'performance') {
+      this.ambLight.intensity = 1.05;
+      this.dirLight1.visible = true;
+      this.dirLight1.intensity = 0.45;
+      this.dirLight2.visible = false;
+      this.dirLightFill.visible = false;
+      this.dirLightRim.visible = false;
+      this.hemiLight.visible = false;
+      if (this.renderer) {
+        this.renderer.toneMapping = THREE.NoToneMapping;
+      }
+    } else if (mode === 'quality') {
+      this.ambLight.intensity = 0.55;
+      this.dirLight1.visible = true;
+      this.dirLight1.intensity = 1.15;
+      this.dirLight2.visible = false;
+      this.dirLightFill.visible = true;
+      this.dirLightFill.intensity = 0.55;
+      this.dirLightRim.visible = true;
+      this.dirLightRim.intensity = 0.4;
+      this.hemiLight.visible = true;
+      this.hemiLight.intensity = 0.65;
+      if (this.renderer) {
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = 1.05;
+      }
+    } else {
+      // balanced
+      this.ambLight.intensity = 0.85;
+      this.dirLight1.visible = true;
+      this.dirLight1.intensity = 0.9;
+      this.dirLight2.visible = true;
+      this.dirLight2.intensity = 0.4;
+      this.dirLightFill.visible = false;
+      this.dirLightRim.visible = false;
+      this.hemiLight.visible = false;
+      if (this.renderer) {
+        this.renderer.toneMapping = THREE.LinearToneMapping;
+        this.renderer.toneMappingExposure = 1.0;
+      }
+    }
   }
 
   public setCanvas(canvas: HTMLCanvasElement) {
@@ -117,6 +189,7 @@ export class RenderEngine3D {
     });
     this.renderer.setPixelRatio(this.dpr);
     this.renderer.setSize(this.width, this.height, false);
+    this.setGraphicsMode(this.graphicsMode);
   }
 
   public setSize(w: number, h: number, dpr = 1) {
@@ -357,6 +430,7 @@ export class RenderEngine3D {
       case 'RIGHT':
         return { az: 90, el: 0 };
       case 'HOME':
+        return { az: 135, el: 30 };
       case 'ISO_SW':
         return { az: -45, el: 30 };
       case 'ISO_SE':
@@ -798,10 +872,10 @@ export class RenderEngine3D {
     const faces: FaceDef[] = [
       { name: 'TOP', label: 'GÓRA', vIdx: [4, 5, 6, 7], normal: [0, 0, 1] },
       { name: 'BOTTOM', label: 'DÓŁ', vIdx: [0, 3, 2, 1], normal: [0, 0, -1] },
-      { name: 'FRONT', label: 'PRZÓD', vIdx: [0, 1, 5, 4], normal: [0, -1, 0] },
-      { name: 'BACK', label: 'TYŁ', vIdx: [2, 3, 7, 6], normal: [0, 1, 0] },
-      { name: 'LEFT', label: 'LEWO', vIdx: [3, 0, 4, 7], normal: [-1, 0, 0] },
-      { name: 'RIGHT', label: 'PRAWO', vIdx: [1, 2, 6, 5], normal: [1, 0, 0] },
+      { name: 'FRONT', label: 'LEWO', vIdx: [0, 1, 5, 4], normal: [0, -1, 0] },
+      { name: 'BACK', label: 'PRAWO', vIdx: [2, 3, 7, 6], normal: [0, 1, 0] },
+      { name: 'LEFT', label: 'TYŁ', vIdx: [3, 0, 4, 7], normal: [-1, 0, 0] },
+      { name: 'RIGHT', label: 'PRZÓD', vIdx: [1, 2, 6, 5], normal: [1, 0, 0] },
     ];
 
     const sortedFaces = faces

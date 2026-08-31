@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Node3D, Element3D, Section, Material } from '../fem/types';
-import { X, Filter, Ruler, Layers, Box, Check, CheckSquare, Square } from 'lucide-react';
+import { Node3D, Element3D, Section, Material, ElementGroupDef } from '../fem/types';
+import { X, Filter, Ruler, Layers, Box, Check, CheckSquare, Square, Palette } from 'lucide-react';
 
 interface SelectByModalProps {
   isOpen: boolean;
@@ -9,10 +9,11 @@ interface SelectByModalProps {
   elements: Element3D[];
   sections: Section[];
   materials: Material[];
+  groups?: ElementGroupDef[];
   onSelectElements: (elemIds: number[], criterionDesc: string) => void;
 }
 
-type CriterionTab = 'length' | 'section' | 'material';
+type CriterionTab = 'length' | 'section' | 'material' | 'group';
 
 export const SelectByModal: React.FC<SelectByModalProps> = ({
   isOpen,
@@ -21,6 +22,7 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
   elements,
   sections,
   materials,
+  groups = [],
   onSelectElements,
 }) => {
   const [tab, setTab] = useState<CriterionTab>('length');
@@ -37,6 +39,9 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
 
   // Material criterion state (selected material IDs)
   const [selectedMaterialIds, setSelectedMaterialIds] = useState<number[]>([]);
+
+  // Group criterion state (selected group IDs)
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
 
   // Node map for fast lookup
   const nodeMap = useMemo(() => {
@@ -108,6 +113,19 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
     })).sort((a, b) => b.count - a.count);
   }, [memberData, materials]);
 
+  // Groups with element count in current model
+  const usedGroups = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const m of memberData) {
+      const gId = m.element.groupId || 'group-1';
+      counts.set(gId, (counts.get(gId) || 0) + 1);
+    }
+    return groups.map((g) => ({
+      ...g,
+      count: counts.get(g.id) || 0,
+    })).sort((a, b) => b.count - a.count);
+  }, [memberData, groups]);
+
   // Initialize or reset defaults when modal opens
   useEffect(() => {
     if (isOpen) {
@@ -136,8 +154,16 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
       } else {
         setSelectedMaterialIds([]);
       }
+
+      // Default group to first used group or first group
+      const firstUsedGrp = usedGroups.find((g) => g.count > 0) || usedGroups[0];
+      if (firstUsedGrp) {
+        setSelectedGroupIds([firstUsedGrp.id]);
+      } else {
+        setSelectedGroupIds([]);
+      }
     }
-  }, [isOpen, lengthStats, usedSections, usedMaterials, memberData.length]);
+  }, [isOpen, lengthStats, usedSections, usedMaterials, usedGroups, memberData.length]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -201,8 +227,16 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
         .map((m) => m.element.id);
     }
 
+    if (tab === 'group') {
+      if (selectedGroupIds.length === 0) return [];
+      const grpSet = new Set(selectedGroupIds);
+      return memberData
+        .filter((m) => grpSet.has(m.element.groupId || 'group-1'))
+        .map((m) => m.element.id);
+    }
+
     return [];
-  }, [tab, memberData, minLen, maxLen, lengthMode, exactLen, tolerance, selectedSectionIds, selectedMaterialIds]);
+  }, [tab, memberData, minLen, maxLen, lengthMode, exactLen, tolerance, selectedSectionIds, selectedMaterialIds, selectedGroupIds]);
 
   if (!isOpen) return null;
 
@@ -230,6 +264,12 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
         .map((m) => m.name)
         .join(', ');
       desc = `materiału (${names || 'wybrane'})`;
+    } else if (tab === 'group') {
+      const names = usedGroups
+        .filter((g) => selectedGroupIds.includes(g.id))
+        .map((g) => g.name)
+        .join(', ');
+      desc = `grupy (${names || 'wybrane'})`;
     }
 
     onSelectElements(matchingElementIds, desc);
@@ -244,6 +284,12 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
 
   const toggleMaterialId = (id: number) => {
     setSelectedMaterialIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const toggleGroupId = (id: string) => {
+    setSelectedGroupIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
   };
@@ -414,6 +460,30 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
           >
             <Layers size={14} />
             Materiał
+          </button>
+
+          <button
+            onClick={() => setTab('group')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 14px',
+              fontSize: '12.5px',
+              fontWeight: tab === 'group' ? 700 : 500,
+              color: tab === 'group' ? 'var(--accent)' : 'var(--text-dim)',
+              borderBottom: tab === 'group' ? '2px solid var(--accent)' : '2px solid transparent',
+              background: 'transparent',
+              borderTop: 'none',
+              borderLeft: 'none',
+              borderRight: 'none',
+              cursor: 'pointer',
+              marginBottom: '-1px',
+              transition: 'all 0.15s',
+            }}
+          >
+            <Palette size={14} />
+            Grupa
           </button>
         </div>
 
@@ -855,6 +925,116 @@ export const SelectByModal: React.FC<SelectByModalProps> = ({
                         }}
                       >
                         {mat.count} {mat.count === 1 ? 'pręt' : mat.count > 1 && mat.count < 5 ? 'pręty' : 'prętów'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: GRUPA */}
+          {tab === 'group' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}
+              >
+                <div style={{ fontSize: '12px', color: 'var(--text-dim)' }}>
+                  Zaznacz grupy prętów, aby przefiltrować model:
+                </div>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedGroupIds(usedGroups.map((g) => g.id))}
+                    style={{
+                      padding: '3px 8px',
+                      fontSize: '11px',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--accent)',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Zaznacz wszystkie
+                  </button>
+                  <span style={{ color: 'var(--text-dim)' }}>|</span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedGroupIds([])}
+                    style={{
+                      padding: '3px 8px',
+                      fontSize: '11px',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-dim)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Odznacz
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '220px', overflowY: 'auto' }}>
+                {usedGroups.map((grp) => {
+                  const isChecked = selectedGroupIds.includes(grp.id);
+                  const isUsed = grp.count > 0;
+
+                  return (
+                    <div
+                      key={grp.id}
+                      onClick={() => toggleGroupId(grp.id)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '8px 12px',
+                        borderRadius: '8px',
+                        border: '1px solid',
+                        borderColor: isChecked ? 'var(--accent)' : 'var(--surface-border)',
+                        background: isChecked ? 'var(--accent-soft)' : 'var(--surface)',
+                        cursor: 'pointer',
+                        transition: 'all 0.12s',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        {isChecked ? (
+                          <CheckSquare size={16} color="var(--accent)" />
+                        ) : (
+                          <Square size={16} color="var(--text-dim)" />
+                        )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span
+                            style={{
+                              width: '12px',
+                              height: '12px',
+                              borderRadius: '3px',
+                              backgroundColor: grp.color,
+                              display: 'inline-block',
+                              border: '1px solid rgba(0,0,0,0.15)',
+                            }}
+                          />
+                          <div style={{ fontSize: '13px', fontWeight: 600, color: isChecked ? 'var(--accent)' : 'var(--text)' }}>
+                            {grp.name}
+                          </div>
+                        </div>
+                      </div>
+                      <span
+                        style={{
+                          fontSize: '11.5px',
+                          fontWeight: 700,
+                          padding: '2px 8px',
+                          borderRadius: '10px',
+                          background: isUsed ? (isChecked ? 'var(--accent)' : 'var(--panel-gutter)') : 'transparent',
+                          color: isUsed ? (isChecked ? '#fff' : 'var(--text)') : 'var(--text-dim)',
+                        }}
+                      >
+                        {grp.count} {grp.count === 1 ? 'pręt' : grp.count > 1 && grp.count < 5 ? 'pręty' : 'prętów'}
                       </span>
                     </div>
                   );

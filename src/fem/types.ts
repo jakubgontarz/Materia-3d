@@ -89,12 +89,21 @@ export interface MemberThermalLoad3D {
   dTz_bot?: number;
 }
 
+export interface ElementGroupDef {
+  id: string;
+  name: string;
+  color: string;
+  sectionId?: number;
+  materialId?: number;
+}
+
 export interface Element3D {
   id: number;
   n1: number; // node ID
   n2: number; // node ID
   sectionId: number;
   materialId: number;
+  groupId?: string; // Group ID
   rollAngle: number; // beta angle in degrees around local longitudinal x-axis
   hinges: MemberHinges3D;
   q: MemberDistributedLoad3D | null;
@@ -142,6 +151,7 @@ export interface Material {
   G: number; // Shear modulus [GPa] = E / (2*(1+nu))
   alpha: number; // Thermal expansion coeff [1e-5 / °C]
   density: number; // Density [kg/m^3]
+  fd?: number; // Allowable stress / design strength [MPa]
 }
 
 export interface Section {
