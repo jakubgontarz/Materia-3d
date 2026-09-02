@@ -581,10 +581,12 @@ export class RenderEngine3D {
     }
   }
 
-  public renderWebGL(isDark: boolean) {
+  public renderWebGL(isDark: boolean, customBgColor?: THREE.Color | number | string) {
     if (!this.renderer) return;
     this.updateThreeCamera();
-    const bgColor = new THREE.Color(isDark ? 0x0e1520 : 0xeef2f6);
+    const bgColor = customBgColor !== undefined
+      ? (customBgColor instanceof THREE.Color ? customBgColor : new THREE.Color(customBgColor))
+      : new THREE.Color(isDark ? 0x0e1520 : 0xeef2f6);
 
     // Disable auto-clear to execute our two-layer depth-ordered passes
     this.renderer.autoClear = false;

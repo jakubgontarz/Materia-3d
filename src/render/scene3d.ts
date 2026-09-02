@@ -53,6 +53,7 @@ export interface SceneRenderOptions {
   mode?: 'select' | 'addBar' | 'addPanel' | 'grid' | 'lines';
   probe: { elId: number | null; t: number };
   theme: 'light' | 'dark';
+  pureWhiteBg?: boolean;
   accentColor: string;
   momentsAsArcs?: boolean;
   diagramLabelMode?: 'none' | 'minmax' | 'all';
@@ -126,7 +127,7 @@ function computeGeometryKey(
 
   const grpSig = (options.groups || []).map((g) => `${g.id}:${g.color}:${g.name}`).join(';');
 
-  const optSig = `gm:${options.graphicsMode || 'balanced'}_g:${options.showGrid ? 1 : 0}_gp:${options.gridPlane || 'XY'}_go:${options.gridOffset || 0}_a:${options.showAxes ? 1 : 0}_la:${options.showLocalAxes ? 1 : 0}_pan:${options.showPanels !== false ? 1 : 0}_supp:${options.showSupports ? 1 : 0}_prof:${options.showProfileSketches ? 1 : 0}_loads:${options.showLoads ? 1 : 0}_def:${options.showDeform ? 1 : 0}_my:${options.showMy ? 1 : 0}_mz:${options.showMz ? 1 : 0}_mx:${options.showMx ? 1 : 0}_vy:${options.showVy ? 1 : 0}_vz:${options.showVz ? 1 : 0}_n:${options.showN ? 1 : 0}_str:${options.showStress ? 1 : 0}_r:${options.showReactions ? 1 : 0}_hl:${options.hideLoadsInResults ? 1 : 0}_hs:${options.hideSupportsInResults ? 1 : 0}_ds:${options.deformScaleMult}_dgs:${options.diagramScaleMult}_dlm:${options.diagramLabelMode || 'all'}_t:${options.theme}_ac:${options.accentColor}_ma:${options.momentsAsArcs ? 1 : 0}_ark:${options.activeResultKey || ''}_grps:${grpSig}`;
+  const optSig = `gm:${options.graphicsMode || 'balanced'}_g:${options.showGrid ? 1 : 0}_gp:${options.gridPlane || 'XY'}_go:${options.gridOffset || 0}_a:${options.showAxes ? 1 : 0}_la:${options.showLocalAxes ? 1 : 0}_pan:${options.showPanels !== false ? 1 : 0}_supp:${options.showSupports ? 1 : 0}_prof:${options.showProfileSketches ? 1 : 0}_loads:${options.showLoads ? 1 : 0}_def:${options.showDeform ? 1 : 0}_my:${options.showMy ? 1 : 0}_mz:${options.showMz ? 1 : 0}_mx:${options.showMx ? 1 : 0}_vy:${options.showVy ? 1 : 0}_vz:${options.showVz ? 1 : 0}_n:${options.showN ? 1 : 0}_str:${options.showStress ? 1 : 0}_r:${options.showReactions ? 1 : 0}_hl:${options.hideLoadsInResults ? 1 : 0}_hs:${options.hideSupportsInResults ? 1 : 0}_ds:${options.deformScaleMult}_dgs:${options.diagramScaleMult}_dlm:${options.diagramLabelMode || 'all'}_t:${options.theme}_pw:${options.pureWhiteBg ? 1 : 0}_ac:${options.accentColor}_ma:${options.momentsAsArcs ? 1 : 0}_ark:${options.activeResultKey || ''}_grps:${grpSig}`;
 
   let solvedSig = 'none';
   if (solved) {
@@ -493,7 +494,8 @@ export function drawScene3D(
   options: SceneRenderOptions,
   panels: Panel3D[] = []
 ) {
-  const isDark = options.theme === 'dark';
+  const isDark = options.theme === 'dark' && !options.pureWhiteBg;
+  const customBg = options.pureWhiteBg ? 0xffffff : undefined;
 
   // 1. Check if 3D structural geometry needs rebuild (only when model structure, sections, materials, loads, panels, or results change)
   const currentKey = computeGeometryKey(nodes, elements, sections, materials, solved, options, panels);
@@ -506,7 +508,7 @@ export function drawScene3D(
   updateVisualStates(engine, options, isDark);
 
   // 3. Fast WebGL GPU Render (Hardware accelerated, < 0.3ms)
-  engine.renderWebGL(isDark);
+  engine.renderWebGL(isDark, customBg);
 
   // 4. Crisp 2D Overlay (Geometry lines first, then unified Depth-Sorted 2D Labels Stack)
   overlayCtx.clearRect(0, 0, engine.width, engine.height);
@@ -2260,13 +2262,86 @@ function createProfileShape2D(sec: Section): THREE.Shape {
 
   const shapeStr = (sec.shape || '').toLowerCase();
 
-  // 1. I-Beam (catIPN, catIPE, catHEA, catHEB, catHEM, ibeam)
+  // 1. Pipe / CHS / Hollow Circular Tube (pipe, CHS, RO, rura okrągła)
+  // Must be checked before I-beam because 'pipe' contains substring 'ipe'!
   if (
-    shapeStr.includes('ipn') ||
-    shapeStr.includes('ipe') ||
-    shapeStr.includes('hea') ||
-    shapeStr.includes('heb') ||
-    shapeStr.includes('hem') ||
+    shapeStr === 'pipe' ||
+    shapeStr.startsWith('catchs') ||
+    shapeStr.includes('chs') ||
+    shapeStr.includes('pipe') ||
+    shapeStr.includes('rura') ||
+    shapeStr.includes('tube')
+  ) {
+    const r = (hM > 0 ? hM : bM) / 2;
+    shape.absarc(0, 0, r, 0, Math.PI * 2, false);
+
+    const tm = Math.min(tM, r * 0.8);
+    if (tm > 0 && r > tm) {
+      const hole = new THREE.Path();
+      hole.absarc(0, 0, r - tm, 0, Math.PI * 2, true);
+      shape.holes.push(hole);
+    }
+    return shape;
+  }
+
+  // 2. Solid Circle (circ, circle, okrągły pełny)
+  if (
+    shapeStr === 'circ' ||
+    shapeStr === 'circle' ||
+    shapeStr.includes('circ') ||
+    shapeStr.includes('okrag')
+  ) {
+    const r = (hM > 0 ? hM : bM) / 2;
+    shape.absarc(0, 0, r, 0, Math.PI * 2, false);
+    return shape;
+  }
+
+  // 3. Box / RHS / SHS (box, rhs, shs, profil skrzynkowy / rura kwadratowa/prostokątna)
+  if (
+    shapeStr === 'box' ||
+    shapeStr.startsWith('catrhs') ||
+    shapeStr.startsWith('catshs') ||
+    shapeStr.includes('rhs') ||
+    shapeStr.includes('shs') ||
+    shapeStr.includes('box') ||
+    shapeStr.includes('skrzynk')
+  ) {
+    const hy = hM / 2;
+    const bz = bM / 2;
+    const tm = Math.min(tM, Math.min(hy, bz) * 0.45);
+
+    shape.moveTo(-hy, -bz);
+    shape.lineTo(-hy, bz);
+    shape.lineTo(hy, bz);
+    shape.lineTo(hy, -bz);
+    shape.closePath();
+
+    if (hy > tm && bz > tm) {
+      const hole = new THREE.Path();
+      hole.moveTo(-hy + tm, -bz + tm);
+      hole.lineTo(hy - tm, -bz + tm);
+      hole.lineTo(hy - tm, bz - tm);
+      hole.lineTo(-hy + tm, bz - tm);
+      hole.closePath();
+      shape.holes.push(hole);
+    }
+    return shape;
+  }
+
+  // 4. I-Beam (catIPN, catIPE, catHEA, catHEB, catHEM, ibeam, dwuteownik)
+  if (
+    shapeStr === 'ibeam' ||
+    shapeStr.startsWith('catipe') ||
+    shapeStr.startsWith('cathea') ||
+    shapeStr.startsWith('catheb') ||
+    shapeStr.startsWith('cathem') ||
+    shapeStr.startsWith('catipn') ||
+    shapeStr === 'ipe' ||
+    shapeStr === 'hea' ||
+    shapeStr === 'heb' ||
+    shapeStr === 'hem' ||
+    shapeStr === 'ipn' ||
+    shapeStr.includes('dwuteownik') ||
     shapeStr.includes('ibeam')
   ) {
     const hy = hM / 2;
@@ -2290,8 +2365,16 @@ function createProfileShape2D(sec: Section): THREE.Shape {
     return shape;
   }
 
-  // 2. C-Channel (catUPN, catUPE, channel)
-  if (shapeStr.includes('upn') || shapeStr.includes('upe') || shapeStr.includes('channel')) {
+  // 5. C-Channel (catUPN, catUPE, channel, ceownik)
+  if (
+    shapeStr.startsWith('catupn') ||
+    shapeStr.startsWith('catupe') ||
+    shapeStr === 'channel' ||
+    shapeStr.includes('upn') ||
+    shapeStr.includes('upe') ||
+    shapeStr.includes('channel') ||
+    shapeStr.includes('ceownik')
+  ) {
     const hy = hM / 2;
     const bz = bM / 2;
     const twz = Math.min(twM, bM * 0.8);
@@ -2309,8 +2392,13 @@ function createProfileShape2D(sec: Section): THREE.Shape {
     return shape;
   }
 
-  // 3. L-Angle (angle, catL)
-  if (shapeStr.includes('angle') || shapeStr.includes('catl')) {
+  // 6. L-Angle (angle, catL, kątownik)
+  if (
+    shapeStr === 'angle' ||
+    shapeStr.startsWith('catl') ||
+    shapeStr.includes('angle') ||
+    shapeStr.includes('katownik')
+  ) {
     const hy = hM / 2;
     const bz = bM / 2;
     const tm = Math.min(tM, Math.min(hy, bz) * 0.8);
@@ -2325,8 +2413,13 @@ function createProfileShape2D(sec: Section): THREE.Shape {
     return shape;
   }
 
-  // 4. Tee (tee, catT)
-  if (shapeStr.includes('tee') || shapeStr.includes('catt')) {
+  // 7. Tee (tee, catT, teownik)
+  if (
+    shapeStr === 'tee' ||
+    shapeStr.startsWith('catt') ||
+    shapeStr.includes('tee') ||
+    shapeStr.includes('teownik')
+  ) {
     const hy = hM / 2;
     const bz = bM / 2;
     const twz = Math.min(twM / 2, bz * 0.8);
@@ -2341,51 +2434,6 @@ function createProfileShape2D(sec: Section): THREE.Shape {
     shape.lineTo(hy - tfy, twz);
     shape.lineTo(-hy, twz);
     shape.closePath();
-    return shape;
-  }
-
-  // 5. Box / RHS / SHS (box, rhs, shs)
-  if (shapeStr.includes('box') || shapeStr.includes('rhs') || shapeStr.includes('shs')) {
-    const hy = hM / 2;
-    const bz = bM / 2;
-    const tm = Math.min(tM, Math.min(hy, bz) * 0.45);
-
-    shape.moveTo(-hy, -bz);
-    shape.lineTo(-hy, bz);
-    shape.lineTo(hy, bz);
-    shape.lineTo(hy, -bz);
-    shape.closePath();
-
-    if (hy > tm && bz > tm) {
-      const hole = new THREE.Path();
-      hole.moveTo(-hy + tm, -bz + tm);
-      hole.lineTo(hy - tm, -bz + tm);
-      hole.lineTo(hy - tm, bz - tm);
-      hole.lineTo(-hy + tm, bz - tm);
-      hole.closePath();
-      shape.holes.push(hole);
-    }
-    return shape;
-  }
-
-  // 6. Pipe / CHS (pipe, chs)
-  if (shapeStr.includes('pipe') || shapeStr.includes('chs')) {
-    const r = (hM > 0 ? hM : bM) / 2;
-    shape.absarc(0, 0, r, 0, Math.PI * 2, false);
-
-    const tm = Math.min(tM, r * 0.8);
-    if (tm > 0 && r > tm) {
-      const hole = new THREE.Path();
-      hole.absarc(0, 0, r - tm, 0, Math.PI * 2, true);
-      shape.holes.push(hole);
-    }
-    return shape;
-  }
-
-  // 7. Circle (circ)
-  if (shapeStr.includes('circ')) {
-    const r = (hM > 0 ? hM : bM) / 2;
-    shape.absarc(0, 0, r, 0, Math.PI * 2, false);
     return shape;
   }
 

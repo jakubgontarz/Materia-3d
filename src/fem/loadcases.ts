@@ -143,7 +143,7 @@ export const INITIAL_DEFAULT_LOAD_CASE: LoadCase3D = {
   name: 'Ciężar własny i stałe',
   nature: 'permanent',
   category: undefined,
-  includeSelfWeight: true,
+  includeSelfWeight: false,
   psi0: 1.0,
   psi1: 1.0,
   psi2: 1.0,

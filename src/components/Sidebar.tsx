@@ -993,11 +993,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const fmtSmart = (v: number | null | undefined, d = 2) => {
     if (v == null || isNaN(v)) return '—';
     const a = Math.abs(v);
-    if (a === 0) return '0';
+    if (a < 1e-6) return '0';
     if (a < 0.001) return v.toExponential(2);
-    if (a < 10) return v.toFixed(3);
-    if (a < 1000) return v.toFixed(d);
-    return v.toFixed(1);
+    let str: string;
+    if (a < 10) str = v.toFixed(3);
+    else if (a < 1000) str = v.toFixed(d);
+    else str = v.toFixed(1);
+    if (str === '-0.00' || str === '-0.000' || str === '-0.0' || str === '-0') return '0';
+    return str;
   };
 
   const pluralUnit = (n: number, one: string, few: string, many: string) => {
@@ -6072,6 +6075,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           .map((c: any) => c.comb.id)
                       );
                     }
+                    if (resultKeysList.length <= 1) {
+                      return null;
+                    }
                     const currResIndex = resultKeysList.indexOf(activeResultKey || '');
 
                     return (
@@ -6088,7 +6094,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               <optgroup label={solved.type === 'stability' ? 'Obwiednia SGN (Najbardziej krytyczna stateczność)' : 'Obwiednie (Wartości ekstremalne)'}>
                                 {Object.entries(multiSolved.envelopes).map(([key, env]: [string, any]) => (
                                   <option key={key} value={key}>
-                                    {solved.type === 'stability' ? 'Najbardziej krytyczna kombinacja SGN (min α<sub>cr</sub>)' : env.name}
+                                    {solved.type === 'stability' ? 'Najbardziej krytyczna kombinacja SGN (min α)' : env.name}
                                   </option>
                                 ))}
                               </optgroup>
@@ -6098,7 +6104,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             <optgroup label="Przypadki obciążeń podstawowe">
                               {Object.entries(multiSolved.cases).map(([idStr, c]: [string, any]) => (
                                 <option key={`case_${idStr}`} value={`case_${idStr}`}>
-                                  Przypadek {idStr}: {c.loadCase.name} ({getNatureLabel(c.loadCase.nature)})
+                                  Przypadek {idStr}: {c.loadCase.name}
                                 </option>
                               ))}
                             </optgroup>
@@ -6150,7 +6156,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               flex: '0 0 auto',
                             }}
                           >
-                            &lt;
+                            ◄
                           </button>
                           <button
                             className="mini"
@@ -6173,7 +6179,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               flex: '0 0 auto',
                             }}
                           >
-                            &gt;
+                            ►
                           </button>
                         </div>
 
@@ -6181,9 +6187,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         <div className="muted" style={{ fontSize: '11px', lineHeight: 1.3, marginTop: '4px' }}>
                           {activeResultKey && multiSolved.envelopes[activeResultKey] && (
                             <>
-                              {solved.type === 'stability'
-                                ? 'Wyświetla krytyczną formę utraty stateczności (najniższy mnożnik α<sub>cr</sub>) wyznaczoną z kombinacji SGN.'
-                                : 'Wyświetla wartości ekstremalne (obwiednię) wyznaczone z kombinacji normowych Eurokodu.'}
+                              {solved.type === 'stability' ? (
+                                <>Wyświetla krytyczną formę utraty stateczności (najniższy mnożnik α<sub>cr</sub>) wyznaczoną z kombinacji SGN.</>
+                              ) : (
+                                'Wyświetla wartości ekstremalne (obwiednię) wyznaczone z kombinacji normowych Eurokodu.'
+                              )}
                             </>
                           )}
                           {activeResultKey && multiSolved.combinations[activeResultKey] && (
@@ -6194,9 +6202,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           )}
                           {activeResultKey && activeResultKey.startsWith('case_') && (
                             <>
-                              {solved.type === 'stability'
-                                ? 'Wyniki analizy stateczności (α<sub>cr</sub> i formy wyboczenia) dla wybranego przypadku obciążenia.'
-                                : 'Wyniki obliczeń dla pojedynczego przypadku obciążenia.'}
+                              {solved.type === 'stability' ? (
+                                <>Wyniki analizy stateczności (α<sub>cr</sub> i formy wyboczenia) dla wybranego przypadku obciążenia.</>
+                              ) : (
+                                'Wyniki obliczeń dla pojedynczego przypadku obciążenia.'
+                              )}
                             </>
                           )}
                         </div>
@@ -6267,9 +6277,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       {!stabilityCollapsed && (
                         solved.modes.length === 0 ? (
                           <div className="warn">
-                            {solved.noCompression
-                              ? 'Brak ściskanych elementów w konstrukcji (α<sub>cr</sub> = ∞).'
-                              : 'Nie wyznaczono form wyboczenia (osobliwość układu).'}
+                            {solved.noCompression ? (
+                              <>Brak ściskanych elementów w konstrukcji (α<sub>cr</sub> = ∞).</>
+                            ) : (
+                              'Nie wyznaczono form wyboczenia (osobliwość układu).'
+                            )}
                           </div>
                         ) : (
                           <div style={{ overflowX: 'auto' }}>

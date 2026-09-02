@@ -48,6 +48,7 @@ import {
   getEffectiveSelectionMode,
   SelectionModeType,
 } from './render/cursors';
+import { generateEngineeringPdfReport } from './report/pdfReportGenerator';
 
 const TOGGLE_ICONS = {
   nodeNumbers: (
@@ -1831,7 +1832,7 @@ export default function App() {
   // Load Cases & Combinations State (Eurocode EN 1990)
   const [loadCases, setLoadCases] = useState<LoadCase3D[]>([INITIAL_DEFAULT_LOAD_CASE]);
   const [activeLoadCaseId, setActiveLoadCaseId] = useState<number>(1);
-  const [autoCombinations, setAutoCombinations] = useState<boolean>(true);
+  const [autoCombinations, setAutoCombinations] = useState<boolean>(false);
   const [customCombinations, setCustomCombinations] = useState<LoadCombination3D[]>([]);
   const [multiSolved, setMultiSolved] = useState<MultiCaseResults3D | null>(null);
   const [activeResultKey, setActiveResultKey] = useState<string>('');
@@ -2225,6 +2226,9 @@ export default function App() {
     setSelectedNodeIds([]);
     setSelectedElemIds([]);
     setSelectedPanelIds([]);
+    setLoadCases([INITIAL_DEFAULT_LOAD_CASE]);
+    setActiveLoadCaseId(1);
+    setAutoCombinations(false);
     setCurrentModelName('Projekt konstrukcji');
     setCurrentModelId(null);
     resetHistoryWithModel([], [], [], sections, materials, analysisSettings);
@@ -2627,7 +2631,7 @@ export default function App() {
         name: defaultName,
         nature,
         category,
-        includeSelfWeight: nature === 'permanent' && loadCases.filter((c) => c.nature === 'permanent').length === 0,
+        includeSelfWeight: false,
         ...defaults,
         nodeForces: {},
         nodeMoments: {},
@@ -3315,6 +3319,354 @@ export default function App() {
     autoDimensionLines,
     momentsAsArcs,
     graphicsMode,
+  ]);
+
+  const handleTakeScreenshot = useCallback(() => {
+    const webglCanvas = webglCanvasRef.current;
+    const overlayCanvas = overlayCanvasRef.current;
+    const engine = engineRef.current;
+    if (!webglCanvas || !overlayCanvas || !engine) return;
+
+    const width = webglCanvas.width;
+    const height = webglCanvas.height;
+    if (width === 0 || height === 0) return;
+
+    const dpr = window.devicePixelRatio || 1;
+
+    // 1. Create export canvas for final combined snapshot
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = width;
+    exportCanvas.height = height;
+    const exportCtx = exportCanvas.getContext('2d');
+    if (!exportCtx) return;
+
+    // Fill with 100% solid pure white background
+    exportCtx.fillStyle = '#ffffff';
+    exportCtx.fillRect(0, 0, width, height);
+
+    // 2. Create offscreen canvas for crisp 2D overlay layer (text, labels, dimensions, reactions)
+    const tempOverlayCanvas = document.createElement('canvas');
+    tempOverlayCanvas.width = width;
+    tempOverlayCanvas.height = height;
+    const tempOverlayCtx = tempOverlayCanvas.getContext('2d');
+    if (!tempOverlayCtx) return;
+    tempOverlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const accentDef = APP_ACCENTS[accent] || APP_ACCENTS.blue;
+
+    // Render options for screenshot:
+    // - Pure white background
+    // - Light theme for crisp dark ink labels and high contrast diagrams
+    // - No UI selections or hover halos so model is pristinely clean
+    // - No ViewCube, no interactive boxes, no toolbar overlays
+    const snapshotRenderOpts: SceneRenderOptions = {
+      showGrid,
+      showAxes,
+      showLocalAxes,
+      showPanels,
+      showNodeNumbers,
+      showElementNumbers,
+      showSectionNames,
+      showMaterialNames,
+      showSupports,
+      showProfileSketches,
+      showLoads,
+      showLoadValues,
+      showHingeLabels,
+      showDimensions,
+      showDeform,
+      showMy,
+      showMz,
+      showMx,
+      showVy,
+      showVz,
+      showN,
+      showStress,
+      showReactions,
+      hideLoadsInResults,
+      hideSupportsInResults,
+      deformScaleMult,
+      diagramScaleMult,
+      diagramLabelMode,
+      selectedNodeIds: [],
+      selectedElemIds: [],
+      selectedPanelIds: [],
+      selectedConstructionLineIds: [],
+      selectedDimensionLineIds: [],
+      hoverNodeId: null,
+      hoverElemId: null,
+      hoverPanelId: null,
+      hoverConstructionLineId: null,
+      hoverDimensionLineId: null,
+      constructionLines: drawConstructionGrid ? constructionLines : [],
+      dimensionLines: [...dimensionLines, ...(drawOuterDimensionLines ? autoDimensionLines : [])],
+      groups,
+      mode: 'select',
+      probe: { elId: null, t: 0 },
+      theme: 'light',
+      pureWhiteBg: true,
+      accentColor: accentDef.hex,
+      graphicsMode,
+      gridPlane,
+      gridOffset,
+      momentsAsArcs,
+      activeResultKey,
+    };
+
+    // Render WebGL and 2D text onto webglCanvas and tempOverlayCanvas
+    drawScene3D(tempOverlayCtx, engine, nodes, elements, sections, materials, solved, snapshotRenderOpts, panels);
+
+    // Draw WebGL layer onto export canvas
+    exportCtx.drawImage(webglCanvas, 0, 0);
+
+    // Draw 2D text/overlay layer onto export canvas
+    exportCtx.drawImage(tempOverlayCanvas, 0, 0);
+
+    // Generate clean filename
+    const cleanName = (currentModelName || 'Materia3D')
+      .trim()
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\s+/g, '_');
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const filename = `${cleanName || 'Projekt'}_${dateStr}.png`;
+
+    try {
+      exportCanvas.toBlob((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
+      }, 'image/png');
+    } catch {
+      const dataUrl = exportCanvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    setStatusHint(`Pobrano zrzut ekranu do pliku ${filename}`);
+
+    // Immediately restore interactive screen render
+    requestAnimationFrame(() => {
+      redraw();
+    });
+  }, [
+    nodes,
+    elements,
+    panels,
+    sections,
+    materials,
+    solved,
+    showGrid,
+    showAxes,
+    showLocalAxes,
+    showPanels,
+    showNodeNumbers,
+    showElementNumbers,
+    showSectionNames,
+    showMaterialNames,
+    showSupports,
+    showProfileSketches,
+    showLoads,
+    showLoadValues,
+    showHingeLabels,
+    showDimensions,
+    showDeform,
+    showMy,
+    showMz,
+    showMx,
+    showVy,
+    showVz,
+    showN,
+    showStress,
+    showReactions,
+    hideLoadsInResults,
+    hideSupportsInResults,
+    deformScaleMult,
+    diagramScaleMult,
+    diagramLabelMode,
+    constructionLines,
+    dimensionLines,
+    drawConstructionGrid,
+    drawOuterDimensionLines,
+    autoDimensionLines,
+    groups,
+    accent,
+    graphicsMode,
+    gridPlane,
+    gridOffset,
+    momentsAsArcs,
+    activeResultKey,
+    currentModelName,
+    redraw,
+  ]);
+
+  const handleGenerateReport = useCallback(async () => {
+    const webglCanvas = webglCanvasRef.current;
+    const engine = engineRef.current;
+    let screenshotDataUrl: string | undefined;
+
+    if (webglCanvas && engine) {
+      const width = webglCanvas.width;
+      const height = webglCanvas.height;
+      if (width > 0 && height > 0) {
+        const dpr = window.devicePixelRatio || 1;
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = width;
+        exportCanvas.height = height;
+        const exportCtx = exportCanvas.getContext('2d');
+
+        const tempOverlayCanvas = document.createElement('canvas');
+        tempOverlayCanvas.width = width;
+        tempOverlayCanvas.height = height;
+        const tempOverlayCtx = tempOverlayCanvas.getContext('2d');
+
+        if (exportCtx && tempOverlayCtx) {
+          exportCtx.fillStyle = '#ffffff';
+          exportCtx.fillRect(0, 0, width, height);
+          tempOverlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+          const accentDef = APP_ACCENTS[accent] || APP_ACCENTS.blue;
+          const snapshotRenderOpts: SceneRenderOptions = {
+            showGrid: true,
+            showAxes: true,
+            showLocalAxes: false,
+            showPanels,
+            showNodeNumbers: true,
+            showElementNumbers: true,
+            showSectionNames: false,
+            showMaterialNames: false,
+            showSupports: true,
+            showProfileSketches: true,
+            showLoads: true,
+            showLoadValues: true,
+            showHingeLabels: true,
+            showDimensions: true,
+            showDeform: !!solved && showDeform,
+            showMy: !!solved && showMy,
+            showMz: !!solved && showMz,
+            showMx: !!solved && showMx,
+            showVy: !!solved && showVy,
+            showVz: !!solved && showVz,
+            showN: !!solved && showN,
+            showStress: !!solved && showStress,
+            showReactions: !!solved && showReactions,
+            hideLoadsInResults,
+            hideSupportsInResults,
+            deformScaleMult,
+            diagramScaleMult,
+            diagramLabelMode: 'minmax',
+            selectedNodeIds: [],
+            selectedElemIds: [],
+            selectedPanelIds: [],
+            selectedConstructionLineIds: [],
+            selectedDimensionLineIds: [],
+            hoverNodeId: null,
+            hoverElemId: null,
+            hoverPanelId: null,
+            hoverConstructionLineId: null,
+            hoverDimensionLineId: null,
+            constructionLines: drawConstructionGrid ? constructionLines : [],
+            dimensionLines: [...dimensionLines, ...(drawOuterDimensionLines ? autoDimensionLines : [])],
+            groups,
+            mode: 'select',
+            probe: { elId: null, t: 0 },
+            theme: 'light',
+            pureWhiteBg: true,
+            accentColor: accentDef.hex,
+            graphicsMode,
+            gridPlane,
+            gridOffset,
+            momentsAsArcs,
+            activeResultKey,
+          };
+
+          drawScene3D(tempOverlayCtx, engine, nodes, elements, sections, materials, solved, snapshotRenderOpts, panels);
+          exportCtx.drawImage(webglCanvas, 0, 0);
+          exportCtx.drawImage(tempOverlayCanvas, 0, 0);
+
+          screenshotDataUrl = exportCanvas.toDataURL('image/png');
+        }
+      }
+    }
+
+    setStatusHint('Generowanie raportu obliczeniowego PDF...');
+
+    try {
+      await generateEngineeringPdfReport({
+        modelName: currentModelName || 'Projekt konstrukcji',
+        nodes,
+        elements,
+        panels,
+        sections,
+        materials,
+        groups,
+        loadCases,
+        combinations: customCombinations,
+        analysisSettings,
+        multiSolved,
+        activeSolved: solved,
+        activeResultKey,
+        screenshotDataUrl,
+      });
+
+      setStatusHint('Raport PDF został pomyślnie wygenerowany i pobrany.');
+    } catch (err) {
+      console.error('Błąd podczas generowania raportu PDF:', err);
+      setStatusHint('Wystąpił błąd podczas tworzenia pliku PDF.');
+    }
+
+    requestAnimationFrame(() => {
+      redraw();
+    });
+  }, [
+    nodes,
+    elements,
+    panels,
+    sections,
+    materials,
+    groups,
+    loadCases,
+    customCombinations,
+    analysisSettings,
+    multiSolved,
+    solved,
+    activeResultKey,
+    currentModelName,
+    showPanels,
+    showDeform,
+    showMy,
+    showMz,
+    showMx,
+    showVy,
+    showVz,
+    showN,
+    showStress,
+    showReactions,
+    hideLoadsInResults,
+    hideSupportsInResults,
+    deformScaleMult,
+    diagramScaleMult,
+    constructionLines,
+    dimensionLines,
+    drawConstructionGrid,
+    drawOuterDimensionLines,
+    autoDimensionLines,
+    accent,
+    graphicsMode,
+    gridPlane,
+    gridOffset,
+    momentsAsArcs,
+    redraw,
   ]);
 
   useEffect(() => {
@@ -5128,6 +5480,8 @@ export default function App() {
         canRedo={historyIndex < history.length - 1}
         onNewModel={handleNewModel}
         onOpenTemplates={() => setTemplatesModalOpen(true)}
+        onTakeScreenshot={handleTakeScreenshot}
+        onGenerateReport={handleGenerateReport}
         onSaveModel={handleSaveModel}
         onSaveAsModel={handleSaveAsModel}
         onLoadModel={handleLoadModel}

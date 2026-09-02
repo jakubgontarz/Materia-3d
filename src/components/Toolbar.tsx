@@ -82,6 +82,21 @@ export const ICONS = {
       <line x1="12" y1="15" x2="12" y2="3" />
     </svg>
   ),
+  camera: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+      <circle cx="12" cy="13" r="4" />
+    </svg>
+  ),
+  report: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+      <polyline points="10 9 9 9 8 9" />
+    </svg>
+  ),
   info: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="10" />
@@ -393,6 +408,8 @@ interface ToolbarProps {
   canRedo: boolean;
   onNewModel: () => void;
   onOpenTemplates?: () => void;
+  onTakeScreenshot?: () => void;
+  onGenerateReport?: () => void;
   onSaveModel: () => void;
   onSaveAsModel: () => void;
   onLoadModel: () => void;
@@ -456,6 +473,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   canRedo,
   onNewModel,
   onOpenTemplates,
+  onTakeScreenshot,
+  onGenerateReport,
   onSaveModel,
   onSaveAsModel,
   onLoadModel,
@@ -654,6 +673,32 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 <span className="menu-item-icon">{ICONS.template}</span>
                 <span className="menu-item-text">Kreator modeli...</span>
               </button>
+
+              <button
+                className="menu-item-btn"
+                onClick={() => {
+                  setMenuOpen(false);
+                  if (onTakeScreenshot) onTakeScreenshot();
+                }}
+                title="Pobierz zrzut ekranu obecnego widoku (PNG na białym tle)"
+              >
+                <span className="menu-item-icon">{ICONS.camera}</span>
+                <span className="menu-item-text">Zrzut ekranu</span>
+              </button>
+
+              <button
+                className="menu-item-btn"
+                onClick={() => {
+                  setMenuOpen(false);
+                  if (onGenerateReport) onGenerateReport();
+                }}
+                title="Generuj i pobierz inżynierski raport obliczeniowy PDF"
+              >
+                <span className="menu-item-icon">{ICONS.report}</span>
+                <span className="menu-item-text">Generuj raport</span>
+              </button>
+
+              <div style={{ height: '1px', background: 'var(--surface-border-soft)', margin: '4px 2px' }} />
 
               <button
                 className="menu-item-btn"

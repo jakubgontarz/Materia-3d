@@ -37,7 +37,7 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
   onInvalidateResults,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
-  const [showAddMenu, setShowAddMenu] = useState(false);
+  const [isEditingCase, setIsEditingCase] = useState(false);
   const [showCombinationsModal, setShowCombinationsModal] = useState(false);
   const [showEurocodeParams, setShowEurocodeParams] = useState(false);
 
@@ -71,6 +71,30 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
   const totalLoadsCount =
     loadStats.forces + loadStats.moments + loadStats.elemLoads + loadStats.thermals + loadStats.pressures;
 
+  const getAutoCaseName = (nature: LoadNature, currentCaseId: number, cases: LoadCase3D[]): string => {
+    const matchingCases = cases.filter((c) => c.nature === nature && c.id !== currentCaseId);
+    const num = matchingCases.length + 1;
+    switch (nature) {
+      case 'permanent':
+        return `Stałe ${num}`;
+      case 'variable':
+        return `Użytkowe ${num}`;
+      case 'wind':
+        return `Wiatr ${num}`;
+      case 'snow':
+        return `Śnieg ${num}`;
+      case 'temperature':
+        return `Temperatura ${num}`;
+      case 'ice':
+        return `Oblodzenie ${num}`;
+      case 'accidental':
+        return `Wyjątkowe ${num}`;
+      case 'other':
+      default:
+        return `Przypadek ${num}`;
+    }
+  };
+
   const handleNatureChange = (newNature: LoadNature) => {
     if (!activeCase) return;
     let newCat: EurocodeCategory | undefined = activeCase.category;
@@ -89,8 +113,11 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
     }
 
     const defs = getDefaultPsiAndGammas(newNature, newCat);
+    const newAutoName = getAutoCaseName(newNature, activeCase.id, loadCases);
+
     onUpdateLoadCase({
       ...activeCase,
+      name: newAutoName,
       nature: newNature,
       category: newCat,
       psi0: defs.psi0,
@@ -102,6 +129,13 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
       includeSelfWeight: newNature === 'permanent' ? activeCase.includeSelfWeight : false,
     });
     onInvalidateResults();
+  };
+
+  const handleAddCase = () => {
+    const permCases = loadCases.filter((c) => c.nature === 'permanent');
+    const caseName = `Stałe ${permCases.length + 1}`;
+    onAddLoadCase('permanent', undefined, caseName);
+    setIsEditingCase(true);
   };
 
   const handleCategoryChange = (newCat: EurocodeCategory) => {
@@ -229,120 +263,46 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
             </button>
           </div>
 
-          {/* Add New Case Dropdown / Quick Actions */}
-          <div style={{ position: 'relative', marginBottom: '12px' }}>
+          {/* Add New Case & Edit Active Case Button (Same Line) */}
+          <div style={{ display: 'flex', gap: '6px', width: '100%', marginBottom: '12px' }}>
             <button
               className="mini"
-              onClick={() => setShowAddMenu(!showAddMenu)}
+              onClick={handleAddCase}
               style={{
-                width: '100%'
+                flex: 1,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '4px',
+                whiteSpace: 'nowrap',
               }}
+              title="Dodaj nowy przypadek obciążenia (domyślnie Stałe) i otwórz edycję"
             >
-              <span>Dodaj przypadek obciążenia </span>
+              <span>Dodaj przypadek</span>
             </button>
-
-            {showAddMenu && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '100%',
-                  left: 0,
-                  right: 0,
-                  zIndex: 50,
-                  marginTop: '4px',
-                  background: 'var(--surface)',
-                  border: '1px solid var(--surface-border)',
-                  borderRadius: '8px',
-                  boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.35)',
-                  padding: '6px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '4px',
-                }}
-              >
-                <button
-                  className="btn btn-sm btn-hover-effect"
-                  style={{ textAlign: 'left', padding: '6px 10px', display: 'flex', justifyContent: 'space-between', background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--surface-border-soft)' }}
-                  onClick={() => {
-                    onAddLoadCase('permanent', undefined, `Stałe ${loadCases.length + 1}`);
-                    setShowAddMenu(false);
-                  }}
-                >
-                  <span><b>Stałe (G)</b></span>
-                  <span className="muted" style={{ fontSize: '11px' }}>γG=1.35</span>
-                </button>
-                <button
-                  className="btn btn-sm btn-hover-effect"
-                  style={{ textAlign: 'left', padding: '6px 10px', display: 'flex', justifyContent: 'space-between', background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--surface-border-soft)' }}
-                  onClick={() => {
-                    onAddLoadCase('variable', 'A', `Użytkowe ${loadCases.length + 1}`);
-                    setShowAddMenu(false);
-                  }}
-                >
-                  <span><b>Użytkowe (Q)</b></span>
-                  <span className="muted" style={{ fontSize: '11px' }}>ψ0=0.7</span>
-                </button>
-                <button
-                  className="btn btn-sm btn-hover-effect"
-                  style={{ textAlign: 'left', padding: '6px 10px', display: 'flex', justifyContent: 'space-between', background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--surface-border-soft)' }}
-                  onClick={() => {
-                    onAddLoadCase('wind', 'wind', `Wiatr ${loadCases.filter((c) => c.nature === 'wind').length + 1}`);
-                    setShowAddMenu(false);
-                  }}
-                >
-                  <span><b>Wiatr (W)</b></span>
-                  <span className="muted" style={{ fontSize: '11px' }}>ψ0=0.6</span>
-                </button>
-                <button
-                  className="btn btn-sm btn-hover-effect"
-                  style={{ textAlign: 'left', padding: '6px 10px', display: 'flex', justifyContent: 'space-between', background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--surface-border-soft)' }}
-                  onClick={() => {
-                    onAddLoadCase('snow', 'snow_low', `Śnieg ${loadCases.filter((c) => c.nature === 'snow').length + 1}`);
-                    setShowAddMenu(false);
-                  }}
-                >
-                  <span><b>Śnieg (S)</b></span>
-                  <span className="muted" style={{ fontSize: '11px' }}>ψ0=0.5</span>
-                </button>
-                <button
-                  className="btn btn-sm btn-hover-effect"
-                  style={{ textAlign: 'left', padding: '6px 10px', display: 'flex', justifyContent: 'space-between', background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--surface-border-soft)' }}
-                  onClick={() => {
-                    onAddLoadCase('temperature', 'temperature', `Temperatura ${loadCases.filter((c) => c.nature === 'temperature').length + 1}`);
-                    setShowAddMenu(false);
-                  }}
-                >
-                  <span><b>Temperatura (T)</b></span>
-                  <span className="muted" style={{ fontSize: '11px' }}>ψ0=0.6</span>
-                </button>
-                <button
-                  className="btn btn-sm btn-hover-effect"
-                  style={{ textAlign: 'left', padding: '6px 10px', display: 'flex', justifyContent: 'space-between', background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--surface-border-soft)' }}
-                  onClick={() => {
-                    onAddLoadCase('ice', 'ice', `Oblodzenie ${loadCases.filter((c) => c.nature === 'ice').length + 1}`);
-                    setShowAddMenu(false);
-                  }}
-                >
-                  <span><b>Oblodzenie (I)</b></span>
-                  <span className="muted" style={{ fontSize: '11px' }}>ψ0=0.7</span>
-                </button>
-                <button
-                  className="btn btn-sm btn-hover-effect"
-                  style={{ textAlign: 'left', padding: '6px 10px', display: 'flex', justifyContent: 'space-between', background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--surface-border-soft)' }}
-                  onClick={() => {
-                    onAddLoadCase('accidental', 'accidental', `Wyjątkowe ${loadCases.length + 1}`);
-                    setShowAddMenu(false);
-                  }}
-                >
-                  <span><b>Wyjątkowe (A)</b></span>
-                  <span className="muted" style={{ fontSize: '11px' }}>γ=1.0</span>
-                </button>
-              </div>
-            )}
+            <button
+              className={`mini ${isEditingCase ? 'active' : ''}`}
+              onClick={() => setIsEditingCase(!isEditingCase)}
+              style={{
+                flex: 1,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '4px',
+                whiteSpace: 'nowrap',
+                background: isEditingCase ? 'var(--accent-soft)' : undefined,
+                borderColor: isEditingCase ? 'var(--accent)' : undefined,
+                color: isEditingCase ? 'var(--accent)' : undefined,
+                fontWeight: isEditingCase ? 600 : undefined,
+              }}
+              title={isEditingCase ? 'Ukryj edycję parametrów' : 'Edytuj parametry aktywnego przypadku obciążenia'}
+            >
+              <span>Edytuj przypadek</span>
+            </button>
           </div>
 
-          {/* Active Case Editor */}
-          {activeCase && (
+          {/* Active Case Editor - Visible only when isEditingCase is true */}
+          {activeCase && isEditingCase && (
             <div
               style={{
                 background: 'var(--surface-2)',
@@ -353,7 +313,7 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
               }}
             >
               <div style={{ fontWeight: 600, fontSize: '12.5px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: 'var(--text)' }}>Parametry przypadku {activeCase.id}</span>
+                <span style={{ color: 'var(--text)' }}>Parametry przypadku C{activeCase.id}</span>
                 <span
                   style={{
                     fontSize: '11px',
@@ -408,14 +368,14 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
                     onChange={(e) => handleCategoryChange(e.target.value as EurocodeCategory)}
                     style={{ flex: 1 }}
                   >
-                    <option value="A">Kat. A: Powierzchnie mieszkalne (ψ0=0.7)</option>
-                    <option value="B">Kat. B: Powierzchnie biurowe (ψ0=0.7)</option>
-                    <option value="C">Kat. C: Miejsca zebrań / spotkań (ψ0=0.7)</option>
-                    <option value="D">Kat. D: Powierzchnie handlowe (ψ0=0.7)</option>
-                    <option value="E">Kat. E: Powierzchnie magazynowe (ψ0=1.0)</option>
-                    <option value="F">Kat. F: Garaże i ruch pojazdów ≤ 30kN (ψ0=0.7)</option>
-                    <option value="G">Kat. G: Ruch pojazdów 30-160kN (ψ0=0.7)</option>
-                    <option value="H">Kat. H: Dachy niedostępne (ψ0=0.0)</option>
+                    <option value="A">Kat. A: Powierzchnie mieszkalne (ψ₀=0.7)</option>
+                    <option value="B">Kat. B: Powierzchnie biurowe (ψ₀=0.7)</option>
+                    <option value="C">Kat. C: Miejsca zebrań / spotkań (ψ₀=0.7)</option>
+                    <option value="D">Kat. D: Powierzchnie handlowe (ψ₀=0.7)</option>
+                    <option value="E">Kat. E: Powierzchnie magazynowe (ψ₀=1.0)</option>
+                    <option value="F">Kat. F: Garaże i ruch pojazdów ≤ 30kN (ψ₀=0.7)</option>
+                    <option value="G">Kat. G: Ruch pojazdów 30-160kN (ψ₀=0.7)</option>
+                    <option value="H">Kat. H: Dachy niedostępne (ψ₀=0.0)</option>
                   </select>
                 </div>
               )}
@@ -428,8 +388,8 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
                     onChange={(e) => handleCategoryChange(e.target.value as EurocodeCategory)}
                     style={{ flex: 1 }}
                   >
-                    <option value="snow_low">Wysokość H ≤ 1000 m n.p.m. (ψ0=0.5)</option>
-                    <option value="snow_high">Wysokość H &gt; 1000 m n.p.m. (ψ0=0.7)</option>
+                    <option value="snow_low">Wysokość H ≤ 1000 m n.p.m. (ψ₀=0.5)</option>
+                    <option value="snow_high">Wysokość H &gt; 1000 m n.p.m. (ψ₀=0.7)</option>
                   </select>
                 </div>
               )}
@@ -478,7 +438,7 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
                     fontWeight: 600,
                   }}
                 >
-                  <span>Współczynniki normowe (ψ0, ψ1, ψ2, γ)</span>
+                  <span>Współczynniki normowe (ψ<sub>0</sub>, ψ<sub>1</sub>, ψ<sub>2</sub>, γ)</span>
                   <span style={{ fontSize: '10px' }}>{showEurocodeParams ? '▲' : '▼'}</span>
                 </div>
 
@@ -486,7 +446,7 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
                   <div style={{ marginTop: '6px' }}>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '6px' }}>
                       <div>
-                        <div className="muted" style={{ fontSize: '10.5px' }}>ψ₀ (kombin.)</div>
+                        <div className="muted" style={{ fontSize: '10.5px' }}>ψ<sub>0</sub> (kombin.)</div>
                         <SmartNumberInput
                           step="0.05"
                           min={0}
@@ -499,7 +459,7 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
                         />
                       </div>
                       <div>
-                        <div className="muted" style={{ fontSize: '10.5px' }}>ψ₁ (częste)</div>
+                        <div className="muted" style={{ fontSize: '10.5px' }}>ψ<sub>1</sub> (częste)</div>
                         <SmartNumberInput
                           step="0.05"
                           min={0}
@@ -512,7 +472,7 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
                         />
                       </div>
                       <div>
-                        <div className="muted" style={{ fontSize: '10.5px' }}>ψ₂ (prawie st.)</div>
+                        <div className="muted" style={{ fontSize: '10.5px' }}>ψ<sub>2</sub> (prawie st.)</div>
                         <SmartNumberInput
                           step="0.05"
                           min={0}
@@ -530,7 +490,7 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
                       {activeCase.nature === 'permanent' ? (
                         <>
                           <div>
-                            <div className="muted" style={{ fontSize: '10.5px' }}>γG,sup (niekorz.)</div>
+                            <div className="muted" style={{ fontSize: '10.5px' }}>γ<sub>G,sup</sub> (niekorz.)</div>
                             <SmartNumberInput
                               step="0.05"
                               min={0.5}
@@ -543,7 +503,7 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
                             />
                           </div>
                           <div>
-                            <div className="muted" style={{ fontSize: '10.5px' }}>γG,inf (korz.)</div>
+                            <div className="muted" style={{ fontSize: '10.5px' }}>γ<sub>G,inf</sub> (korz.)</div>
                             <SmartNumberInput
                               step="0.05"
                               min={0.5}
@@ -558,7 +518,7 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
                         </>
                       ) : (
                         <div style={{ gridColumn: 'span 2' }}>
-                          <div className="muted" style={{ fontSize: '10.5px' }}>γQ (współczynnik obciążenia)</div>
+                          <div className="muted" style={{ fontSize: '10.5px' }}>γ<sub>Q</sub> (współczynnik obciążenia)</div>
                           <SmartNumberInput
                             step="0.05"
                             min={0.5}
@@ -613,23 +573,40 @@ export const LoadCasesPanel: React.FC<LoadCasesPanelProps> = ({
                 )}
               </div>
 
-              {/* Delete Case button */}
-              {loadCases.length > 1 && (
-                <div style={{ marginTop: '10px', textAlign: 'right' }}>
+              {/* Action buttons (Zatwierdź on the left, Usuń on the right) */}
+              <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                <button
+                  className="mini"
+                  onClick={() => setIsEditingCase(false)}
+                  style={{
+                    fontSize: '11.5px',
+                    padding: '4px 12px',
+                    fontWeight: 600,
+                    background: 'var(--accent)',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                  }}
+                  title="Zatwierdź i zamknij edycję parametrów"
+                >
+                  Zatwierdź
+                </button>
+
+                {loadCases.length > 1 && (
                   <button
                     className="mini danger"
                     onClick={() => {
-                      if (confirm(`Czy na pewno usunąć przypadek "${activeCase.name}"?`)) {
-                        onDeleteLoadCase(activeCase.id);
-                        onInvalidateResults();
-                      }
+                      onDeleteLoadCase(activeCase.id);
+                      onInvalidateResults();
                     }}
-                    style={{ fontSize: '11px', padding: '3px 8px'}}
+                    style={{ fontSize: '11px', padding: '4px 8px' }}
+                    title={`Usuń przypadek ${activeCase.name}`}
                   >
                     Usuń ten przypadek
                   </button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           )}
 
