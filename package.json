@@ -23,6 +23,7 @@
     "react-dom": "^19.0.1",
     "three": "^0.185.1",
     "vite": "^6.2.3"
+    "jspdf": "^2.5.1"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
