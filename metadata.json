@@ -1,6 +1,6 @@
 {
-  "name": "Materia 3D",
-  "description": "Zaawansowany program do statyki, dynamiki i stateczności przestrzennych ram prętowych",
+  "name": "Remix Materia 3D",
+  "description": "Zaawansowany program do statyki, dynamiki i stateczności przestrzennych ram prętowych 3D i 2D z silnikiem MES i grafiką aksonometryczną.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
