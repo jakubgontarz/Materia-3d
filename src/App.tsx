@@ -43,6 +43,7 @@ import {
   getStoredModelsList,
   saveStoredModelsList,
 } from './components/StorageModals';
+import { StorageNoticeBanner } from './components/StorageNoticeBanner';
 import {
   getCanvasCursor,
   getEffectiveSelectionMode,
@@ -6129,6 +6130,8 @@ export default function App() {
           );
         }}
       />
+
+      <StorageNoticeBanner />
     </div>
   );
 }
