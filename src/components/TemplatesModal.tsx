@@ -1,17 +1,20 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   generate3DPortalFrame,
   generate3DTrussTower,
   generate3DGrillage,
   generate2DPortalFrame,
 } from '../fem/templates';
-import { Node3D, Element3D } from '../fem/types';
-import { Box, Layers, Grid3X3, Square, X } from 'lucide-react';
+import { Node3D, Element3D, Section, Material } from '../fem/types';
+import { Box, Layers, Grid3X3, Square, X, Sparkles, CheckCircle2 } from 'lucide-react';
+import { SmartNumberInput } from './SmartNumberInput';
 
 interface TemplatesModalProps {
   isOpen: boolean;
   onClose: () => void;
   onApplyTemplate: (nodes: Node3D[], elements: Element3D[]) => void;
+  sections?: Section[];
+  materials?: Material[];
   defaultSectionId: number;
   defaultMaterialId: number;
 }
@@ -20,10 +23,16 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
   isOpen,
   onClose,
   onApplyTemplate,
+  sections = [],
+  materials = [],
   defaultSectionId,
   defaultMaterialId,
 }) => {
   const [selectedType, setSelectedType] = useState<'portal3d' | 'tower3d' | 'grillage3d' | 'portal2d'>('portal3d');
+
+  // Wybrany przekrój i materiał dla generatora
+  const [secId, setSecId] = useState<number>(defaultSectionId);
+  const [matId, setMatId] = useState<number>(defaultMaterialId);
 
   // Parametry ramy przestrzennej 3D
   const [bayX, setBayX] = useState(6.0);
@@ -48,310 +57,564 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
   const [span2D, setSpan2D] = useState(6.0);
   const [height2D, setHeight2D] = useState(4.0);
 
+  // Podsumowanie szacowanych elementów przed wygenerowaniem
+  const previewSummary = useMemo(() => {
+    if (selectedType === 'portal3d') {
+      const nodesCount = (numBaysX + 1) * (numBaysY + 1) * 2;
+      const colCount = (numBaysX + 1) * (numBaysY + 1);
+      const beamXCount = (numBaysY + 1) * numBaysX;
+      const beamYCount = (numBaysX + 1) * numBaysY;
+      const totalElems = colCount + beamXCount + beamYCount;
+      return {
+        title: 'Przestrzenna rama portalowa 3D',
+        description: `Wielonawowy szkielet słupowo-ryglowy o wymiarach ${(bayX * numBaysX).toFixed(1)} m × ${(bayY * numBaysY).toFixed(1)} m i wysokości ${frameHeight.toFixed(1)} m.`,
+        nodesCount,
+        elementsCount: totalElems,
+        supportsCount: colCount,
+        hasLoads: true,
+      };
+    } else if (selectedType === 'tower3d') {
+      const nodesCount = (towerStories + 1) * 4;
+      const rings = (towerStories + 1) * 4;
+      const legsAndBracing = towerStories * 4 * 3;
+      const totalElems = rings + legsAndBracing;
+      return {
+        title: 'Przestrzenna wieża kratowa 3D',
+        description: `Wielosegmentowa wieża kratowa o podstawie ${towerBase.toFixed(1)} m, wierzchołku ${towerTop.toFixed(1)} m i wysokości ${towerHeight.toFixed(1)} m ze stężeniami krzyżulcowymi X.`,
+        nodesCount,
+        elementsCount: totalElems,
+        supportsCount: 4,
+        hasLoads: true,
+      };
+    } else if (selectedType === 'grillage3d') {
+      const nodesCount = (grillDivX + 1) * (grillDivY + 1);
+      const beamXCount = (grillDivY + 1) * grillDivX;
+      const beamYCount = (grillDivX + 1) * grillDivY;
+      const totalElems = beamXCount + beamYCount;
+      return {
+        title: 'Ruszt belkowy stropowy 3D',
+        description: `Ortogonalna siatka belek stropowych ${grillWidthX.toFixed(1)} m × ${grillWidthY.toFixed(1)} m z podparciem w 4 narożach i obciążeniem węzłowym.`,
+        nodesCount,
+        elementsCount: totalElems,
+        supportsCount: 4,
+        hasLoads: true,
+      };
+    } else {
+      return {
+        title: 'Płaska rama portalowa 2D',
+        description: `Jednonawowa rama w płaszczyźnie pionowej XZ o rozpiętości ${span2D.toFixed(1)} m i wysokości ${height2D.toFixed(1)} m z obciążeniem poziomym i pionowym.`,
+        nodesCount: 4,
+        elementsCount: 3,
+        supportsCount: 2,
+        hasLoads: true,
+      };
+    }
+  }, [selectedType, bayX, bayY, frameHeight, numBaysX, numBaysY, towerBase, towerTop, towerHeight, towerStories, grillWidthX, grillWidthY, grillDivX, grillDivY, span2D, height2D]);
+
   if (!isOpen) return null;
 
   const handleGenerate = () => {
+    const effSecId = secId || defaultSectionId || 1;
+    const effMatId = matId || defaultMaterialId || 1;
+
     let result: { nodes: Node3D[]; elements: Element3D[] };
     if (selectedType === 'portal3d') {
-      result = generate3DPortalFrame(bayX, bayY, frameHeight, numBaysX, numBaysY, defaultSectionId, defaultMaterialId);
+      result = generate3DPortalFrame(bayX, bayY, frameHeight, numBaysX, numBaysY, effSecId, effMatId);
     } else if (selectedType === 'tower3d') {
-      result = generate3DTrussTower(towerBase, towerTop, towerHeight, towerStories, defaultSectionId, defaultMaterialId);
+      result = generate3DTrussTower(towerBase, towerTop, towerHeight, towerStories, effSecId, effMatId);
     } else if (selectedType === 'grillage3d') {
-      result = generate3DGrillage(grillWidthX, grillWidthY, grillDivX, grillDivY, defaultSectionId, defaultMaterialId);
+      result = generate3DGrillage(grillWidthX, grillWidthY, grillDivX, grillDivY, effSecId, effMatId);
     } else {
-      result = generate2DPortalFrame(span2D, height2D, defaultSectionId, defaultMaterialId);
+      result = generate2DPortalFrame(span2D, height2D, effSecId, effMatId);
     }
     onApplyTemplate(result.nodes, result.elements);
     onClose();
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-xs">
-      <div className="flex max-h-[90vh] w-full max-w-xl flex-col rounded-xl border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl">
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: '#0f172a99',
+        zIndex: 350,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '16px',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        style={{
+          background: 'var(--sidebar-bg)',
+          color: 'var(--text)',
+          borderRadius: '14px',
+          maxWidth: '560px',
+          width: '100%',
+          maxHeight: '90vh',
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: '0 20px 60px #0008',
+          border: '1px solid var(--sidebar-border)',
+        }}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
-          <div className="flex items-center gap-2">
-            <Box className="h-5 w-5 text-blue-500" />
-            <h2 className="text-sm font-semibold tracking-wide uppercase text-slate-200">
-              Generator Szablonów Konstrukcji 3D i 2D
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '14px 18px',
+            borderBottom: '1px solid var(--sidebar-border)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Sparkles style={{ width: '17px', height: '17px', color: 'var(--accent)' }} />
+            <h2 style={{ margin: 0, fontSize: '14.5px', fontWeight: 600 }}>
+              Kreator modeli i szablony konstrukcji
             </h2>
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: 'var(--text-dim)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '4px',
+              borderRadius: '6px',
+              transition: 'background 0.12s ease, color 0.12s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'var(--surface-2)';
+              e.currentTarget.style.color = 'var(--text)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'none';
+              e.currentTarget.style.color = 'var(--text-dim)';
+            }}
           >
-            <X className="h-5 w-5" />
+            <X style={{ width: '18px', height: '18px' }} />
           </button>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-5 text-xs">
+        <div style={{ padding: '16px 18px', overflowY: 'auto', flex: 1, fontSize: '12.5px' }}>
           {/* Template Selection Tabs */}
-          <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(4, 1fr)',
+              gap: '8px',
+              marginBottom: '14px',
+            }}
+          >
             <button
+              type="button"
               onClick={() => setSelectedType('portal3d')}
-              className={`flex flex-col items-center justify-center gap-2 rounded-lg border p-3 text-center transition-all ${
-                selectedType === 'portal3d'
-                  ? 'border-blue-500 bg-blue-500/15 text-blue-400 font-semibold'
-                  : 'border-slate-800 bg-slate-800/40 text-slate-300 hover:bg-slate-800'
-              }`}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                padding: '9px 6px',
+                borderRadius: '8px',
+                border: selectedType === 'portal3d' ? '2px solid var(--accent)' : '1px solid var(--input-border)',
+                background: selectedType === 'portal3d' ? 'var(--accent-soft)' : 'var(--input-bg)',
+                color: selectedType === 'portal3d' ? 'var(--accent)' : 'var(--text)',
+                fontWeight: selectedType === 'portal3d' ? 600 : 'normal',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
             >
-              <Layers className="h-5 w-5" />
-              <span>Rama 3D</span>
+              <Layers style={{ width: '18px', height: '18px' }} />
+              <span style={{ fontSize: '11.5px' }}>Rama 3D</span>
             </button>
 
             <button
+              type="button"
               onClick={() => setSelectedType('tower3d')}
-              className={`flex flex-col items-center justify-center gap-2 rounded-lg border p-3 text-center transition-all ${
-                selectedType === 'tower3d'
-                  ? 'border-blue-500 bg-blue-500/15 text-blue-400 font-semibold'
-                  : 'border-slate-800 bg-slate-800/40 text-slate-300 hover:bg-slate-800'
-              }`}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                padding: '9px 6px',
+                borderRadius: '8px',
+                border: selectedType === 'tower3d' ? '2px solid var(--accent)' : '1px solid var(--input-border)',
+                background: selectedType === 'tower3d' ? 'var(--accent-soft)' : 'var(--input-bg)',
+                color: selectedType === 'tower3d' ? 'var(--accent)' : 'var(--text)',
+                fontWeight: selectedType === 'tower3d' ? 600 : 'normal',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
             >
-              <Box className="h-5 w-5" />
-              <span>Wieża 3D</span>
+              <Box style={{ width: '18px', height: '18px' }} />
+              <span style={{ fontSize: '11.5px' }}>Wieża 3D</span>
             </button>
 
             <button
+              type="button"
               onClick={() => setSelectedType('grillage3d')}
-              className={`flex flex-col items-center justify-center gap-2 rounded-lg border p-3 text-center transition-all ${
-                selectedType === 'grillage3d'
-                  ? 'border-blue-500 bg-blue-500/15 text-blue-400 font-semibold'
-                  : 'border-slate-800 bg-slate-800/40 text-slate-300 hover:bg-slate-800'
-              }`}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                padding: '9px 6px',
+                borderRadius: '8px',
+                border: selectedType === 'grillage3d' ? '2px solid var(--accent)' : '1px solid var(--input-border)',
+                background: selectedType === 'grillage3d' ? 'var(--accent-soft)' : 'var(--input-bg)',
+                color: selectedType === 'grillage3d' ? 'var(--accent)' : 'var(--text)',
+                fontWeight: selectedType === 'grillage3d' ? 600 : 'normal',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
             >
-              <Grid3X3 className="h-5 w-5" />
-              <span>Ruszt 3D</span>
+              <Grid3X3 style={{ width: '18px', height: '18px' }} />
+              <span style={{ fontSize: '11.5px' }}>Ruszt 3D</span>
             </button>
 
             <button
+              type="button"
               onClick={() => setSelectedType('portal2d')}
-              className={`flex flex-col items-center justify-center gap-2 rounded-lg border p-3 text-center transition-all ${
-                selectedType === 'portal2d'
-                  ? 'border-blue-500 bg-blue-500/15 text-blue-400 font-semibold'
-                  : 'border-slate-800 bg-slate-800/40 text-slate-300 hover:bg-slate-800'
-              }`}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                padding: '9px 6px',
+                borderRadius: '8px',
+                border: selectedType === 'portal2d' ? '2px solid var(--accent)' : '1px solid var(--input-border)',
+                background: selectedType === 'portal2d' ? 'var(--accent-soft)' : 'var(--input-bg)',
+                color: selectedType === 'portal2d' ? 'var(--accent)' : 'var(--text)',
+                fontWeight: selectedType === 'portal2d' ? 600 : 'normal',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
             >
-              <Square className="h-5 w-5" />
-              <span>Rama 2D</span>
+              <Square style={{ width: '18px', height: '18px' }} />
+              <span style={{ fontSize: '11.5px' }}>Rama 2D</span>
             </button>
           </div>
 
           {/* Form Fields according to template */}
-          {selectedType === 'portal3d' && (
-            <div className="space-y-3 rounded-lg border border-slate-800 bg-slate-800/30 p-4">
-              <h3 className="font-semibold text-slate-200">Przestrzenna rama portalowa 3D (hala / szkielet)</h3>
-              <div className="grid grid-cols-2 gap-3">
+          <div
+            style={{
+              background: 'var(--surface-2)',
+              border: '1px solid var(--surface-border-soft)',
+              borderRadius: '9px',
+              padding: '12px 14px',
+              marginBottom: '14px',
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: '10px', color: 'var(--text)', fontSize: '12.5px' }}>
+              {previewSummary.title}
+            </div>
+
+            {selectedType === 'portal3d' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                 <div>
-                  <label className="mb-1 block text-slate-400">Rozpiętość nawy X [m]</label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Rozpiętość nawy X [m]
+                  </label>
+                  <SmartNumberInput
                     step="0.5"
+                    min={1}
+                    max={100}
                     value={bayX}
-                    onChange={(e) => setBayX(parseFloat(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setBayX(val > 0 ? val : 1)}
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-slate-400">Rozstaw ram Y [m]</label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Rozstaw ram Y [m]
+                  </label>
+                  <SmartNumberInput
                     step="0.5"
+                    min={1}
+                    max={100}
                     value={bayY}
-                    onChange={(e) => setBayY(parseFloat(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setBayY(val > 0 ? val : 1)}
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-slate-400">Liczba naw X</label>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min="1"
-                    max="10"
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Liczba naw X
+                  </label>
+                  <SmartNumberInput
+                    step="1"
+                    min={1}
+                    max={20}
                     value={numBaysX}
-                    onChange={(e) => setNumBaysX(parseInt(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setNumBaysX(Math.max(1, Math.round(val)))}
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-slate-400">Liczba przęseł Y</label>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min="1"
-                    max="10"
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Liczba przęseł Y
+                  </label>
+                  <SmartNumberInput
+                    step="1"
+                    min={1}
+                    max={20}
                     value={numBaysY}
-                    onChange={(e) => setNumBaysY(parseInt(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setNumBaysY(Math.max(1, Math.round(val)))}
                   />
                 </div>
-                <div className="col-span-2">
-                  <label className="mb-1 block text-slate-400">Wysokość słupów H [m]</label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
+                <div style={{ gridColumn: 'span 2' }}>
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Wysokość słupów H [m]
+                  </label>
+                  <SmartNumberInput
                     step="0.5"
+                    min={1}
+                    max={100}
                     value={frameHeight}
-                    onChange={(e) => setFrameHeight(parseFloat(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setFrameHeight(val > 0 ? val : 1)}
                   />
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {selectedType === 'tower3d' && (
-            <div className="space-y-3 rounded-lg border border-slate-800 bg-slate-800/30 p-4">
-              <h3 className="font-semibold text-slate-200">Przestrzenna wieża kratowa 3D ze stężeniami X</h3>
-              <div className="grid grid-cols-2 gap-3">
+            {selectedType === 'tower3d' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                 <div>
-                  <label className="mb-1 block text-slate-400">Szerokość podstawy [m]</label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Szerokość podstawy [m]
+                  </label>
+                  <SmartNumberInput
                     step="0.5"
+                    min={0.5}
+                    max={50}
                     value={towerBase}
-                    onChange={(e) => setTowerBase(parseFloat(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setTowerBase(val > 0 ? val : 1)}
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-slate-400">Szerokość głowicy [m]</label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Szerokość głowicy [m]
+                  </label>
+                  <SmartNumberInput
                     step="0.5"
+                    min={0.5}
+                    max={50}
                     value={towerTop}
-                    onChange={(e) => setTowerTop(parseFloat(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setTowerTop(val > 0 ? val : 1)}
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-slate-400">Wysokość całkowita [m]</label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step="1.0"
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Wysokość całkowita H [m]
+                  </label>
+                  <SmartNumberInput
+                    step="1"
+                    min={1}
+                    max={200}
                     value={towerHeight}
-                    onChange={(e) => setTowerHeight(parseFloat(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setTowerHeight(val > 0 ? val : 1)}
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-slate-400">Liczba segmentów / kondygnacji</label>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min="1"
-                    max="12"
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Liczba segmentów
+                  </label>
+                  <SmartNumberInput
+                    step="1"
+                    min={1}
+                    max={25}
                     value={towerStories}
-                    onChange={(e) => setTowerStories(parseInt(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setTowerStories(Math.max(1, Math.round(val)))}
                   />
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {selectedType === 'grillage3d' && (
-            <div className="space-y-3 rounded-lg border border-slate-800 bg-slate-800/30 p-4">
-              <h3 className="font-semibold text-slate-200">Ruszt belkowy stropowy 3D</h3>
-              <div className="grid grid-cols-2 gap-3">
+            {selectedType === 'grillage3d' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                 <div>
-                  <label className="mb-1 block text-slate-400">Szerokość X [m]</label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step="1.0"
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Szerokość X [m]
+                  </label>
+                  <SmartNumberInput
+                    step="1"
+                    min={1}
+                    max={100}
                     value={grillWidthX}
-                    onChange={(e) => setGrillWidthX(parseFloat(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setGrillWidthX(val > 0 ? val : 1)}
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-slate-400">Długość Y [m]</label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step="1.0"
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Długość Y [m]
+                  </label>
+                  <SmartNumberInput
+                    step="1"
+                    min={1}
+                    max={100}
                     value={grillWidthY}
-                    onChange={(e) => setGrillWidthY(parseFloat(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setGrillWidthY(val > 0 ? val : 1)}
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-slate-400">Podział wzdłuż X</label>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min="1"
-                    max="10"
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Liczba podziałów X
+                  </label>
+                  <SmartNumberInput
+                    step="1"
+                    min={1}
+                    max={20}
                     value={grillDivX}
-                    onChange={(e) => setGrillDivX(parseInt(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setGrillDivX(Math.max(1, Math.round(val)))}
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-slate-400">Podział wzdłuż Y</label>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min="1"
-                    max="10"
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Liczba podziałów Y
+                  </label>
+                  <SmartNumberInput
+                    step="1"
+                    min={1}
+                    max={20}
                     value={grillDivY}
-                    onChange={(e) => setGrillDivY(parseInt(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setGrillDivY(Math.max(1, Math.round(val)))}
                   />
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {selectedType === 'portal2d' && (
-            <div className="space-y-3 rounded-lg border border-slate-800 bg-slate-800/30 p-4">
-              <h3 className="font-semibold text-slate-200">Rama portalowa 2D w płaszczyźnie pionowej XZ</h3>
-              <div className="grid grid-cols-2 gap-3">
+            {selectedType === 'portal2d' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                 <div>
-                  <label className="mb-1 block text-slate-400">Rozpiętość L [m]</label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Rozpiętość L [m]
+                  </label>
+                  <SmartNumberInput
                     step="0.5"
+                    min={1}
+                    max={50}
                     value={span2D}
-                    onChange={(e) => setSpan2D(parseFloat(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setSpan2D(val > 0 ? val : 1)}
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-slate-400">Wysokość H [m]</label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
+                  <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                    Wysokość H [m]
+                  </label>
+                  <SmartNumberInput
                     step="0.5"
+                    min={1}
+                    max={50}
                     value={height2D}
-                    onChange={(e) => setHeight2D(parseFloat(e.target.value) || 1)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                    onChange={(val) => setHeight2D(val > 0 ? val : 1)}
                   />
                 </div>
               </div>
+            )}
+          </div>
+
+          {/* Section and Material selectors */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: '10px',
+              marginBottom: '14px',
+            }}
+          >
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                Domyślny przekrój
+              </label>
+              <select
+                value={secId}
+                onChange={(e) => setSecId(parseInt(e.target.value) || 1)}
+              >
+                {sections.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    #{s.id} {s.name}
+                  </option>
+                ))}
+              </select>
             </div>
-          )}
+
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                Domyślny materiał
+              </label>
+              <select
+                value={matId}
+                onChange={(e) => setMatId(parseInt(e.target.value) || 1)}
+              >
+                {materials.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    #{m.id} {m.name} (E={m.E} GPa)
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Summary Card */}
+          <div
+            style={{
+              padding: '10px 14px',
+              borderRadius: '8px',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--surface-border-soft)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '5px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 600 }}>
+              <CheckCircle2 style={{ width: '14px', height: '14px', color: 'var(--accent)' }} />
+              <span>Podsumowanie generowanego modelu:</span>
+            </div>
+            <div style={{ fontSize: '11.5px', color: 'var(--text-dim)', lineHeight: '1.4' }}>
+              {previewSummary.description}
+            </div>
+            <div style={{ display: 'flex', gap: '14px', fontSize: '11.5px', marginTop: '2px' }}>
+              <span>Węzły: <strong>{previewSummary.nodesCount}</strong></span>
+              <span>Pręty: <strong>{previewSummary.elementsCount}</strong></span>
+              <span>Podpory: <strong>{previewSummary.supportsCount}</strong></span>
+              <span>Obciążenia: <strong>Tak</strong></span>
+            </div>
+          </div>
         </div>
 
         {/* Footer Actions */}
-        <div className="flex items-center justify-end gap-3 border-t border-slate-800 px-5 py-3.5">
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            gap: '8px',
+            padding: '12px 18px',
+            borderTop: '1px solid var(--sidebar-border)',
+          }}
+        >
           <button
+            type="button"
+            className="mini"
             onClick={onClose}
-            className="rounded-lg border border-slate-700 px-4 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800"
           >
             Anuluj
           </button>
           <button
+            type="button"
+            className="mini on"
             onClick={handleGenerate}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-500 shadow-sm"
           >
             Wstaw szablon
           </button>

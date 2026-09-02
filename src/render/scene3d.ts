@@ -55,6 +55,8 @@ export interface SceneRenderOptions {
   theme: 'light' | 'dark';
   accentColor: string;
   momentsAsArcs?: boolean;
+  diagramLabelMode?: 'none' | 'minmax' | 'all';
+  activeResultKey?: string;
 }
 
 function fmtLoadVal(v: number): string {
@@ -105,6 +107,18 @@ function computeGeometryKey(
     pSig += `${p.id}:${p.shape}:${p.nodeIds.join('-')}:${p.loadTransferDir || 'two_way'}:${JSON.stringify(p.pressure || {})};`;
   }
 
+  let secSig = `${sections.length}_`;
+  for (let i = 0; i < sections.length; i++) {
+    const s = sections[i];
+    secSig += `${s.id}:${s.name}:${s.category || ''}:${s.shape || ''}:${s.h || 0}:${s.b || 0}:${s.t || 0}:${s.tf || 0}:${s.tw || 0}:${s.A || 0}:${s.Iy || 0}:${s.Iz || 0}:${s.It || 0};`;
+  }
+
+  let matSig = `${materials.length}_`;
+  for (let i = 0; i < materials.length; i++) {
+    const m = materials[i];
+    matSig += `${m.id}:${m.name}:${m.E}:${m.nu ?? ''}:${m.density ?? ''}:${m.fd ?? ''};`;
+  }
+
   let clSig = `${(options.constructionLines || []).length}_`;
   (options.constructionLines || []).forEach((cl) => {
     clSig += `${cl.id}:${cl.p1.join(',')}-${cl.p2.join(',')};`;
@@ -112,11 +126,19 @@ function computeGeometryKey(
 
   const grpSig = (options.groups || []).map((g) => `${g.id}:${g.color}:${g.name}`).join(';');
 
-  const optSig = `gm:${options.graphicsMode || 'balanced'}_g:${options.showGrid ? 1 : 0}_gp:${options.gridPlane || 'XY'}_go:${options.gridOffset || 0}_a:${options.showAxes ? 1 : 0}_la:${options.showLocalAxes ? 1 : 0}_pan:${options.showPanels !== false ? 1 : 0}_supp:${options.showSupports ? 1 : 0}_prof:${options.showProfileSketches ? 1 : 0}_loads:${options.showLoads ? 1 : 0}_def:${options.showDeform ? 1 : 0}_my:${options.showMy ? 1 : 0}_mz:${options.showMz ? 1 : 0}_mx:${options.showMx ? 1 : 0}_vy:${options.showVy ? 1 : 0}_vz:${options.showVz ? 1 : 0}_n:${options.showN ? 1 : 0}_str:${options.showStress ? 1 : 0}_r:${options.showReactions ? 1 : 0}_hl:${options.hideLoadsInResults ? 1 : 0}_hs:${options.hideSupportsInResults ? 1 : 0}_ds:${options.deformScaleMult}_dgs:${options.diagramScaleMult}_t:${options.theme}_ac:${options.accentColor}_ma:${options.momentsAsArcs ? 1 : 0}_grps:${grpSig}`;
+  const optSig = `gm:${options.graphicsMode || 'balanced'}_g:${options.showGrid ? 1 : 0}_gp:${options.gridPlane || 'XY'}_go:${options.gridOffset || 0}_a:${options.showAxes ? 1 : 0}_la:${options.showLocalAxes ? 1 : 0}_pan:${options.showPanels !== false ? 1 : 0}_supp:${options.showSupports ? 1 : 0}_prof:${options.showProfileSketches ? 1 : 0}_loads:${options.showLoads ? 1 : 0}_def:${options.showDeform ? 1 : 0}_my:${options.showMy ? 1 : 0}_mz:${options.showMz ? 1 : 0}_mx:${options.showMx ? 1 : 0}_vy:${options.showVy ? 1 : 0}_vz:${options.showVz ? 1 : 0}_n:${options.showN ? 1 : 0}_str:${options.showStress ? 1 : 0}_r:${options.showReactions ? 1 : 0}_hl:${options.hideLoadsInResults ? 1 : 0}_hs:${options.hideSupportsInResults ? 1 : 0}_ds:${options.deformScaleMult}_dgs:${options.diagramScaleMult}_dlm:${options.diagramLabelMode || 'all'}_t:${options.theme}_ac:${options.accentColor}_ma:${options.momentsAsArcs ? 1 : 0}_ark:${options.activeResultKey || ''}_grps:${grpSig}`;
 
-  const solvedSig = solved ? `${solved.type}_${(solved as any).currentMode || 0}` : 'none';
+  let solvedSig = 'none';
+  if (solved) {
+    if (solved.type === 'linear_static') {
+      const ls = solved as any;
+      solvedSig = `static_${ls.maxDisplacement?.toFixed(6) ?? 0}_${ls.maxMoment?.toFixed(4) ?? 0}_${ls.maxAxial?.toFixed(4) ?? 0}_${ls.maxShear?.toFixed(4) ?? 0}_${Object.keys(ls.displacements || {}).length}`;
+    } else {
+      solvedSig = `${solved.type}_${(solved as any).currentMode || 0}`;
+    }
+  }
 
-  return `${nSig}|${eSig}|${pSig}|${clSig}|${optSig}|${solvedSig}`;
+  return `${nSig}|${eSig}|${secSig}|${matSig}|${pSig}|${clSig}|${optSig}|${solvedSig}`;
 }
 
 // Ultra-fast in-place Three.js material & scale updates for selection & hover (0.01ms, never discards geometries)
@@ -346,6 +368,120 @@ function draw2DDoubleArrowHelper(
   ctx.restore();
 }
 
+function draw2DMomentArcHelper(
+  engine: RenderEngine3D,
+  labelQueue: DepthLabel2D[],
+  center3D: [number, number, number],
+  axisDir: [number, number, number],
+  radius: number,
+  color: string,
+  lineWidth = 2.2
+) {
+  const ax = axisDir[0];
+  const ay = axisDir[1];
+  const az = axisDir[2];
+  const lenSq = ax * ax + ay * ay + az * az;
+  if (lenSq < 1e-6) return;
+  const len = Math.sqrt(lenSq);
+  const nx = ax / len;
+  const ny = ay / len;
+  const nz = az / len;
+
+  // Orthonormal basis in plane perpendicular to normalized axis (nx, ny, nz)
+  let rx = 0, ry = 1, rz = 0;
+  if (Math.abs(ny) > 0.9) {
+    rx = 1; ry = 0; rz = 0;
+  }
+  // t1 = cross(r, n)
+  let t1x = ry * nz - rz * ny;
+  let t1y = rz * nx - rx * nz;
+  let t1z = rx * ny - ry * nx;
+  const t1Len = Math.hypot(t1x, t1y, t1z);
+  if (t1Len < 1e-4) return;
+  t1x /= t1Len; t1y /= t1Len; t1z /= t1Len;
+
+  // t2 = cross(n, t1)
+  const t2x = ny * t1z - nz * t1y;
+  const t2y = nz * t1x - nx * t1z;
+  const t2z = nx * t1y - ny * t1x;
+
+  const steps = 24;
+  const thetaStart = -0.75 * Math.PI;
+  const thetaEnd = 0.75 * Math.PI;
+
+  const pts2D: { x: number; y: number; visible: boolean; depth: number }[] = [];
+  let sumDepth = 0;
+  let visCount = 0;
+
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const theta = thetaStart + (thetaEnd - thetaStart) * t;
+    const px = center3D[0] + radius * (Math.cos(theta) * t1x + Math.sin(theta) * t2x);
+    const py = center3D[1] + radius * (Math.cos(theta) * t1y + Math.sin(theta) * t2y);
+    const pz = center3D[2] + radius * (Math.cos(theta) * t1z + Math.sin(theta) * t2z);
+    const proj = engine.project([px, py, pz]);
+    pts2D.push({ x: proj.x, y: proj.y, visible: proj.visible, depth: proj.depth });
+    if (proj.visible) {
+      sumDepth += proj.depth;
+      visCount++;
+    }
+  }
+
+  if (visCount === 0) return;
+
+  const avgDepth = sumDepth / visCount;
+
+  labelQueue.push({
+    depth: avgDepth,
+    layer: RENDER_LAYER.LOADS_AND_AXES,
+    subPriority: 0,
+    draw: (ctx) => {
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      // Draw arc path
+      ctx.beginPath();
+      ctx.moveTo(pts2D[0].x, pts2D[0].y);
+      for (let i = 1; i < pts2D.length; i++) {
+        ctx.lineTo(pts2D[i].x, pts2D[i].y);
+      }
+      ctx.stroke();
+
+      // Draw arrowhead at end
+      const lastIdx = pts2D.length - 1;
+      const prevIdx = Math.max(0, lastIdx - 2);
+      const tipX = pts2D[lastIdx].x;
+      const tipY = pts2D[lastIdx].y;
+      const dx = tipX - pts2D[prevIdx].x;
+      const dy = tipY - pts2D[prevIdx].y;
+      const segLen = Math.hypot(dx, dy);
+      if (segLen > 1e-2) {
+        const ux = dx / segLen;
+        const uy = dy / segLen;
+        const headLen = 8.5;
+        const headWidth = 5.5;
+        const leftX = tipX - ux * headLen + uy * (headWidth / 2);
+        const leftY = tipY - uy * headLen - ux * (headWidth / 2);
+        const rightX = tipX - ux * headLen - uy * (headWidth / 2);
+        const rightY = tipY - uy * headLen + ux * (headWidth / 2);
+
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(leftX, leftY);
+        ctx.lineTo(rightX, rightY);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      ctx.restore();
+    },
+  });
+}
+
 export function drawScene3D(
   overlayCtx: CanvasRenderingContext2D,
   engine: RenderEngine3D,
@@ -558,7 +694,7 @@ export function drawScene3D(
           drawComp(0, 0, 1, Fz);
         }
 
-        // 4b. Nodal Moments (Purple double arrows)
+        // 4b. Nodal Moments (Purple double arrows or semicircular arcs)
         if (n.moment) {
           const { Mx = 0, My = 0, Mz = 0 } = n.moment;
           const lenM = 0.70;
@@ -568,17 +704,21 @@ export function drawScene3D(
           const drawMomComp = (dx: number, dy: number, dz: number, val: number) => {
             if (Math.abs(val) < 1e-4) return;
             const sign = Math.sign(val);
-            const orig3D: Vec3 = [n.x - sign * dx * (baseGapM + lenM), n.y - sign * dy * (baseGapM + lenM), n.z - sign * dz * (baseGapM + lenM)];
-            const tip3D: Vec3 = [n.x - sign * dx * baseGapM, n.y - sign * dy * baseGapM, n.z - sign * dz * baseGapM];
-            const pOrig = engine.project(orig3D);
-            const pTip = engine.project(tip3D);
-            if (pOrig.visible || pTip.visible) {
-              labelQueue.push({
-                depth: (pOrig.depth + pTip.depth) / 2,
-                layer: RENDER_LAYER.LOADS_AND_AXES,
-                subPriority: 0,
-                draw: (ctx) => draw2DDoubleArrowHelper(ctx, pOrig.x, pOrig.y, pTip.x, pTip.y, color, 2.0, 8, 5.5),
-              });
+            if (options.momentsAsArcs) {
+              draw2DMomentArcHelper(engine, labelQueue, [n.x, n.y, n.z], [sign * dx, sign * dy, sign * dz], 0.40, color, 2.4);
+            } else {
+              const orig3D: Vec3 = [n.x - sign * dx * (baseGapM + lenM), n.y - sign * dy * (baseGapM + lenM), n.z - sign * dz * (baseGapM + lenM)];
+              const tip3D: Vec3 = [n.x - sign * dx * baseGapM, n.y - sign * dy * baseGapM, n.z - sign * dz * baseGapM];
+              const pOrig = engine.project(orig3D);
+              const pTip = engine.project(tip3D);
+              if (pOrig.visible || pTip.visible) {
+                labelQueue.push({
+                  depth: (pOrig.depth + pTip.depth) / 2,
+                  layer: RENDER_LAYER.LOADS_AND_AXES,
+                  subPriority: 0,
+                  draw: (ctx) => draw2DDoubleArrowHelper(ctx, pOrig.x, pOrig.y, pTip.x, pTip.y, color, 2.0, 8, 5.5),
+                });
+              }
             }
           };
 
@@ -744,27 +884,36 @@ export function drawScene3D(
 
         const drawReactionMoment = (sign: number, axisIdx: number, val: number) => {
           if (Math.abs(val) < 1e-4) return;
-          const offsetTail = new THREE.Vector3();
-          const offsetTip = new THREE.Vector3();
-          if (axisIdx === 0) {
-            offsetTail.set(-sign * (gapM + lenM), 0, 0);
-            offsetTip.set(-sign * gapM, 0, 0);
-          } else if (axisIdx === 1) {
-            offsetTail.set(0, -sign * (gapM + lenM), 0);
-            offsetTip.set(0, -sign * gapM, 0);
+          if (options.momentsAsArcs) {
+            const axisVec = new THREE.Vector3();
+            if (axisIdx === 0) axisVec.set(sign, 0, 0);
+            else if (axisIdx === 1) axisVec.set(0, sign, 0);
+            else axisVec.set(0, 0, sign);
+            if (rotMatrix) axisVec.applyMatrix4(rotMatrix);
+            draw2DMomentArcHelper(engine, labelQueue, [n.x, n.y, n.z], [axisVec.x, axisVec.y, axisVec.z], 0.48, colorM, 2.4);
           } else {
-            offsetTail.set(0, 0, -sign * (gapM + lenM));
-            offsetTip.set(0, 0, -sign * gapM);
-          }
-          const pTail = engine.project(getRotatedPosition(offsetTail));
-          const pTip = engine.project(getRotatedPosition(offsetTip));
-          if (pTail.visible || pTip.visible) {
-            labelQueue.push({
-              depth: (pTail.depth + pTip.depth) / 2,
-              layer: RENDER_LAYER.LOADS_AND_AXES,
-              subPriority: 0,
-              draw: (ctx) => draw2DDoubleArrowHelper(ctx, pTail.x, pTail.y, pTip.x, pTip.y, colorM, 2.0, 8, 5.5),
-            });
+            const offsetTail = new THREE.Vector3();
+            const offsetTip = new THREE.Vector3();
+            if (axisIdx === 0) {
+              offsetTail.set(-sign * (gapM + lenM), 0, 0);
+              offsetTip.set(-sign * gapM, 0, 0);
+            } else if (axisIdx === 1) {
+              offsetTail.set(0, -sign * (gapM + lenM), 0);
+              offsetTip.set(0, -sign * gapM, 0);
+            } else {
+              offsetTail.set(0, 0, -sign * (gapM + lenM));
+              offsetTip.set(0, 0, -sign * gapM);
+            }
+            const pTail = engine.project(getRotatedPosition(offsetTail));
+            const pTip = engine.project(getRotatedPosition(offsetTip));
+            if (pTail.visible || pTip.visible) {
+              labelQueue.push({
+                depth: (pTail.depth + pTip.depth) / 2,
+                layer: RENDER_LAYER.LOADS_AND_AXES,
+                subPriority: 0,
+                draw: (ctx) => draw2DDoubleArrowHelper(ctx, pTail.x, pTail.y, pTip.x, pTip.y, colorM, 2.0, 8, 5.5),
+              });
+            }
           }
         };
 
@@ -1058,7 +1207,9 @@ export function drawScene3D(
 
         if (Math.abs(Mx) > 1e-4) {
           const sign = Math.sign(Mx);
-          const pos3D: [number, number, number] = [n.x - sign * (gapMx + lenM), n.y, n.z];
+          const pos3D: [number, number, number] = options.momentsAsArcs
+            ? [n.x, n.y + 0.45, n.z]
+            : [n.x - sign * (gapMx + lenM), n.y, n.z];
           const pTail = engine.project(pos3D);
           if (pTail.visible) {
             labelQueue.push({
@@ -1072,7 +1223,9 @@ export function drawScene3D(
         }
         if (Math.abs(My) > 1e-4) {
           const sign = Math.sign(My);
-          const pos3D: [number, number, number] = [n.x, n.y - sign * (gapMy + lenM), n.z];
+          const pos3D: [number, number, number] = options.momentsAsArcs
+            ? [n.x + 0.45, n.y, n.z]
+            : [n.x, n.y - sign * (gapMy + lenM), n.z];
           const pTail = engine.project(pos3D);
           if (pTail.visible) {
             labelQueue.push({
@@ -1086,7 +1239,9 @@ export function drawScene3D(
         }
         if (Math.abs(Mz) > 1e-4) {
           const sign = Math.sign(Mz);
-          const pos3D: [number, number, number] = [n.x, n.y, n.z - sign * (gapMz + lenM)];
+          const pos3D: [number, number, number] = options.momentsAsArcs
+            ? [n.x, n.y + 0.45, n.z]
+            : [n.x, n.y, n.z - sign * (gapMz + lenM)];
           const pTail = engine.project(pos3D);
           if (pTail.visible) {
             labelQueue.push({
@@ -1227,7 +1382,9 @@ export function drawScene3D(
 
       if (Math.abs(Mx) > 1e-4) {
         const sign = Math.sign(Mx);
-        const pos3D = getRotatedPosition(new THREE.Vector3(-sign * (gapM + lenM), 0, 0));
+        const pos3D = options.momentsAsArcs
+          ? getRotatedPosition(new THREE.Vector3(0, 0.52, 0))
+          : getRotatedPosition(new THREE.Vector3(-sign * (gapM + lenM), 0, 0));
         const pTail = engine.project(pos3D);
         if (pTail.visible) {
           labelQueue.push({
@@ -1240,7 +1397,9 @@ export function drawScene3D(
       }
       if (Math.abs(My) > 1e-4) {
         const sign = Math.sign(My);
-        const pos3D = getRotatedPosition(new THREE.Vector3(0, -sign * (gapM + lenM), 0));
+        const pos3D = options.momentsAsArcs
+          ? getRotatedPosition(new THREE.Vector3(0.52, 0, 0))
+          : getRotatedPosition(new THREE.Vector3(0, -sign * (gapM + lenM), 0));
         const pTail = engine.project(pos3D);
         if (pTail.visible) {
           labelQueue.push({
@@ -1253,7 +1412,9 @@ export function drawScene3D(
       }
       if (Math.abs(Mz) > 1e-4) {
         const sign = Math.sign(Mz);
-        const pos3D = getRotatedPosition(new THREE.Vector3(0, 0, -sign * (gapM + lenM)));
+        const pos3D = options.momentsAsArcs
+          ? getRotatedPosition(new THREE.Vector3(0, 0.52, 0))
+          : getRotatedPosition(new THREE.Vector3(0, 0, -sign * (gapM + lenM)));
         const pTail = engine.project(pos3D);
         if (pTail.visible) {
           labelQueue.push({
@@ -1273,6 +1434,11 @@ export function drawScene3D(
     (options.showMy || options.showMz || options.showMx || options.showVy || options.showVz || options.showN || options.showStress)
   ) {
     collectDiagramValues2DOverlay(labelQueue, engine, solved, options, isDark);
+  }
+
+  // Deformed shape displacement values overlay
+  if (solved && options.showDeform) {
+    collectDeformValues2DOverlay(labelQueue, engine, solved, options, isDark);
   }
 
   // Fast Probe marker overlay (100% smooth slider, active ONLY when results exist)
@@ -1374,8 +1540,8 @@ function rebuild3DModelGroup(
     });
   }
 
-  // Loads (WebGL 3D objects in Balanced & Quality modes)
-  if (options.graphicsMode !== 'performance' && options.showLoads && (!options.hideLoadsInResults || !hasResults)) {
+  // Loads (WebGL 3D objects)
+  if (options.showLoads && (!options.hideLoadsInResults || !hasResults)) {
     // Nodal Forces & Nodal Moments
     nodes.forEach((n) => {
       if (n.force) {
@@ -1418,31 +1584,31 @@ function rebuild3DModelGroup(
 
         if (Math.abs(Mx) > 1e-4) {
           const sign = Math.sign(Mx);
-          const dir = new THREE.Vector3(sign, 0, 0);
-          const origin = new THREE.Vector3(n.x - sign * (gapMx + lenM), n.y, n.z);
           if (options.momentsAsArcs) {
-            buildMomentArc(engine, origin, dir, lenM, color);
+            buildMomentArc(engine, new THREE.Vector3(n.x, n.y, n.z), new THREE.Vector3(sign, 0, 0), 0.40, color);
           } else {
+            const dir = new THREE.Vector3(sign, 0, 0);
+            const origin = new THREE.Vector3(n.x - sign * (gapMx + lenM), n.y, n.z);
             buildDoubleHeadedArrow(engine, origin, dir, lenM, color);
           }
         }
         if (Math.abs(My) > 1e-4) {
           const sign = Math.sign(My);
-          const dir = new THREE.Vector3(0, sign, 0);
-          const origin = new THREE.Vector3(n.x, n.y - sign * (gapMy + lenM), n.z);
           if (options.momentsAsArcs) {
-            buildMomentArc(engine, origin, dir, lenM, color);
+            buildMomentArc(engine, new THREE.Vector3(n.x, n.y, n.z), new THREE.Vector3(0, sign, 0), 0.40, color);
           } else {
+            const dir = new THREE.Vector3(0, sign, 0);
+            const origin = new THREE.Vector3(n.x, n.y - sign * (gapMy + lenM), n.z);
             buildDoubleHeadedArrow(engine, origin, dir, lenM, color);
           }
         }
         if (Math.abs(Mz) > 1e-4) {
           const sign = Math.sign(Mz);
-          const dir = new THREE.Vector3(0, 0, sign);
-          const origin = new THREE.Vector3(n.x, n.y, n.z - sign * (gapMz + lenM));
           if (options.momentsAsArcs) {
-            buildMomentArc(engine, origin, dir, lenM, color);
+            buildMomentArc(engine, new THREE.Vector3(n.x, n.y, n.z), new THREE.Vector3(0, 0, sign), 0.40, color);
           } else {
+            const dir = new THREE.Vector3(0, 0, sign);
+            const origin = new THREE.Vector3(n.x, n.y, n.z - sign * (gapMz + lenM));
             buildDoubleHeadedArrow(engine, origin, dir, lenM, color);
           }
         }
@@ -1558,40 +1724,46 @@ function rebuild3DModelGroup(
         buildSingleArrow(engine, origin, dir, lenF, colorF, 0.22, 0.11);
       }
 
-      // Moment reactions (behind force reactions, double-headed)
+      // Moment reactions (behind force reactions, double-headed or arcs)
       if (Math.abs(Mx) > 1e-4) {
         const sign = Math.sign(Mx);
-        const { dir, origin } = transformVectorAndOrigin(
-          new THREE.Vector3(sign, 0, 0),
-          new THREE.Vector3(-sign * (gapM + lenM), 0, 0)
-        );
         if (options.momentsAsArcs) {
-          buildMomentArc(engine, origin, dir, lenM, colorM, 0.18, 0.09);
+          const dirLocal = new THREE.Vector3(sign, 0, 0);
+          const { dir } = transformVectorAndOrigin(dirLocal, new THREE.Vector3(0, 0, 0));
+          buildMomentArc(engine, new THREE.Vector3(n.x, n.y, n.z), dir, 0.48, colorM, 0.18, 0.09);
         } else {
+          const { dir, origin } = transformVectorAndOrigin(
+            new THREE.Vector3(sign, 0, 0),
+            new THREE.Vector3(-sign * (gapM + lenM), 0, 0)
+          );
           buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09);
         }
       }
       if (Math.abs(My) > 1e-4) {
         const sign = Math.sign(My);
-        const { dir, origin } = transformVectorAndOrigin(
-          new THREE.Vector3(0, sign, 0),
-          new THREE.Vector3(0, -sign * (gapM + lenM), 0)
-        );
         if (options.momentsAsArcs) {
-          buildMomentArc(engine, origin, dir, lenM, colorM, 0.18, 0.09);
+          const dirLocal = new THREE.Vector3(0, sign, 0);
+          const { dir } = transformVectorAndOrigin(dirLocal, new THREE.Vector3(0, 0, 0));
+          buildMomentArc(engine, new THREE.Vector3(n.x, n.y, n.z), dir, 0.48, colorM, 0.18, 0.09);
         } else {
+          const { dir, origin } = transformVectorAndOrigin(
+            new THREE.Vector3(0, sign, 0),
+            new THREE.Vector3(0, -sign * (gapM + lenM), 0)
+          );
           buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09);
         }
       }
       if (Math.abs(Mz) > 1e-4) {
         const sign = Math.sign(Mz);
-        const { dir, origin } = transformVectorAndOrigin(
-          new THREE.Vector3(0, 0, sign),
-          new THREE.Vector3(0, 0, -sign * (gapM + lenM))
-        );
         if (options.momentsAsArcs) {
-          buildMomentArc(engine, origin, dir, lenM, colorM, 0.18, 0.09);
+          const dirLocal = new THREE.Vector3(0, 0, sign);
+          const { dir } = transformVectorAndOrigin(dirLocal, new THREE.Vector3(0, 0, 0));
+          buildMomentArc(engine, new THREE.Vector3(n.x, n.y, n.z), dir, 0.48, colorM, 0.18, 0.09);
         } else {
+          const { dir, origin } = transformVectorAndOrigin(
+            new THREE.Vector3(0, 0, sign),
+            new THREE.Vector3(0, 0, -sign * (gapM + lenM))
+          );
           buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09);
         }
       }
@@ -2884,24 +3056,23 @@ function buildSingleArrow(
 
 function buildMomentArc(
   engine: RenderEngine3D,
-  origin: THREE.Vector3,
-  dir: THREE.Vector3,
-  length: number,
+  center: THREE.Vector3,
+  axisDir: THREE.Vector3,
+  radius: number,
   color: number,
   headLength = 0.16,
   headWidth = 0.08
 ) {
-  const normDir = dir.clone().normalize();
-  const center = origin.clone().addScaledVector(normDir, length * 0.5);
+  const normAxis = axisDir.clone().normalize();
+  if (normAxis.lengthSq() < 1e-6) return;
 
-  let v1 = new THREE.Vector3(0, 1, 0);
-  if (Math.abs(normDir.dot(v1)) > 0.9) {
-    v1.set(1, 0, 0);
+  let ref = new THREE.Vector3(0, 1, 0);
+  if (Math.abs(normAxis.y) > 0.9) {
+    ref.set(1, 0, 0);
   }
-  const tangent1 = new THREE.Vector3().crossVectors(normDir, v1).normalize();
-  const tangent2 = new THREE.Vector3().crossVectors(normDir, tangent1).normalize();
+  const tangent1 = new THREE.Vector3().crossVectors(ref, normAxis).normalize();
+  const tangent2 = new THREE.Vector3().crossVectors(normAxis, tangent1).normalize();
 
-  const radius = length * 0.40;
   const points: THREE.Vector3[] = [];
   const steps = 32;
   const thetaStart = -0.75 * Math.PI;
@@ -2915,12 +3086,15 @@ function buildMomentArc(
     points.push(p);
   }
 
-  const arcGeom = new THREE.BufferGeometry().setFromPoints(points);
-  const arcMat = new THREE.LineBasicMaterial({ color, depthTest: true, depthWrite: true });
-  const arcLine = new THREE.Line(arcGeom, arcMat);
-  arcLine.renderOrder = 1;
-  engine.overlayGroup.add(arcLine);
+  // Tube mesh for clear 3D visibility and depth
+  const curve = new THREE.CatmullRomCurve3(points);
+  const tubeGeom = new THREE.TubeGeometry(curve, 28, 0.016, 8, false);
+  const tubeMat = new THREE.MeshBasicMaterial({ color, depthTest: true, depthWrite: true });
+  const arcMesh = new THREE.Mesh(tubeGeom, tubeMat);
+  makeOnTop(arcMesh, 1);
+  engine.overlayGroup.add(arcMesh);
 
+  // Arrowhead cone at end
   const endPoint = center.clone()
     .addScaledVector(tangent1, radius * Math.cos(thetaEnd))
     .addScaledVector(tangent2, radius * Math.sin(thetaEnd));
@@ -2930,7 +3104,7 @@ function buildMomentArc(
     .addScaledVector(tangent2, Math.cos(thetaEnd))
     .normalize();
 
-  const coneGeom = new THREE.ConeGeometry(headWidth * 0.7, headLength, 12);
+  const coneGeom = new THREE.ConeGeometry(headWidth, headLength, 16);
   coneGeom.translate(0, -headLength / 2, 0);
   const coneMat = new THREE.MeshBasicMaterial({ color, depthTest: true, depthWrite: true });
   const head = new THREE.Mesh(coneGeom, coneMat);
@@ -2939,7 +3113,7 @@ function buildMomentArc(
   const q = new THREE.Quaternion();
   q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangentDir);
   head.quaternion.copy(q);
-  head.renderOrder = 1;
+  makeOnTop(head, 1);
   engine.overlayGroup.add(head);
 }
 
@@ -3671,6 +3845,169 @@ function collectProbe2DOverlay(
   });
 }
 
+function collectDeformValues2DOverlay(
+  labelQueue: DepthLabel2D[],
+  engine: RenderEngine3D,
+  solved: SolverResult3D,
+  options: SceneRenderOptions,
+  isDark: boolean
+) {
+  if (!options.showDeform || !solved || options.diagramLabelMode === 'none') return;
+
+  const resultsList = (solved.type === 'linear_static' ? solved.results : (solved as any).modes?.[(solved as any).currentMode || 0]?.results) as any[];
+  if (!resultsList || resultsList.length === 0) return;
+
+  let maxDispVal = 0;
+  let minX = Infinity, maxX = -Infinity;
+  let minY = Infinity, maxY = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+
+  resultsList.forEach((sample) => {
+    [sample.n1, sample.n2].forEach((n: any) => {
+      minX = Math.min(minX, n.x); maxX = Math.max(maxX, n.x);
+      minY = Math.min(minY, n.y); maxY = Math.max(maxY, n.y);
+      minZ = Math.min(minZ, n.z); maxZ = Math.max(maxZ, n.z);
+    });
+    sample.pts?.forEach((pt: any) => {
+      const mag = Math.hypot(pt.Ux_global || 0, pt.Uy_global || 0, pt.Uz_global || 0);
+      if (mag > maxDispVal) maxDispVal = mag;
+    });
+  });
+
+  const bboxDiag = Math.hypot(
+    isFinite(maxX - minX) ? maxX - minX : 0,
+    isFinite(maxY - minY) ? maxY - minY : 0,
+    isFinite(maxZ - minZ) ? maxZ - minZ : 0
+  );
+  const structSize = Math.max(bboxDiag, 3.0);
+  const targetOffset = 0.12 * structSize;
+  const autoScale = maxDispVal > 1e-12 ? targetOffset / maxDispVal : 1.0;
+  const mult = options.deformScaleMult * autoScale;
+
+  const defColor = isDark ? '#c084fc' : '#7c3aed';
+
+  if (options.diagramLabelMode === 'minmax') {
+    let globalMaxMag = -1;
+    let globalMaxPos: Vec3 | null = null;
+
+    let globalMinMag = Infinity;
+    let globalMinPos: Vec3 | null = null;
+
+    resultsList.forEach((sample) => {
+      sample.pts?.forEach((pt: any) => {
+        const mag = Math.hypot(pt.Ux_global || 0, pt.Uy_global || 0, pt.Uz_global || 0);
+        const basePos: Vec3 = [
+          sample.n1.x + sample.vx[0] * pt.x,
+          sample.n1.y + sample.vx[1] * pt.x,
+          sample.n1.z + sample.vx[2] * pt.x,
+        ];
+        const defPos: Vec3 = [
+          basePos[0] + (pt.Ux_global || 0) * mult,
+          basePos[1] + (pt.Uy_global || 0) * mult,
+          basePos[2] + (pt.Uz_global || 0) * mult,
+        ];
+
+        if (mag > globalMaxMag) {
+          globalMaxMag = mag;
+          globalMaxPos = defPos;
+        }
+        if (mag < globalMinMag) {
+          globalMinMag = mag;
+          globalMinPos = defPos;
+        }
+      });
+    });
+
+    if (globalMaxMag > 1e-6 && globalMaxPos) {
+      const proj = engine.project(globalMaxPos);
+      if (proj.visible && proj.x >= 10 && proj.x <= engine.width - 10 && proj.y >= 10 && proj.y <= engine.height - 10) {
+        const valMm = globalMaxMag * 1000;
+        const formatted = valMm >= 100 ? valMm.toFixed(1) : valMm >= 10 ? valMm.toFixed(2) : valMm.toFixed(3);
+        const tagText = `|u|max: ${formatted} mm`;
+        labelQueue.push({
+          depth: proj.depth,
+          layer: RENDER_LAYER.LABELS,
+          subPriority: 1,
+          draw: (ctx) => drawPillTag(ctx, proj.x, proj.y - 14, tagText, defColor, defColor, isDark, 12),
+        });
+      }
+    }
+
+    if (globalMinMag >= 0 && globalMinMag < Infinity && globalMinPos) {
+      const proj = engine.project(globalMinPos);
+      if (proj.visible && proj.x >= 10 && proj.x <= engine.width - 10 && proj.y >= 10 && proj.y <= engine.height - 10) {
+        const valMm = globalMinMag * 1000;
+        const formatted = valMm >= 100 ? valMm.toFixed(1) : valMm >= 10 ? valMm.toFixed(2) : valMm.toFixed(3);
+        const tagText = `|u|min: ${formatted} mm`;
+        labelQueue.push({
+          depth: proj.depth,
+          layer: RENDER_LAYER.LABELS,
+          subPriority: 0,
+          draw: (ctx) => drawPillTag(ctx, proj.x, proj.y + 14, tagText, defColor, defColor, isDark, 12),
+        });
+      }
+    }
+  } else if (options.diagramLabelMode === 'all') {
+    const drawnKeys = new Set<string>();
+
+    resultsList.forEach((sample) => {
+      const pts = sample.pts;
+      if (!pts || pts.length === 0) return;
+
+      const indicesToDraw = new Set<number>();
+      indicesToDraw.add(0);
+      indicesToDraw.add(pts.length - 1);
+
+      let maxPeakIdx = -1;
+      let maxPeakVal = 0;
+      for (let i = 1; i < pts.length - 1; i++) {
+        const mag = Math.hypot(pts[i].Ux_global || 0, pts[i].Uy_global || 0, pts[i].Uz_global || 0);
+        if (mag > maxPeakVal) {
+          maxPeakVal = mag;
+          maxPeakIdx = i;
+        }
+      }
+      if (maxPeakIdx > 0 && maxPeakVal > 1e-5) {
+        indicesToDraw.add(maxPeakIdx);
+      }
+
+      indicesToDraw.forEach((idx) => {
+        const pt = pts[idx];
+        const mag = Math.hypot(pt.Ux_global || 0, pt.Uy_global || 0, pt.Uz_global || 0);
+        if (mag < 1e-6) return;
+
+        const basePos: Vec3 = [
+          sample.n1.x + sample.vx[0] * pt.x,
+          sample.n1.y + sample.vx[1] * pt.x,
+          sample.n1.z + sample.vx[2] * pt.x,
+        ];
+        const defPos: Vec3 = [
+          basePos[0] + (pt.Ux_global || 0) * mult,
+          basePos[1] + (pt.Uy_global || 0) * mult,
+          basePos[2] + (pt.Uz_global || 0) * mult,
+        ];
+
+        const key = `${Math.round(defPos[0] * 100)},${Math.round(defPos[1] * 100)},${Math.round(defPos[2] * 100)}`;
+        if (drawnKeys.has(key)) return;
+        drawnKeys.add(key);
+
+        const proj = engine.project(defPos);
+        if (proj.visible && proj.x >= 10 && proj.x <= engine.width - 10 && proj.y >= 10 && proj.y <= engine.height - 10) {
+          const valMm = mag * 1000;
+          const formatted = valMm >= 100 ? valMm.toFixed(1) : valMm >= 10 ? valMm.toFixed(2) : valMm.toFixed(3);
+          const tagText = `${formatted} mm`;
+          labelQueue.push({
+            depth: proj.depth,
+            layer: RENDER_LAYER.LABELS,
+            subPriority: 0,
+            draw: (ctx) => drawPillTag(ctx, proj.x, proj.y - 12, tagText, defColor, defColor, isDark, 12),
+          });
+        }
+      });
+    });
+  }
+}
+
 function collectDiagramValues2DOverlay(
   labelQueue: DepthLabel2D[],
   engine: RenderEngine3D,
@@ -3678,6 +4015,8 @@ function collectDiagramValues2DOverlay(
   options: SceneRenderOptions,
   isDark: boolean
 ) {
+  if (options.diagramLabelMode === 'none') return;
+
   const resultsList = (solved.type === 'linear_static' ? solved.results : (solved as any).modes?.[(solved as any).currentMode || 0]?.results) as any[];
   if (!resultsList || resultsList.length === 0) return;
 
@@ -3689,69 +4028,147 @@ function collectDiagramValues2DOverlay(
   activeConfigs.forEach((cfg) => {
     const mult = computeDiagramScaleMult(resultsList, cfg, structSize, options.diagramScaleMult);
 
-    resultsList.forEach((sample) => {
-      const offDir = sample[cfg.offsetVecIndex];
-      const pts = sample.pts;
-      if (!pts || pts.length === 0) return;
+    if (options.diagramLabelMode === 'minmax') {
+      let globalMaxVal = -Infinity;
+      let globalMaxScreenPt: ScreenPoint3D | null = null;
+      let globalMaxRawVal = 0;
 
-      const indicesToDraw = new Set<number>();
-      indicesToDraw.add(0);
-      indicesToDraw.add(pts.length - 1);
+      let globalMinVal = Infinity;
+      let globalMinScreenPt: ScreenPoint3D | null = null;
+      let globalMinRawVal = 0;
 
-      let maxPeakIdx = -1;
-      let maxPeakVal = 0;
-      for (let i = 1; i < pts.length - 1; i++) {
-        const v = Math.abs(pts[i][cfg.key] as number);
-        if (v > maxPeakVal) {
-          maxPeakVal = v;
-          maxPeakIdx = i;
-        }
-      }
+      resultsList.forEach((sample) => {
+        const offDir = sample[cfg.offsetVecIndex];
+        const pts = sample.pts;
+        if (!pts || pts.length === 0) return;
 
-      const vStart = Math.abs(pts[0][cfg.key] as number);
-      const vEnd = Math.abs(pts[pts.length - 1][cfg.key] as number);
-      if (maxPeakIdx > 0 && maxPeakVal > Math.max(vStart, vEnd) * 1.05 && maxPeakVal > 0.05) {
-        indicesToDraw.add(maxPeakIdx);
-      }
+        pts.forEach((pt: any) => {
+          let val = pt[cfg.key] as number;
+          if (cfg.key === 'sigMax') val = val / 1000;
+          if (Math.abs(val) < 1e-4) return;
 
-      indicesToDraw.forEach((idx) => {
-        const pt = pts[idx];
-        let val = pt[cfg.key] as number;
-        if (cfg.key === 'sigMax') {
-          val = val / 1000;
-        }
-        if (Math.abs(val) < 1e-4) return;
+          const basePos: Vec3 = [
+            sample.n1.x + sample.vx[0] * pt.x,
+            sample.n1.y + sample.vx[1] * pt.x,
+            sample.n1.z + sample.vx[2] * pt.x,
+          ];
 
-        const basePos: Vec3 = [
-          sample.n1.x + sample.vx[0] * pt.x,
-          sample.n1.y + sample.vx[1] * pt.x,
-          sample.n1.z + sample.vx[2] * pt.x,
-        ];
+          const rawVal = pt[cfg.key] as number;
+          const offPos: Vec3 = [
+            basePos[0] + offDir[0] * rawVal * mult * cfg.diagSignMult,
+            basePos[1] + offDir[1] * rawVal * mult * cfg.diagSignMult,
+            basePos[2] + offDir[2] * rawVal * mult * cfg.diagSignMult,
+          ];
 
-        const rawVal = pt[cfg.key] as number;
-        const offPos: Vec3 = [
-          basePos[0] + offDir[0] * rawVal * mult * cfg.diagSignMult,
-          basePos[1] + offDir[1] * rawVal * mult * cfg.diagSignMult,
-          basePos[2] + offDir[2] * rawVal * mult * cfg.diagSignMult,
-        ];
+          const screenPt = engine.project(offPos);
+          if (screenPt.x < 10 || screenPt.x > engine.width - 10 || screenPt.y < 10 || screenPt.y > engine.height - 10) {
+            return;
+          }
 
-        const screenPt = engine.project(offPos);
-        if (screenPt.x < 10 || screenPt.x > engine.width - 10 || screenPt.y < 10 || screenPt.y > engine.height - 10) {
-          return;
-        }
-
-        const formattedVal = Math.abs(val) >= 100 ? val.toFixed(1) : val.toFixed(2);
-        const signStr = val > 0 ? '+' : '';
-        const tagText = activeConfigs.length > 1 ? `${cfg.label}:${signStr}${formattedVal}` : `${signStr}${formattedVal}`;
-
-        labelQueue.push({
-          depth: screenPt.depth,
-          layer: RENDER_LAYER.LABELS,
-          subPriority: 0,
-          draw: (ctx) => drawPillTag(ctx, screenPt.x, screenPt.y, tagText, cfg.cssColor, cfg.cssColor, isDark, 12),
+          if (val > globalMaxVal) {
+            globalMaxVal = val;
+            globalMaxScreenPt = screenPt;
+            globalMaxRawVal = val;
+          }
+          if (val < globalMinVal) {
+            globalMinVal = val;
+            globalMinScreenPt = screenPt;
+            globalMinRawVal = val;
+          }
         });
       });
-    });
+
+      if (globalMaxScreenPt && globalMaxVal > -Infinity) {
+        const formattedVal = Math.abs(globalMaxRawVal) >= 100 ? globalMaxRawVal.toFixed(1) : globalMaxRawVal.toFixed(2);
+        const signStr = globalMaxRawVal > 0 ? '+' : '';
+        const tagText = activeConfigs.length > 1 ? `${cfg.label} max: ${signStr}${formattedVal}` : `max: ${signStr}${formattedVal}`;
+
+        labelQueue.push({
+          depth: globalMaxScreenPt.depth,
+          layer: RENDER_LAYER.LABELS,
+          subPriority: 1,
+          draw: (ctx) => drawPillTag(ctx, globalMaxScreenPt!.x, globalMaxScreenPt!.y, tagText, cfg.cssColor, cfg.cssColor, isDark, 12),
+        });
+      }
+
+      if (globalMinScreenPt && globalMinVal < Infinity && (globalMinVal !== globalMaxVal || !globalMaxScreenPt)) {
+        const formattedVal = Math.abs(globalMinRawVal) >= 100 ? globalMinRawVal.toFixed(1) : globalMinRawVal.toFixed(2);
+        const signStr = globalMinRawVal > 0 ? '+' : '';
+        const tagText = activeConfigs.length > 1 ? `${cfg.label} min: ${signStr}${formattedVal}` : `min: ${signStr}${formattedVal}`;
+
+        labelQueue.push({
+          depth: globalMinScreenPt.depth,
+          layer: RENDER_LAYER.LABELS,
+          subPriority: 0,
+          draw: (ctx) => drawPillTag(ctx, globalMinScreenPt!.x, globalMinScreenPt!.y, tagText, cfg.cssColor, cfg.cssColor, isDark, 12),
+        });
+      }
+    } else {
+      // 'all' mode: member ends and peak points
+      resultsList.forEach((sample) => {
+        const offDir = sample[cfg.offsetVecIndex];
+        const pts = sample.pts;
+        if (!pts || pts.length === 0) return;
+
+        const indicesToDraw = new Set<number>();
+        indicesToDraw.add(0);
+        indicesToDraw.add(pts.length - 1);
+
+        let maxPeakIdx = -1;
+        let maxPeakVal = 0;
+        for (let i = 1; i < pts.length - 1; i++) {
+          const v = Math.abs(pts[i][cfg.key] as number);
+          if (v > maxPeakVal) {
+            maxPeakVal = v;
+            maxPeakIdx = i;
+          }
+        }
+
+        const vStart = Math.abs(pts[0][cfg.key] as number);
+        const vEnd = Math.abs(pts[pts.length - 1][cfg.key] as number);
+        if (maxPeakIdx > 0 && maxPeakVal > Math.max(vStart, vEnd) * 1.05 && maxPeakVal > 0.05) {
+          indicesToDraw.add(maxPeakIdx);
+        }
+
+        indicesToDraw.forEach((idx) => {
+          const pt = pts[idx];
+          let val = pt[cfg.key] as number;
+          if (cfg.key === 'sigMax') {
+            val = val / 1000;
+          }
+          if (Math.abs(val) < 1e-4) return;
+
+          const basePos: Vec3 = [
+            sample.n1.x + sample.vx[0] * pt.x,
+            sample.n1.y + sample.vx[1] * pt.x,
+            sample.n1.z + sample.vx[2] * pt.x,
+          ];
+
+          const rawVal = pt[cfg.key] as number;
+          const offPos: Vec3 = [
+            basePos[0] + offDir[0] * rawVal * mult * cfg.diagSignMult,
+            basePos[1] + offDir[1] * rawVal * mult * cfg.diagSignMult,
+            basePos[2] + offDir[2] * rawVal * mult * cfg.diagSignMult,
+          ];
+
+          const screenPt = engine.project(offPos);
+          if (screenPt.x < 10 || screenPt.x > engine.width - 10 || screenPt.y < 10 || screenPt.y > engine.height - 10) {
+            return;
+          }
+
+          const formattedVal = Math.abs(val) >= 100 ? val.toFixed(1) : val.toFixed(2);
+          const signStr = val > 0 ? '+' : '';
+          const tagText = activeConfigs.length > 1 ? `${cfg.label}:${signStr}${formattedVal}` : `${signStr}${formattedVal}`;
+
+          labelQueue.push({
+            depth: screenPt.depth,
+            layer: RENDER_LAYER.LABELS,
+            subPriority: 0,
+            draw: (ctx) => drawPillTag(ctx, screenPt.x, screenPt.y, tagText, cfg.cssColor, cfg.cssColor, isDark, 12),
+          });
+        });
+      });
+    }
   });
 }
 

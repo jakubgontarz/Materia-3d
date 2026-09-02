@@ -291,3 +291,14 @@ export type SolverResult3D = LinearStaticResult3D | StabilityResult3D | ModalRes
 
 export type ToolMode = 'select' | 'addBar' | 'addPanel' | 'grid' | 'lines';
 
+export type {
+  LoadNature,
+  EurocodeCategory,
+  LoadCase3D,
+  CombinationCategory,
+  LoadCombinationFactor,
+  LoadCombination3D,
+  EnvelopeMinMaxMap,
+  MultiCaseResults3D,
+} from './loadcases';
+

@@ -46,6 +46,13 @@ export const ICONS = {
       <path d="M14 3H6v18h12V7l-4-4zM14 3v4h4" />
     </svg>
   ),
+  template: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+      <line x1="12" y1="22.08" x2="12" y2="12" />
+    </svg>
+  ),
   ul: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M4 9V6a1 1 0 0 1 1-1h4l2 2h8a1 1 0 0 1 1 1v1M2 9h20l-2 10H4z" />
@@ -385,6 +392,7 @@ interface ToolbarProps {
   canUndo: boolean;
   canRedo: boolean;
   onNewModel: () => void;
+  onOpenTemplates?: () => void;
   onSaveModel: () => void;
   onSaveAsModel: () => void;
   onLoadModel: () => void;
@@ -447,6 +455,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   canUndo,
   canRedo,
   onNewModel,
+  onOpenTemplates,
   onSaveModel,
   onSaveAsModel,
   onLoadModel,
@@ -633,6 +642,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               </button>
 
               <div style={{ height: '1px', background: 'var(--surface-border-soft)', margin: '4px 2px' }} />
+
+              <button
+                className="menu-item-btn"
+                onClick={() => {
+                  setMenuOpen(false);
+                  if (onOpenTemplates) onOpenTemplates();
+                }}
+                title="Generator i szablony gotowych konstrukcji 3D i 2D"
+              >
+                <span className="menu-item-icon">{ICONS.template}</span>
+                <span className="menu-item-text">Kreator modeli...</span>
+              </button>
 
               <button
                 className="menu-item-btn"

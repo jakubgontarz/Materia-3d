@@ -26,8 +26,6 @@ interface OptionsModalProps {
   setGraphicsMode: (mode: GraphicsMode) => void;
   showGrid?: boolean;
   setShowGrid?: (v: boolean) => void;
-  includeSelfWeight: boolean;
-  setIncludeSelfWeight: (v: boolean) => void;
   snapSize?: number;
   setSnapSize?: (v: number) => void;
   momentsAsArcs: boolean;
@@ -43,8 +41,6 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
   setAccent,
   graphicsMode,
   setGraphicsMode,
-  includeSelfWeight,
-  setIncludeSelfWeight,
   momentsAsArcs,
   setMomentsAsArcs,
 }) => {
@@ -140,17 +136,17 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
             <div className="muted" style={{ marginTop: '5px', fontSize: '11.5px', lineHeight: '1.4' }}>
               {graphicsMode === 'performance' && (
                 <span>
-                  <strong>Tryb wydajności:</strong> Pręty jako estetyczne linie 2D (nie bryły 3D), obciążenia renderowane nad modelem, przeguby 2D zawsze nad prętami, a etykiety na samym wierzchu (maksymalna płynność i natychmiastowa responsywność).
+                  Pręty i węzły jako obiekty 2D.
                 </span>
               )}
               {graphicsMode === 'balanced' && (
                 <span>
-                  <strong>Tryb zrównoważony:</strong> Zoptymalizowany standardowy rendering bryłowy 3D.
+                  Zoptymalizowany standardowy rendering bryłowy 3D.
                 </span>
               )}
               {graphicsMode === 'quality' && (
                 <span>
-                  <strong>Tryb jakości:</strong> Zaawansowane trójpunktowe oświetlenie, filmowe mapowanie tonów (ACES) oraz wysokie wygładzenie geometrii brył.
+                  Zaawansowany rendering 3D.
                 </span>
               )}
             </div>
@@ -220,32 +216,6 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                   })}
                 </div>
               </div>
-            </div>
-          </div>
-
-          <hr className="sep" />
-
-          {/* Ciężar własny */}
-          <div style={{ marginBottom: '14px' }}>
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                cursor: 'pointer',
-                gap: '10px',
-              }}
-            >
-              <span style={{ fontSize: '12.5px', fontWeight: 600 }}>Uwzględnij ciężar własny prętów</span>
-              <input
-                type="checkbox"
-                checked={includeSelfWeight}
-                onChange={(e) => setIncludeSelfWeight(e.target.checked)}
-                style={{ width: '18px', height: '18px', flex: '0 0 auto', accentColor: 'var(--accent)' }}
-              />
-            </label>
-            <div className="muted" style={{ marginTop: '3px' }}>
-              Dolicza do każdego pręta obciążenie pionowe w dół (-Z): gęstość materiału × pole przekroju × g.
             </div>
           </div>
 

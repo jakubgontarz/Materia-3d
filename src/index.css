@@ -243,6 +243,11 @@ html, body {
   vertical-align: middle;
 }
 
+.tb-select option {
+  background-color: #2a3644;
+  color: var(--toolbar-fg);
+}
+
 .tb-label {
   font-size: 9.5px;
   color: #9fb0c3;
@@ -736,32 +741,96 @@ html[data-theme="dark"] .zbtn:hover {
   min-width: 66px;
 }
 
-.row input[type=number], .row input[type=text], .row select, .tb-input {
-  flex: 1;
+/* Universal Inputs, Selects, and Smart Number Inputs */
+input[type=text],
+input[type=number],
+input[type=search],
+input[type=password],
+input[type=email],
+input:not([type]),
+.smart-number-input,
+.tb-input,
+select,
+textarea {
+  width: 100%;
   min-width: 0;
   padding: 5px 8px;
   border: 1px solid var(--input-border);
-  border-radius: 5px;
+  border-radius: 6px;
   font-size: 12px;
-  font-family: var(--mono);
+  font-family: var(--sans);
   background: var(--input-bg);
   color: var(--text);
   box-sizing: border-box;
   outline: none;
+  line-height: 1.4;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
 }
 
-.tb-input:focus {
+/* Numeric and code-like fields use monospace font */
+input[type=number],
+.smart-number-input,
+input[inputmode=decimal],
+input[inputmode=numeric],
+.mono-input {
+  font-family: var(--mono);
+}
+
+/* Hover state */
+input[type=text]:hover:not(:disabled),
+input[type=number]:hover:not(:disabled),
+input:not([type]):hover:not(:disabled),
+.smart-number-input:hover:not(:disabled),
+.tb-input:hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+  border-color: var(--text-dim);
+}
+
+/* Focus state with crisp accent glow */
+input[type=text]:focus,
+input[type=number]:focus,
+input[type=search]:focus,
+input[type=password]:focus,
+input:not([type]):focus,
+.smart-number-input:focus,
+.tb-input:focus,
+select:focus,
+textarea:focus,
+.row input:focus,
+.row select:focus,
+.row-pair input:focus,
+.row-triple input:focus {
   border-color: var(--accent) !important;
-  outline: 1px solid var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent-soft) !important;
+  outline: none !important;
 }
 
+input::placeholder,
+textarea::placeholder,
 .tb-input::placeholder {
   color: var(--text-dim);
-  opacity: 0.6;
+  opacity: 0.65;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--surface-2);
+}
+
+.row input[type=number],
+.row input[type=text],
+.row select,
+.row .smart-number-input {
+  flex: 1;
 }
 
 select {
   font-family: var(--sans) !important;
+  cursor: pointer;
 }
 
 .row .unit {
@@ -1240,5 +1309,10 @@ hr.sep {
 
 .menu-item-btn .menu-item-text {
   flex: 1 1 auto;
+}
+
+.btn-hover-effect:hover {
+  background: var(--accent-soft) !important;
+
 }
 

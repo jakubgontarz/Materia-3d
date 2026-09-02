@@ -17,10 +17,23 @@ import {
 import { INITIAL_SECTIONS, INITIAL_MATERIALS } from './fem/catalogs';
 import { generate3DPortalFrame } from './fem/templates';
 import { solveLinearStatic3D, solveStability3D, solveModal3D } from './fem/solver3d';
+import {
+  LoadCase3D,
+  LoadNature,
+  EurocodeCategory,
+  LoadCombination3D,
+  MultiCaseResults3D,
+  INITIAL_DEFAULT_LOAD_CASE,
+  getDefaultPsiAndGammas,
+  getNatureLabel,
+  solveAllLoadCasesAndCombinations3D,
+  createModelForLoadCase,
+} from './fem/loadcases';
 import { Toolbar, ICONS } from './components/Toolbar';
 import { Sidebar } from './components/Sidebar';
 import { OptionsModal, APP_ACCENTS } from './components/OptionsModal';
 import { AboutModal } from './components/AboutModal';
+import { TemplatesModal } from './components/TemplatesModal';
 import { SelectByModal } from './components/SelectByModal';
 import {
   SaveLocalModal,
@@ -161,6 +174,7 @@ interface UserPreferences {
   showReactions?: boolean;
   deformScaleMult?: number;
   diagramScaleMult?: number;
+  diagramLabelMode?: 'none' | 'minmax' | 'all';
 
   snapSize?: number;
   snapEnabled?: boolean;
@@ -1814,6 +1828,14 @@ export default function App() {
   const [solved, setSolved] = useState<SolverResult3D | null>(null);
   const [solveWarning, setSolveWarning] = useState<string | null>(null);
 
+  // Load Cases & Combinations State (Eurocode EN 1990)
+  const [loadCases, setLoadCases] = useState<LoadCase3D[]>([INITIAL_DEFAULT_LOAD_CASE]);
+  const [activeLoadCaseId, setActiveLoadCaseId] = useState<number>(1);
+  const [autoCombinations, setAutoCombinations] = useState<boolean>(true);
+  const [customCombinations, setCustomCombinations] = useState<LoadCombination3D[]>([]);
+  const [multiSolved, setMultiSolved] = useState<MultiCaseResults3D | null>(null);
+  const [activeResultKey, setActiveResultKey] = useState<string>('');
+
   // Result Toggles
   const [showDeform, setShowDeform] = useState<boolean>(initialPrefs.showDeform ?? true);
   const [showMy, setShowMy] = useState<boolean>(initialPrefs.showMy ?? false);
@@ -1829,6 +1851,7 @@ export default function App() {
 
   const [deformScaleMult, setDeformScaleMult] = useState<number>(initialPrefs.deformScaleMult ?? 1.0);
   const [diagramScaleMult, setDiagramScaleMult] = useState<number>(initialPrefs.diagramScaleMult ?? 1.0);
+  const [diagramLabelMode, setDiagramLabelMode] = useState<'none' | 'minmax' | 'all'>(initialPrefs.diagramLabelMode ?? 'all');
 
   // Save preferences to localStorage automatically whenever any preference changes
   useEffect(() => {
@@ -1861,6 +1884,7 @@ export default function App() {
       showReactions,
       deformScaleMult,
       diagramScaleMult,
+      diagramLabelMode,
       snapSize,
       snapEnabled,
       showGrid,
@@ -1899,6 +1923,7 @@ export default function App() {
     showReactions,
     deformScaleMult,
     diagramScaleMult,
+    diagramLabelMode,
     snapSize,
     snapEnabled,
     showGrid,
@@ -1913,6 +1938,7 @@ export default function App() {
   // Modals
   const [optionsOpen, setOptionsOpen] = useState<boolean>(false);
   const [aboutOpen, setAboutOpen] = useState<boolean>(false);
+  const [templatesModalOpen, setTemplatesModalOpen] = useState<boolean>(false);
   const [selectByOpen, setSelectByOpen] = useState<boolean>(false);
   const [saveModalOpen, setSaveModalOpen] = useState<boolean>(false);
   const [loadModalOpen, setLoadModalOpen] = useState<boolean>(false);
@@ -2205,6 +2231,27 @@ export default function App() {
     setStatusHint('Utworzono nowy czysty model.');
   };
 
+  const handleApplyTemplate = (newNodes: Node3D[], newElements: Element3D[]) => {
+    setNodes(newNodes);
+    setElements(newElements);
+    setPanels([]);
+    setPanelPoints([]);
+    setSolved(null);
+    setSelectedNodeIds([]);
+    setSelectedElemIds([]);
+    setSelectedPanelIds([]);
+    setCurrentModelName('Szablon modelu');
+    setCurrentModelId(null);
+    resetHistoryWithModel(newNodes, newElements, [], sections, materials, analysisSettings, groups);
+    setStatusHint(`Wygenerowano model z szablonu (${newNodes.length} węzłów, ${newElements.length} prętów).`);
+    setTimeout(() => {
+      if (engineRef.current && newNodes.length > 0) {
+        engineRef.current.fitView(newNodes);
+        redraw();
+      }
+    }, 60);
+  };
+
   const handleSaveModel = () => {
     if (currentModelId) {
       const list = getStoredModelsList();
@@ -2463,10 +2510,276 @@ export default function App() {
     setStatusHint('Usunięto wszystkie linie wymiarowe.');
   };
 
+  // Helper functions to sync loads between Model (nodes/elements/panels) and Load Cases
+  const extractLoadsFromModel = useCallback(
+    (nodesList: Node3D[], elementsList: Element3D[], panelsList: Panel3D[]) => {
+      const nodeForces: Record<number, any> = {};
+      const nodeMoments: Record<number, any> = {};
+      const elementLoads: Record<number, any> = {};
+      const elementThermals: Record<number, any> = {};
+      const panelPressures: Record<number, any> = {};
+
+      nodesList.forEach((n) => {
+        if (n.force && (n.force.Fx || n.force.Fy || n.force.Fz)) {
+          nodeForces[n.id] = { ...n.force };
+        }
+        if (n.moment && (n.moment.Mx || n.moment.My || n.moment.Mz)) {
+          nodeMoments[n.id] = { ...n.moment };
+        }
+      });
+
+      elementsList.forEach((el) => {
+        if (
+          el.q &&
+          (el.q.qxStart || el.q.qxEnd || el.q.qyStart || el.q.qyEnd || el.q.qzStart || el.q.qzEnd)
+        ) {
+          elementLoads[el.id] = { ...el.q };
+        }
+        if (
+          el.thermal &&
+          (el.thermal.deltaTx || el.thermal.deltaTy || el.thermal.deltaTz || el.thermal.dT_axial)
+        ) {
+          elementThermals[el.id] = { ...el.thermal };
+        }
+      });
+
+      panelsList.forEach((p) => {
+        if (p.pressure && p.pressure.value) {
+          panelPressures[p.id] = { ...p.pressure };
+        }
+      });
+
+      return { nodeForces, nodeMoments, elementLoads, elementThermals, panelPressures };
+    },
+    []
+  );
+
+  const applyCaseLoadsToModel = useCallback(
+    (lc: LoadCase3D, nodesList: Node3D[], elementsList: Element3D[], panelsList: Panel3D[]) => {
+      const nextNodes = nodesList.map((n) => ({
+        ...n,
+        force: lc.nodeForces?.[n.id] ? { ...lc.nodeForces[n.id] } : undefined,
+        moment: lc.nodeMoments?.[n.id] ? { ...lc.nodeMoments[n.id] } : undefined,
+      }));
+
+      const nextElements = elementsList.map((el) => ({
+        ...el,
+        q: lc.elementLoads?.[el.id] ? { ...lc.elementLoads[el.id] } : undefined,
+        thermal: lc.elementThermals?.[el.id] ? { ...lc.elementThermals[el.id] } : undefined,
+      }));
+
+      const nextPanels = panelsList.map((p) => ({
+        ...p,
+        pressure: lc.panelPressures?.[p.id] ? { ...lc.panelPressures[p.id] } : undefined,
+      }));
+
+      return { nextNodes, nextElements, nextPanels };
+    },
+    []
+  );
+
+  const handleSelectLoadCase = useCallback(
+    (newId: number) => {
+      if (newId === activeLoadCaseId) return;
+
+      const currentLoads = extractLoadsFromModel(nodes, elements, panels);
+      const updatedCases = loadCases.map((lc) =>
+        lc.id === activeLoadCaseId ? { ...lc, ...currentLoads } : lc
+      );
+
+      const targetCase = updatedCases.find((lc) => lc.id === newId);
+      if (targetCase) {
+        const { nextNodes, nextElements, nextPanels } = applyCaseLoadsToModel(
+          targetCase,
+          nodes,
+          elements,
+          panels
+        );
+        setNodes(nextNodes);
+        setElements(nextElements);
+        setPanels(nextPanels);
+      }
+
+      setLoadCases(updatedCases);
+      setActiveLoadCaseId(newId);
+
+      if (multiSolved) {
+        const caseKey = `case_${newId}`;
+        if (multiSolved.cases[newId]) {
+          setActiveResultKey(caseKey);
+          setSolved(multiSolved.cases[newId].result);
+        }
+      }
+    },
+    [activeLoadCaseId, extractLoadsFromModel, applyCaseLoadsToModel, loadCases, nodes, elements, panels, multiSolved]
+  );
+
+  const handleAddLoadCase = useCallback(
+    (nature: LoadNature, category?: EurocodeCategory, name?: string) => {
+      const currentLoads = extractLoadsFromModel(nodes, elements, panels);
+      const nextId = (loadCases.length > 0 ? Math.max(...loadCases.map((c) => c.id)) : 0) + 1;
+      const defaults = getDefaultPsiAndGammas(nature, category);
+
+      const defaultName = name || `${getNatureLabel(nature).split(' ')[0]} ${nextId}`;
+
+      const newCase: LoadCase3D = {
+        id: nextId,
+        name: defaultName,
+        nature,
+        category,
+        includeSelfWeight: nature === 'permanent' && loadCases.filter((c) => c.nature === 'permanent').length === 0,
+        ...defaults,
+        nodeForces: {},
+        nodeMoments: {},
+        elementLoads: {},
+        elementThermals: {},
+        panelPressures: {},
+      };
+
+      const updatedCases = [
+        ...loadCases.map((lc) => (lc.id === activeLoadCaseId ? { ...lc, ...currentLoads } : lc)),
+        newCase,
+      ];
+
+      const { nextNodes, nextElements, nextPanels } = applyCaseLoadsToModel(
+        newCase,
+        nodes,
+        elements,
+        panels
+      );
+      setNodes(nextNodes);
+      setElements(nextElements);
+      setPanels(nextPanels);
+
+      setLoadCases(updatedCases);
+      setActiveLoadCaseId(nextId);
+      if (solved) setSolved(null);
+      if (multiSolved) setMultiSolved(null);
+    },
+    [
+      activeLoadCaseId,
+      extractLoadsFromModel,
+      applyCaseLoadsToModel,
+      loadCases,
+      nodes,
+      elements,
+      panels,
+      solved,
+      multiSolved,
+    ]
+  );
+
+  const handleUpdateLoadCase = useCallback(
+    (updatedCase: LoadCase3D) => {
+      setLoadCases((prev) => prev.map((lc) => (lc.id === updatedCase.id ? updatedCase : lc)));
+      if (solved) setSolved(null);
+      if (multiSolved) setMultiSolved(null);
+    },
+    [solved, multiSolved]
+  );
+
+  const handleDeleteLoadCase = useCallback(
+    (id: number) => {
+      if (loadCases.length <= 1) return;
+      const updatedCases = loadCases.filter((lc) => lc.id !== id);
+      setLoadCases(updatedCases);
+
+      if (activeLoadCaseId === id) {
+        const fallbackCase = updatedCases[0];
+        const { nextNodes, nextElements, nextPanels } = applyCaseLoadsToModel(
+          fallbackCase,
+          nodes,
+          elements,
+          panels
+        );
+        setNodes(nextNodes);
+        setElements(nextElements);
+        setPanels(nextPanels);
+        setActiveLoadCaseId(fallbackCase.id);
+      }
+
+      if (solved) setSolved(null);
+      if (multiSolved) setMultiSolved(null);
+    },
+    [loadCases, activeLoadCaseId, applyCaseLoadsToModel, nodes, elements, panels, solved, multiSolved]
+  );
+
+  const handleSelectResultKey = useCallback(
+    (key: string) => {
+      setActiveResultKey(key);
+      if (!multiSolved) return;
+
+      if (multiSolved.type === 'stability' || solved?.type === 'stability') {
+        let activeStab: import('./fem/types').StabilityResult3D | null = null;
+
+        if (multiSolved.envelopes[key]?.stabilityResult) {
+          activeStab = multiSolved.envelopes[key].stabilityResult || null;
+        } else if (multiSolved.combinations[key]?.stabilityResult) {
+          activeStab = multiSolved.combinations[key].stabilityResult || null;
+        } else if (key.startsWith('case_')) {
+          const cId = Number(key.replace('case_', ''));
+          activeStab = multiSolved.cases[cId]?.stabilityResult || null;
+          if (cId !== activeLoadCaseId) {
+            const targetCase = loadCases.find((lc) => lc.id === cId);
+            if (targetCase) {
+              const { nextNodes, nextElements, nextPanels } = applyCaseLoadsToModel(
+                targetCase,
+                nodes,
+                elements,
+                panels
+              );
+              setNodes(nextNodes);
+              setElements(nextElements);
+              setPanels(nextPanels);
+              setActiveLoadCaseId(cId);
+            }
+          }
+        }
+
+        if (activeStab) {
+          setSolved(activeStab);
+        }
+        return;
+      }
+
+      let activeRes: import('./fem/types').LinearStaticResult3D | null = null;
+      if (multiSolved.envelopes[key]) {
+        activeRes = multiSolved.envelopes[key].result;
+      } else if (multiSolved.combinations[key]) {
+        activeRes = multiSolved.combinations[key].result;
+      } else if (key.startsWith('case_')) {
+        const cId = Number(key.replace('case_', ''));
+        activeRes = multiSolved.cases[cId]?.result || null;
+        if (cId !== activeLoadCaseId) {
+          const targetCase = loadCases.find((lc) => lc.id === cId);
+          if (targetCase) {
+            const { nextNodes, nextElements, nextPanels } = applyCaseLoadsToModel(
+              targetCase,
+              nodes,
+              elements,
+              panels
+            );
+            setNodes(nextNodes);
+            setElements(nextElements);
+            setPanels(nextPanels);
+            setActiveLoadCaseId(cId);
+          }
+        }
+      }
+
+      if (activeRes) {
+        setSolved(activeRes);
+      }
+    },
+    [multiSolved, solved, activeLoadCaseId, loadCases, applyCaseLoadsToModel, nodes, elements, panels]
+  );
+
   // Perform 3D FEM Analysis
   const handleSolveOrBack = () => {
     if (solved) {
       setSolved(null);
+      setMultiSolved(null);
+      setActiveResultKey('');
       setSolveWarning(null);
       setProbe({ elId: null, t: 0.5 });
       setStatusHint('Tryb: Zaznacz');
@@ -2497,39 +2810,162 @@ export default function App() {
     // Always reset probe to inactive state when running calculation
     setProbe({ elId: null, t: 0.5 });
 
-    const solverModel = {
-      nodes,
-      elements,
-      panels,
-      materials,
-      sections,
-      settings: {
-        ...analysisSettings,
-        params: {
-          ...analysisSettings.params,
-          includeSelfWeight,
-        },
-      },
-    };
+    // Sync current canvas loads into active load case
+    const currentLoads = extractLoadsFromModel(nodes, elements, panels);
+    const finalLoadCases = loadCases.map((lc) =>
+      lc.id === activeLoadCaseId ? { ...lc, ...currentLoads } : lc
+    );
+    setLoadCases(finalLoadCases);
 
     try {
       if (analysisSettings.type === 'stability') {
-        const out = solveStability3D(solverModel, analysisSettings.params.bucklingModes || 4);
-        setSolved(out);
-        if (out.singular) setSolveWarning('Osobliwa macierz sztywności. Sprawdź schemat statyczny.');
-        else if (out.noCompression) setSolveWarning('Brak elementów ściskanych w modelu.');
-        else setStatusHint(`Obliczono stateczność: ${out.modes.length} form wyboczenia.`);
+        const multiRes = solveAllLoadCasesAndCombinations3D(
+          nodes,
+          elements,
+          panels,
+          materials,
+          sections,
+          finalLoadCases,
+          autoCombinations,
+          customCombinations,
+          analysisSettings
+        );
+
+        const bucklingModesCount = analysisSettings.params.bucklingModes || 4;
+
+        // 1. Solve stability for each base load case
+        for (const cIdStr of Object.keys(multiRes.cases)) {
+          const cId = Number(cIdStr);
+          const caseObj = multiRes.cases[cId];
+          const caseModel = createModelForLoadCase(
+            nodes,
+            elements,
+            panels,
+            materials,
+            sections,
+            caseObj.loadCase,
+            analysisSettings
+          );
+          caseObj.stabilityResult = solveStability3D(caseModel, bucklingModesCount, caseObj.result);
+        }
+
+        // 2. Solve stability for each combination
+        let minAlphaSgn = Infinity;
+        let minSgnStabRes: import('./fem/types').StabilityResult3D | null = null;
+
+        for (const combId of Object.keys(multiRes.combinations)) {
+          const combObj = multiRes.combinations[combId];
+          const baseModel = {
+            nodes: nodes.map((n) => ({ ...n, force: null, moment: null })),
+            elements: elements.map((e) => ({ ...e, q: null, thermal: null })),
+            panels: panels.map((p) => ({ ...p, pressure: null })),
+            materials,
+            sections,
+            settings: {
+              ...analysisSettings,
+              params: {
+                ...analysisSettings.params,
+                includeSelfWeight,
+              },
+            },
+          };
+          const stabRes = solveStability3D(baseModel, bucklingModesCount, combObj.result);
+          combObj.stabilityResult = stabRes;
+
+          if (combObj.comb.type === 'SGN' && stabRes.modes && stabRes.modes.length > 0) {
+            const firstAlpha = stabRes.modes[0].alphaCr;
+            if (firstAlpha < minAlphaSgn) {
+              minAlphaSgn = firstAlpha;
+              minSgnStabRes = stabRes;
+            }
+          }
+        }
+
+        // 3. Attach governing envelope stability result (lowest alpha_cr)
+        if (multiRes.envelopes['env_sgn'] && minSgnStabRes) {
+          multiRes.envelopes['env_sgn'].stabilityResult = minSgnStabRes;
+        }
+
+        multiRes.type = 'stability';
+        setMultiSolved(multiRes);
+
+        const initialKey = multiRes.envelopes['env_sgn']
+          ? 'env_sgn'
+          : multiRes.cases[activeLoadCaseId]
+          ? `case_${activeLoadCaseId}`
+          : Object.keys(multiRes.cases)[0]
+          ? `case_${Object.keys(multiRes.cases)[0]}`
+          : 'case_1';
+
+        setActiveResultKey(initialKey);
+
+        const activeStabRes =
+          (initialKey === 'env_sgn' ? multiRes.envelopes['env_sgn']?.stabilityResult : null) ||
+          multiRes.cases[activeLoadCaseId]?.stabilityResult ||
+          multiRes.combinations[initialKey]?.stabilityResult ||
+          Object.values(multiRes.cases)[0]?.stabilityResult;
+
+        if (activeStabRes) {
+          setSolved(activeStabRes);
+          if (activeStabRes.singular) setSolveWarning('Osobliwa macierz sztywności. Sprawdź schemat statyczny.');
+          else if (activeStabRes.noCompression) setSolveWarning('Brak elementów ściskanych w tym układzie obciążeń.');
+          else setStatusHint(`Obliczono stateczność dla ${Object.keys(multiRes.cases).length} przypadków i ${Object.keys(multiRes.combinations).length} kombinacji.`);
+        }
       } else if (analysisSettings.type === 'modal') {
+        const solverModel = {
+          nodes,
+          elements,
+          panels,
+          materials,
+          sections,
+          settings: {
+            ...analysisSettings,
+            params: {
+              ...analysisSettings.params,
+              includeSelfWeight,
+            },
+          },
+        };
         const out = solveModal3D(solverModel, analysisSettings.params.modalModes || 4);
         setSolved(out);
         if (out.singular) setSolveWarning('Osobliwa macierz sztywności.');
         else if (out.noMass) setSolveWarning('Brak masy w modelu (zdefiniuj masy w węzłach lub włącz masę prętów).');
         else setStatusHint(`Obliczono drgania własne: ${out.modes.length} form drgań.`);
       } else {
-        const out = solveLinearStatic3D(solverModel);
-        setSolved(out);
-        if (out.singular) setSolveWarning('Osobliwa macierz sztywności. Sprawdź podparcie konstrukcji.');
-        else setStatusHint('Obliczono statykę: wyznaczono siły, ugięcia i reakcje.');
+        const multiRes = solveAllLoadCasesAndCombinations3D(
+          nodes,
+          elements,
+          panels,
+          materials,
+          sections,
+          finalLoadCases,
+          autoCombinations,
+          customCombinations,
+          analysisSettings
+        );
+
+        setMultiSolved(multiRes);
+
+        const initialKey = multiRes.activeKey;
+        setActiveResultKey(initialKey);
+
+        let activeRes: import('./fem/types').LinearStaticResult3D | null = null;
+        if (multiRes.envelopes[initialKey]) {
+          activeRes = multiRes.envelopes[initialKey].result;
+        } else if (multiRes.combinations[initialKey]) {
+          activeRes = multiRes.combinations[initialKey].result;
+        } else if (initialKey.startsWith('case_')) {
+          const cId = Number(initialKey.replace('case_', ''));
+          activeRes = multiRes.cases[cId]?.result || null;
+        }
+
+        if (activeRes) {
+          setSolved(activeRes);
+          const combCount = Object.keys(multiRes.combinations).length;
+          setStatusHint(
+            `Obliczono statykę: ${finalLoadCases.length} przypadków obciążeń i ${combCount} kombinacji (EN 1990).`
+          );
+        }
       }
     } catch (e: any) {
       setSolveWarning('Błąd obliczeń MES: ' + e.message);
@@ -2684,6 +3120,7 @@ export default function App() {
       hideSupportsInResults,
       deformScaleMult,
       diagramScaleMult,
+      diagramLabelMode,
       selectedNodeIds,
       selectedElemIds,
       selectedPanelIds,
@@ -2705,6 +3142,7 @@ export default function App() {
       gridPlane,
       gridOffset,
       momentsAsArcs,
+      activeResultKey,
     };
 
     // 1. Draw 3D Three.js WebGL Scene & 2D Text/Overlay Labels
@@ -2840,6 +3278,7 @@ export default function App() {
     hideSupportsInResults,
     deformScaleMult,
     diagramScaleMult,
+    diagramLabelMode,
     probe,
     showCanvasUI,
     gridPlane,
@@ -4688,6 +5127,7 @@ export default function App() {
         canUndo={historyIndex > 0}
         canRedo={historyIndex < history.length - 1}
         onNewModel={handleNewModel}
+        onOpenTemplates={() => setTemplatesModalOpen(true)}
         onSaveModel={handleSaveModel}
         onSaveAsModel={handleSaveAsModel}
         onLoadModel={handleLoadModel}
@@ -5150,6 +5590,8 @@ export default function App() {
           setDeformScaleMult={setDeformScaleMult}
           diagramScaleMult={diagramScaleMult}
           setDiagramScaleMult={setDiagramScaleMult}
+          diagramLabelMode={diagramLabelMode}
+          setDiagramLabelMode={setDiagramLabelMode}
           probe={probe}
           setProbe={setProbe}
           onInvalidateResults={handleInvalidateResults}
@@ -5159,6 +5601,18 @@ export default function App() {
           defaultMaterialId={defaultMaterialId}
           defaultGroupId={defaultGroupId}
           setDefaultGroupId={setDefaultGroupId}
+          loadCases={loadCases}
+          activeLoadCaseId={activeLoadCaseId}
+          onSelectLoadCase={handleSelectLoadCase}
+          onAddLoadCase={handleAddLoadCase}
+          onUpdateLoadCase={handleUpdateLoadCase}
+          onDeleteLoadCase={handleDeleteLoadCase}
+          autoCombinations={autoCombinations}
+          setAutoCombinations={setAutoCombinations}
+          customCombinations={customCombinations}
+          multiSolved={multiSolved}
+          activeResultKey={activeResultKey}
+          onSelectResultKey={handleSelectResultKey}
           gridPlane={gridPlane}
           setGridPlane={setGridPlane}
           gridOffset={gridOffset}
@@ -5261,6 +5715,16 @@ export default function App() {
       />
 
       <AboutModal isOpen={aboutOpen} onClose={() => setAboutOpen(false)} />
+
+      <TemplatesModal
+        isOpen={templatesModalOpen}
+        onClose={() => setTemplatesModalOpen(false)}
+        onApplyTemplate={handleApplyTemplate}
+        sections={sections}
+        materials={materials}
+        defaultSectionId={defaultSectionId}
+        defaultMaterialId={defaultMaterialId}
+      />
 
       <SaveLocalModal
         isOpen={saveModalOpen}

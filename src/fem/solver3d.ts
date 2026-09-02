@@ -1115,8 +1115,12 @@ export function localGeometricStiffness3D(N: number, L: number): number[][] {
   return kg;
 }
 
-export function solveStability3D(model: SolverModel3D, maxModes = 4): StabilityResult3D {
-  const staticSolved = solveLinearStatic3D(model);
+export function solveStability3D(
+  model: SolverModel3D,
+  maxModes = 4,
+  precomputedStaticResult?: LinearStaticResult3D
+): StabilityResult3D {
+  const staticSolved = precomputedStaticResult || solveLinearStatic3D(model);
   if (staticSolved.singular) {
     return {
       type: 'stability',

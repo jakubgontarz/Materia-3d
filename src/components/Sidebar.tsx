@@ -15,6 +15,15 @@ import {
   PanelPressureLoad,
   ElementGroupDef,
 } from '../fem/types';
+import {
+  LoadCase3D,
+  LoadNature,
+  EurocodeCategory,
+  LoadCombination3D,
+  MultiCaseResults3D,
+  getNatureLabel,
+} from '../fem/loadcases';
+import { LoadCasesPanel } from './LoadCasesPanel';
 
 export const GROUP_PALETTE_COLORS = [
   '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16',
@@ -499,6 +508,8 @@ interface SidebarProps {
   setDeformScaleMult: (v: number) => void;
   diagramScaleMult: number;
   setDiagramScaleMult: (v: number) => void;
+  diagramLabelMode?: 'none' | 'minmax' | 'all';
+  setDiagramLabelMode?: (mode: 'none' | 'minmax' | 'all') => void;
   probe: { elId: number | null; t: number };
   setProbe: React.Dispatch<React.SetStateAction<{ elId: number | null; t: number }>>;
   onInvalidateResults: () => void;
@@ -577,6 +588,18 @@ interface SidebarProps {
   setGroups?: React.Dispatch<React.SetStateAction<ElementGroupDef[]>>;
   defaultGroupId?: string;
   setDefaultGroupId?: (id: string) => void;
+  loadCases?: LoadCase3D[];
+  activeLoadCaseId?: number;
+  onSelectLoadCase?: (id: number) => void;
+  onAddLoadCase?: (nature: LoadNature, category?: EurocodeCategory, name?: string) => void;
+  onUpdateLoadCase?: (updated: LoadCase3D) => void;
+  onDeleteLoadCase?: (id: number) => void;
+  autoCombinations?: boolean;
+  setAutoCombinations?: (v: boolean) => void;
+  customCombinations?: LoadCombination3D[];
+  multiSolved?: MultiCaseResults3D | null;
+  activeResultKey?: string;
+  onSelectResultKey?: (key: string) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -643,6 +666,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setDeformScaleMult,
   diagramScaleMult,
   setDiagramScaleMult,
+  diagramLabelMode = 'all',
+  setDiagramLabelMode,
   probe,
   setProbe,
   onInvalidateResults,
@@ -724,6 +749,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setGroups = (_val: any) => {},
   defaultGroupId,
   setDefaultGroupId,
+  loadCases,
+  activeLoadCaseId = 1,
+  onSelectLoadCase,
+  onAddLoadCase,
+  onUpdateLoadCase,
+  onDeleteLoadCase,
+  autoCombinations = true,
+  setAutoCombinations,
+  customCombinations = [],
+  multiSolved,
+  activeResultKey,
+  onSelectResultKey,
 }) => {
   const [addBarCoordsCollapsed, setAddBarCoordsCollapsed] = useState(false);
   const [nodesGroupCollapsed, setNodesGroupCollapsed] = useState(false);
@@ -908,6 +945,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Add Material / Section form state
   const [addMatFormOpen, setAddMatFormOpen] = useState(false);
+  const [editingMatId, setEditingMatId] = useState<number | null>(null);
+  const backupMaterialRef = useRef<Material | null>(null);
   const [newMatName, setNewMatName] = useState('Nowy materiał');
   const [newMatE, setNewMatE] = useState(210);
   const [newMatNu, setNewMatNu] = useState(0.3);
@@ -916,6 +955,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [newMatFd, setNewMatFd] = useState(235);
 
   const [addSecFormOpen, setAddSecFormOpen] = useState(false);
+  const [editingSecId, setEditingSecId] = useState<number | null>(null);
+  const backupSectionRef = useRef<Section | null>(null);
   const [newSecName, setNewSecName] = useState('Nowy przekrój');
   const [newSecCategory, setNewSecCategory] = useState<'katalog' | 'ksztalt' | 'wlasny'>('katalog');
   const [newSecCatType, setNewSecCatType] = useState('IPE');
@@ -2224,22 +2265,44 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
-  // Add Material
+  // Add or Edit Material
   const handleAddMaterial = () => {
-    const nextId = materials.length > 0 ? Math.max(...materials.map((m) => m.id)) + 1 : 1;
     const G = newMatE / (2 * (1 + (newMatNu || 0.3)));
-    const mat: Material = {
-      id: nextId,
-      name: newMatName || 'Materiał',
-      E: newMatE,
-      nu: newMatNu,
-      G: G,
-      alpha: newMatAlpha,
-      density: newMatDensity,
-      fd: newMatFd,
-    };
-    setMaterials((prev) => [...prev, mat]);
+    if (editingMatId !== null) {
+      setMaterials((prev) =>
+        prev.map((mat) =>
+          mat.id === editingMatId
+            ? {
+                ...mat,
+                name: newMatName.trim() || mat.name,
+                E: newMatE,
+                nu: newMatNu,
+                G: G,
+                alpha: newMatAlpha,
+                density: newMatDensity,
+                fd: newMatFd,
+              }
+            : mat
+        )
+      );
+      setEditingMatId(null);
+      backupMaterialRef.current = null;
+    } else {
+      const nextId = materials.length > 0 ? Math.max(...materials.map((m) => m.id)) + 1 : 1;
+      const mat: Material = {
+        id: nextId,
+        name: newMatName.trim() || 'Materiał',
+        E: newMatE,
+        nu: newMatNu,
+        G: G,
+        alpha: newMatAlpha,
+        density: newMatDensity,
+        fd: newMatFd,
+      };
+      setMaterials((prev) => [...prev, mat]);
+    }
     setAddMatFormOpen(false);
+    onInvalidateResults();
   };
 
   // Helper to compute section properties based on current form states
@@ -2445,9 +2508,86 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
-  // Add Section
+  // Live update the section in the 3D model visualization while editing in the form
+  useEffect(() => {
+    if (editingSecId !== null && addSecFormOpen) {
+      const props = getTempSectionProps();
+      let autoName = newSecName;
+      if (!autoName || autoName === 'Nowy przekrój' || autoName.trim() === '') {
+        if (newSecCategory === 'katalog') {
+          const def = CATALOG_DEFS[newSecCatType];
+          const data = def?.data[newSecCatSizeIdx] || def?.data[0];
+          autoName = data?.name || 'Przekrój katalogowy';
+        }
+      }
+      setSections((prev) =>
+        prev.map((sec) =>
+          sec.id === editingSecId
+            ? {
+                ...sec,
+                name: autoName || sec.name,
+                ...props,
+              }
+            : sec
+        )
+      );
+    }
+  }, [
+    editingSecId,
+    addSecFormOpen,
+    newSecName,
+    newSecCategory,
+    newSecCatType,
+    newSecCatSizeIdx,
+    newSecShape,
+    newSecB,
+    newSecH,
+    newSecD,
+    newSecT,
+    newSecTf,
+    newSecTw,
+    newSecA,
+    newSecIy,
+    newSecIz,
+    newSecIt,
+    newSecCTopY,
+    newSecCBotY,
+    newSecCTopZ,
+    newSecCBotZ,
+  ]);
+
+  // Live update the material while editing in the form
+  useEffect(() => {
+    if (editingMatId !== null && addMatFormOpen) {
+      const G = newMatE / (2 * (1 + (newMatNu || 0.3)));
+      setMaterials((prev) =>
+        prev.map((mat) =>
+          mat.id === editingMatId
+            ? {
+                ...mat,
+                E: newMatE,
+                nu: newMatNu,
+                G: G,
+                alpha: newMatAlpha,
+                density: newMatDensity,
+                fd: newMatFd,
+              }
+            : mat
+        )
+      );
+    }
+  }, [
+    editingMatId,
+    addMatFormOpen,
+    newMatE,
+    newMatNu,
+    newMatAlpha,
+    newMatDensity,
+    newMatFd,
+  ]);
+
+  // Add or Edit Section
   const handleAddSection = () => {
-    const nextId = sections.length > 0 ? Math.max(...sections.map((s) => s.id)) + 1 : 1;
     const props = getTempSectionProps();
 
     let finalName = newSecName;
@@ -2472,14 +2612,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }
     }
 
-    const sec: Section = {
-      id: nextId,
-      name: finalName,
-      ...props,
-    };
+    if (editingSecId !== null) {
+      setSections((prev) =>
+        prev.map((sec) =>
+          sec.id === editingSecId
+            ? {
+                ...sec,
+                name: finalName,
+                ...props,
+              }
+            : sec
+        )
+      );
+      setEditingSecId(null);
+      backupSectionRef.current = null;
+    } else {
+      const nextId = sections.length > 0 ? Math.max(...sections.map((s) => s.id)) + 1 : 1;
+      const sec: Section = {
+        id: nextId,
+        name: finalName,
+        ...props,
+      };
+      setSections((prev) => [...prev, sec]);
+    }
 
-    setSections((prev) => [...prev, sec]);
     setAddSecFormOpen(false);
+    onInvalidateResults();
   };
 
   const singleNode = selectedNodes.length === 1 ? selectedNodes[0] : null;
@@ -2683,7 +2841,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           Wybrane węzły:
                         </span>
                         <button
-                          className="mini"
+                          className="mini danger"
                           onClick={() => setPanelPoints?.([])}
                           title="Zresetuj wybrane punkty"
                         >
@@ -2858,7 +3016,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     </div>
                     <button
                       type="button"
-                      className="mini"
+                      className="mini danger"
                       style={{ flex: '0 0 auto', padding: '4px 8px', height: '27px', fontSize: '11px', whiteSpace: 'nowrap' }}
                       onClick={() => setGridOffset?.(0)}
                       title="Ustaw położenie na 0.00 m"
@@ -2882,20 +3040,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </div>
 
                   {/* Wskazówka bez prefiksu */}
-                  <div
-                    className="card"
-                    style={{
-                      background: 'var(--surface)',
-                      padding: '0px',
-                      marginTop: '6px',
-                      marginBottom: '10px',
-                      fontSize: '11px',
-                      color: '#5c6b7a',
-                      lineHeight: 1.4,
-                      border: 'none',
-                      borderRadius: '0px',
-                    }}
-                  >
+                <div className="muted" style={{ marginBottom: '10px'}}>
                     Wybierz płaszczyznę i poziom odniesienia do tworzenia oraz przyciągania węzłów i prętów.
                   </div>
 
@@ -3027,7 +3172,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <div className="group-body">
               <div className="panel">
-                <div className="muted" style={{ marginBottom: '10px', fontSize: '11.5px', lineHeight: '1.45' }}>
+                <div className="muted" style={{ marginBottom: '10px'}}>
                   Wskaż aktywną oś, wpisz współrzędne i kliknij <strong>Dodaj</strong>, lub klikaj bezpośrednio na modelu 3D.
                 </div>
 
@@ -3077,7 +3222,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </button>
                   <button
                     type="button"
-                    className="mini"
+                    className="mini danger"
                     style={{ flex: 1, padding: '5px 8px', fontSize: '11.5px' }}
                     onClick={handleClearCoordinates}
                   >
@@ -3376,10 +3521,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     display: 'flex',
                     flexDirection: 'column',
                     gap: '8px',
-                    padding: '8px 10px',
-                    background: 'var(--panel-gutter)',
-                    borderRadius: '6px',
-                    border: '1px solid var(--surface-border)',
                     marginBottom: '10px',
                   }}
                 >
@@ -3426,16 +3567,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 {/* HELP CARD */}
                 <div
                   className="muted"
-                  style={{
-                    background: 'var(--panel-gutter)',
-                    borderRadius: '6px',
-                    padding: '8px 10px',
-                    fontSize: '11px',
-                    border: '1px dashed var(--surface-border)',
-                    lineHeight: '1.4',
-                  }}
+
                 >
-                  <strong>Wskazówka:</strong> Siatka jest automatycznie rysowana, gdy co najmniej dwie osie mają zdefiniowane współrzędne. Kliknij wartość w kolumnie, aby zaznaczyć i usunąć przyciskiem <em>Usuń</em>.
+                  Siatka jest automatycznie rysowana, gdy co najmniej dwie osie mają zdefiniowane współrzędne. Kliknij wartość w kolumnie, aby zaznaczyć i usunąć przyciskiem <em>Usuń</em>.
                 </div>
               </div>
             </div>
@@ -4084,7 +4218,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               marginTop: '6px',
                               padding: '6px 8px',
                               borderRadius: '4px',
-                              background: 'var(--surface-sunken)',
+                              background: 'var(--surface)',
                               fontSize: '10.5px',
                               lineHeight: '1.4',
                               border: '1px solid var(--surface-border-soft)',
@@ -4149,7 +4283,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               marginTop: '6px',
                               padding: '6px 8px',
                               borderRadius: '4px',
-                              background: 'var(--surface-sunken)',
+                              background: 'var(--surface)',
                               fontSize: '10.5px',
                               lineHeight: '1.4',
                               border: '1px solid var(--surface-border-soft)',
@@ -4607,8 +4741,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             {hasNodeForce && (
                               <button
                                 type="button"
-                                className="mini"
-                                style={{ fontSize: '10px', padding: '2px 6px', color: 'var(--danger)' }}
+                                className="mini danger"
+                                style={{ fontSize: '10px', padding: '2px 6px' }}
                                 onClick={clearNodeForces}
                                 title="Wyczyść siły skupione z zaznaczonych węzłów"
                               >
@@ -4698,8 +4832,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             {hasNodeMoment && (
                               <button
                                 type="button"
-                                className="mini"
-                                style={{ fontSize: '10px', padding: '2px 6px', color: 'var(--danger)' }}
+                                className="mini danger"
+                                style={{ fontSize: '10px', padding: '2px 6px' }}
                                 onClick={clearNodeMoments}
                                 title="Wyczyść momenty skupione z zaznaczonych węzłów"
                               >
@@ -4785,12 +4919,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       return (
                         <div className="panel">
                           <div className="row" style={{ justifyContent: 'space-between', marginBottom: '8px' }}>
-                            <h3 style={{ margin: 0 }}>Masa skupiona w węźle</h3>
+                            <h3 style={{ margin: 0 }}>Masa skupiona</h3>
                             {hasNodeMass && (
                               <button
                                 type="button"
-                                className="mini"
-                                style={{ fontSize: '10px', padding: '2px 6px', color: 'var(--danger)' }}
+                                className="mini danger"
+                                style={{ fontSize: '10px', padding: '2px 6px' }}
                                 onClick={clearNodeMass}
                                 title="Wyczyść masę skupioną z zaznaczonych węzłów"
                               >
@@ -5005,7 +5139,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             </select>
                           </div>
                           <div className="row">
-                            <label style={{ flexShrink: 0 }}>Obrót osi β</label>
+                            <label style={{ flexShrink: 0 }}>Obrót osi</label>
                             <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flex: 1, minWidth: 0, flexWrap: 'nowrap' }}>
                               <div className="inp-unit" style={{ flex: '1 1 0px', minWidth: 0, width: 0, overflow: 'hidden' }}>
                                 <SmartNumberInput
@@ -5122,8 +5256,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 {hasContinuousLoad && (
                                   <button
                                     type="button"
-                                    className="mini"
-                                    style={{ fontSize: '10px', padding: '2px 6px', color: 'var(--danger)' }}
+                                    className="mini danger"
+                                    style={{ fontSize: '10px', padding: '2px 6px' }}
                                     onClick={clearContinuousLoad}
                                     title="Wyczyść obciążenie ciągłe z zaznaczonych prętów"
                                   >
@@ -5157,7 +5291,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                     onInvalidateResults();
                                   }}
                                 >
-                                  Globalny (XYZ)
+                                  Globalny
                                 </button>
                                 <button
                                   type="button"
@@ -5186,7 +5320,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                     onInvalidateResults();
                                   }}
                                 >
-                                  Lokalny (xyz)
+                                  Lokalny
                                 </button>
                               </div>
                             </div>
@@ -5301,8 +5435,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               {hasThermal && (
                                 <button
                                   type="button"
-                                  className="mini"
-                                  style={{ fontSize: '10px', padding: '2px 6px', color: 'var(--danger)' }}
+                                  className="mini danger"
+                                  style={{ fontSize: '10px', padding: '2px 6px'}}
                                   onClick={clearThermal}
                                   title="Wyczyść obciążenie termiczne z zaznaczonych prętów"
                                 >
@@ -5473,7 +5607,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           {/* Tabela / Grid 6 swobód dla węzła W1 i W2 */}
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                             {/* POCZĄTEK W1 */}
-                            <div style={{ background: 'var(--panel-gutter)', padding: '6px', borderRadius: '6px', border: '1px solid var(--surface-border)' }}>
+                            <div style={{ background: 'var(--panel)', padding: '6px', borderRadius: '6px', border: '1px solid var(--surface-border)' }}>
                               <div style={{ fontWeight: 600, fontSize: '11px', marginBottom: '6px', color: 'var(--text)' }}>
                                 Początek {singleElem ? `(W${singleElem.n1})` : ''}
                               </div>
@@ -5560,7 +5694,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             </div>
 
                             {/* KONIEC W2 */}
-                            <div style={{ background: 'var(--panel-gutter)', padding: '6px', borderRadius: '6px', border: '1px solid var(--surface-border)' }}>
+                            <div style={{ background: 'var(--panel)', padding: '6px', borderRadius: '6px', border: '1px solid var(--surface-border)' }}>
                               <div style={{ fontWeight: 600, fontSize: '11px', marginBottom: '6px', color: 'var(--text)' }}>
                                 Koniec {singleElem ? `(W${singleElem.n2})` : ''}
                               </div>
@@ -5800,8 +5934,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               {hasPressure && (
                                 <button
                                   type="button"
-                                  className="mini"
-                                  style={{ fontSize: '10px', padding: '2px 6px', color: 'var(--danger)' }}
+                                  className="mini danger"
+                                  style={{ fontSize: '10px', padding: '2px 6px' }}
                                   onClick={clearPressure}
                                   title="Wyczyść obciążenie powierzchniowe z zaznaczonych okładzin"
                                 >
@@ -5921,6 +6055,155 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
               ) : (
                 <>
+                  {/* WYBÓR WIDOKU WYNIKÓW (PRZYPADEK / KOMBINACJA / OBWIEDNIA) */}
+                  {multiSolved && (solved.type === 'linear_static' || solved.type === 'stability') && (() => {
+                    const resultKeysList: string[] = [];
+                    if (multiSolved) {
+                      resultKeysList.push(...Object.keys(multiSolved.envelopes || {}));
+                      resultKeysList.push(...Object.keys(multiSolved.cases || {}).map((idStr) => `case_${idStr}`));
+                      resultKeysList.push(
+                        ...Object.values(multiSolved.combinations || {})
+                          .filter((c: any) => c.comb.type === 'SGN')
+                          .map((c: any) => c.comb.id)
+                      );
+                      resultKeysList.push(
+                        ...Object.values(multiSolved.combinations || {})
+                          .filter((c: any) => c.comb.type !== 'SGN')
+                          .map((c: any) => c.comb.id)
+                      );
+                    }
+                    const currResIndex = resultKeysList.indexOf(activeResultKey || '');
+
+                    return (
+                      <div className="panel" style={{ borderLeft: '3px solid var(--accent, #2563eb)' }}>
+
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '4px' }}>
+                          <select
+                            value={activeResultKey || ''}
+                            onChange={(e) => onSelectResultKey?.(e.target.value)}
+                            style={{ flex: 1, fontWeight: 600 }}
+                          >
+                            {/* Envelopes */}
+                            {Object.keys(multiSolved.envelopes).length > 0 && (
+                              <optgroup label={solved.type === 'stability' ? 'Obwiednia SGN (Najbardziej krytyczna stateczność)' : 'Obwiednie (Wartości ekstremalne)'}>
+                                {Object.entries(multiSolved.envelopes).map(([key, env]: [string, any]) => (
+                                  <option key={key} value={key}>
+                                    {solved.type === 'stability' ? 'Najbardziej krytyczna kombinacja SGN (min α<sub>cr</sub>)' : env.name}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+
+                            {/* Base Cases */}
+                            <optgroup label="Przypadki obciążeń podstawowe">
+                              {Object.entries(multiSolved.cases).map(([idStr, c]: [string, any]) => (
+                                <option key={`case_${idStr}`} value={`case_${idStr}`}>
+                                  Przypadek {idStr}: {c.loadCase.name} ({getNatureLabel(c.loadCase.nature)})
+                                </option>
+                              ))}
+                            </optgroup>
+
+                            {/* SGN Combinations */}
+                            {Object.values(multiSolved.combinations).filter((c: any) => c.comb.type === 'SGN').length > 0 && (
+                              <optgroup label="Kombinacje SGN (Nośność)">
+                                {Object.values(multiSolved.combinations)
+                                  .filter((c: any) => c.comb.type === 'SGN')
+                                  .map((c: any) => (
+                                    <option key={c.comb.id} value={c.comb.id}>
+                                      {c.comb.name}
+                                    </option>
+                                  ))}
+                              </optgroup>
+                            )}
+
+                            {/* SGU Combinations */}
+                            {Object.values(multiSolved.combinations).filter((c: any) => c.comb.type !== 'SGN').length > 0 && (
+                              <optgroup label="Kombinacje SGU (Użytkowalność)">
+                                {Object.values(multiSolved.combinations)
+                                  .filter((c: any) => c.comb.type !== 'SGN')
+                                  .map((c: any) => (
+                                    <option key={c.comb.id} value={c.comb.id}>
+                                      {c.comb.name}
+                                    </option>
+                                  ))}
+                              </optgroup>
+                            )}
+                          </select>
+                          <button
+                            className="mini"
+                            disabled={currResIndex <= 0}
+                            onClick={() => {
+                              if (currResIndex > 0) {
+                                onSelectResultKey?.(resultKeysList[currResIndex - 1]);
+                              }
+                            }}
+                            title="Poprzedni widok wyników"
+                            style={{
+                              minWidth: '36px',
+                              height: '30px',
+                              padding: '0 10px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontWeight: 700,
+                              fontSize: '13px',
+                              flex: '0 0 auto',
+                            }}
+                          >
+                            &lt;
+                          </button>
+                          <button
+                            className="mini"
+                            disabled={currResIndex < 0 || currResIndex >= resultKeysList.length - 1}
+                            onClick={() => {
+                              if (currResIndex >= 0 && currResIndex < resultKeysList.length - 1) {
+                                onSelectResultKey?.(resultKeysList[currResIndex + 1]);
+                              }
+                            }}
+                            title="Następny widok wyników"
+                            style={{
+                              minWidth: '36px',
+                              height: '30px',
+                              padding: '0 10px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontWeight: 700,
+                              fontSize: '13px',
+                              flex: '0 0 auto',
+                            }}
+                          >
+                            &gt;
+                          </button>
+                        </div>
+
+                        {/* Brief description */}
+                        <div className="muted" style={{ fontSize: '11px', lineHeight: 1.3, marginTop: '4px' }}>
+                          {activeResultKey && multiSolved.envelopes[activeResultKey] && (
+                            <>
+                              {solved.type === 'stability'
+                                ? 'Wyświetla krytyczną formę utraty stateczności (najniższy mnożnik α<sub>cr</sub>) wyznaczoną z kombinacji SGN.'
+                                : 'Wyświetla wartości ekstremalne (obwiednię) wyznaczone z kombinacji normowych Eurokodu.'}
+                            </>
+                          )}
+                          {activeResultKey && multiSolved.combinations[activeResultKey] && (
+                            <>
+                              {multiSolved.combinations[activeResultKey].comb.description}
+                              {solved.type === 'stability' && ' (Analiza stateczności dla tej kombinacji)'}
+                            </>
+                          )}
+                          {activeResultKey && activeResultKey.startsWith('case_') && (
+                            <>
+                              {solved.type === 'stability'
+                                ? 'Wyniki analizy stateczności (α<sub>cr</sub> i formy wyboczenia) dla wybranego przypadku obciążenia.'
+                                : 'Wyniki obliczeń dla pojedynczego przypadku obciążenia.'}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {/* REAKCJE PODPOROWE */}
                   {solved.type === 'linear_static' && (
                     <div className="panel">
@@ -5929,7 +6212,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         onClick={() => setReactionsCollapsed(!reactionsCollapsed)}
                         style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                       >
-                        <span>Reakcje podporowe <span className="tag">rozwiązano</span></span>
+                        <span>Reakcje podporowe</span>
                         <span className="subtle-icon">{reactionsCollapsed ? '▸' : '▾'}</span>
                       </h3>
                       {!reactionsCollapsed && (
@@ -5978,14 +6261,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         onClick={() => setStabilityCollapsed(!stabilityCollapsed)}
                         style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                       >
-                        <span>Stateczność <span className="tag">α_cr</span></span>
+                        <span>Stateczność</span>
                         <span className="subtle-icon">{stabilityCollapsed ? '▸' : '▾'}</span>
                       </h3>
                       {!stabilityCollapsed && (
                         solved.modes.length === 0 ? (
                           <div className="warn">
                             {solved.noCompression
-                              ? 'Brak ściskanych elementów w konstrukcji (α_cr = ∞).'
+                              ? 'Brak ściskanych elementów w konstrukcji (α<sub>cr</sub> = ∞).'
                               : 'Nie wyznaczono form wyboczenia (osobliwość układu).'}
                           </div>
                         ) : (
@@ -5994,8 +6277,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               <thead>
                                 <tr>
                                   <th>Forma</th>
-                                  <th>α_cr</th>
-                                  <th>N_cr [kN]</th>
+                                  <th>α<sub>cr</sub></th>
+                                  <th>N<sub>cr</sub> [kN]</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -6032,7 +6315,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         onClick={() => setModalCollapsed(!modalCollapsed)}
                         style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                       >
-                        <span>Drgania własne <span className="tag">modalna</span></span>
+                        <span>Drgania własne</span>
                         <span className="subtle-icon">{modalCollapsed ? '▸' : '▾'}</span>
                       </h3>
                       {!modalCollapsed && (
@@ -6214,6 +6497,77 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             </span>
                           </div>
                         )}
+
+                        <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px solid var(--surface-border-soft)' }}>
+                          <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-dim)', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                            Wartości na wykresach
+                          </div>
+                          <div style={{ display: 'flex', width: '100%', gap: '4px', background: 'var(--input-bg)', padding: '3px', borderRadius: '7px', border: '1px solid var(--input-border)' }}>
+                            <button
+                              type="button"
+                              title="Ukryj etykiety wartości na wykresach sił i ugięciach"
+                              style={{
+                                flex: 1,
+                                padding: '5px 0',
+                                fontSize: '11.5px',
+                                fontWeight: diagramLabelMode === 'none' ? 600 : 400,
+                                textAlign: 'center',
+                                borderRadius: '5px',
+                                border: diagramLabelMode === 'none' ? '1px solid var(--accent)' : '1px solid transparent',
+                                background: diagramLabelMode === 'none' ? 'var(--surface)' : 'transparent',
+                                color: diagramLabelMode === 'none' ? 'var(--accent)' : 'var(--text-dim)',
+                                cursor: 'pointer',
+                                boxShadow: diagramLabelMode === 'none' ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+                                transition: 'all 0.15s ease',
+                              }}
+                              onClick={() => setDiagramLabelMode?.('none')}
+                            >
+                              brak
+                            </button>
+                            <button
+                              type="button"
+                              title="Pokaż tylko wartości minimalne i maksymalne (ekstrema globalne / wypadkowe)"
+                              style={{
+                                flex: 1,
+                                padding: '5px 0',
+                                fontSize: '11.5px',
+                                fontWeight: diagramLabelMode === 'minmax' ? 600 : 400,
+                                textAlign: 'center',
+                                borderRadius: '5px',
+                                border: diagramLabelMode === 'minmax' ? '1px solid var(--accent)' : '1px solid transparent',
+                                background: diagramLabelMode === 'minmax' ? 'var(--surface)' : 'transparent',
+                                color: diagramLabelMode === 'minmax' ? 'var(--accent)' : 'var(--text-dim)',
+                                cursor: 'pointer',
+                                boxShadow: diagramLabelMode === 'minmax' ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+                                transition: 'all 0.15s ease',
+                              }}
+                              onClick={() => setDiagramLabelMode?.('minmax')}
+                            >
+                              min/max
+                            </button>
+                            <button
+                              type="button"
+                              title="Pokaż wszystkie etykiety wartości na końcach prętów i w punktach szczytowych"
+                              style={{
+                                flex: 1,
+                                padding: '5px 0',
+                                fontSize: '11.5px',
+                                fontWeight: diagramLabelMode === 'all' ? 600 : 400,
+                                textAlign: 'center',
+                                borderRadius: '5px',
+                                border: diagramLabelMode === 'all' ? '1px solid var(--accent)' : '1px solid transparent',
+                                background: diagramLabelMode === 'all' ? 'var(--surface)' : 'transparent',
+                                color: diagramLabelMode === 'all' ? 'var(--accent)' : 'var(--text-dim)',
+                                cursor: 'pointer',
+                                boxShadow: diagramLabelMode === 'all' ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+                                transition: 'all 0.15s ease',
+                              }}
+                              onClick={() => setDiagramLabelMode?.('all')}
+                            >
+                              wszystkie
+                            </button>
+                          </div>
+                        </div>
                       </>
                     )}
                   </div>
@@ -6225,7 +6579,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       onClick={() => setProbeCollapsed(!probeCollapsed)}
                       style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                     >
-                      <span>Sonda wyników <span className="tag">dokładny odczyt</span></span>
+                      <span>Sonda wyników</span>
                       <span className="subtle-icon">{probeCollapsed ? '▸' : '▾'}</span>
                     </h3>
                     {!probeCollapsed && (
@@ -6410,7 +6764,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                     <tr>
                                       <td>
                                         <span className="swatch" style={{ background: 'var(--s-color)' }}></span>
-                                        <strong>σ_max</strong> <span className="muted">naprężenie</span>
+                                        <strong>σ<sub>max</sub></strong> <span className="muted">naprężenie</span>
                                       </td>
                                       <td>{fmtSmart((pt.sigMax || 0) / 1000, 2)}</td>
                                       <td className="muted">MPa</td>
@@ -6551,7 +6905,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           onClick={() => setUtilizationCollapsed(!utilizationCollapsed)}
                           style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                         >
-                          <span>Wykorzystanie przekrojów <span className="tag">wytrzymałość</span></span>
+                          <span>Wykorzystanie przekrojów</span>
                           <span className="subtle-icon">{utilizationCollapsed ? '▸' : '▾'}</span>
                         </h3>
                         {!utilizationCollapsed && (
@@ -6561,8 +6915,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 <tr>
                                   <th>Grupa</th>
                                   <th>Pręt kryt.</th>
-                                  <th>σ_max [MPa]</th>
-                                  <th>f_d [MPa]</th>
+                                  <th>σ<sub>max</sub> [MPa]</th>
+                                  <th>f<sub>d</sub> [MPa]</th>
                                   <th>Wykorzystanie</th>
                                 </tr>
                               </thead>
@@ -6640,6 +6994,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </>
               )}
 
+              {/* PRZYPADKI OBCIĄŻEŃ I KOMBINACJE (EUROKOD) */}
+              {loadCases && onSelectLoadCase && onAddLoadCase && onUpdateLoadCase && onDeleteLoadCase && (
+                <LoadCasesPanel
+                  loadCases={loadCases}
+                  activeLoadCaseId={activeLoadCaseId}
+                  onSelectLoadCase={onSelectLoadCase}
+                  onAddLoadCase={onAddLoadCase}
+                  onUpdateLoadCase={onUpdateLoadCase}
+                  onDeleteLoadCase={onDeleteLoadCase}
+                  autoCombinations={autoCombinations}
+                  setAutoCombinations={setAutoCombinations || (() => {})}
+                  customCombinations={customCombinations}
+                  onInvalidateResults={onInvalidateResults}
+                />
+              )}
+
               {/* RODZAJ ANALIZY */}
               <div className="panel">
                 <h3
@@ -6699,7 +7069,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           />
                         </div>
                         <div className="muted" style={{ marginTop: '6px', lineHeight: 1.4 }}>
-                          Analiza stateczności: wyznacza mnożniki obciążenia krytycznego α_cr i formy wyboczenia.
+                          Analiza stateczności: wyznacza mnożniki obciążenia krytycznego α<sub>cr</sub> i formy wyboczenia.
                         </div>
                       </div>
                     )}
@@ -6741,6 +7111,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           />{' '}
                           Uwzględnij masę prętów
                         </div>
+                          <div className="muted" style={{ marginTop: '6px', lineHeight: 1.4 }}>
+                          Analiza dynamiczna: wyznacza częstości drgań własnych i formy drgań własnych.
+                        </div>
                       </div>
                     )}
                   </div>
@@ -6770,23 +7143,52 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   Materiały <span className="tag">{materials.length}</span>
                 </h3>
                 {materials.map((m) => (
-                  <div key={m.id} className="listitem">
-                    <span>
-                      {m.name}
+                  <div key={m.id} className="listitem" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ minWidth: 0, flex: 1, paddingRight: '8px' }}>
+                      <strong style={{ color: 'var(--text)' }}>{m.name}</strong>
                       <br />
                       <span className="muted">
-                        E={m.E} GPa, ν={m.nu ?? 0.3}, ρ={m.density || 0} kg/m³, f_d={m.fd !== undefined ? m.fd : 235} MPa
+                        E={m.E} GPa, ν={m.nu ?? 0.3}, ρ={m.density || 0} kg/m³, f<sub>d</sub>={m.fd !== undefined ? m.fd : 235} MPa
                       </span>
                     </span>
-                    {materials.length > 1 && (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
                       <span
                         className="del"
-                        onClick={() => setMaterials((prev) => prev.filter((item) => item.id !== m.id))}
-                        title="Usuń materiał"
+                        style={{ color: 'var(--text-dim)', cursor: 'pointer' }}
+                        onClick={() => {
+                          backupMaterialRef.current = { ...m };
+                          setEditingMatId(m.id);
+                          setNewMatName(m.name);
+                          setNewMatE(m.E);
+                          setNewMatNu(m.nu ?? 0.3);
+                          setNewMatAlpha(m.alpha ?? 1.2);
+                          setNewMatDensity(m.density ?? 7850);
+                          setNewMatFd(m.fd !== undefined ? m.fd : 235);
+                          setAddMatFormOpen(true);
+                        }}
+                        title="Edytuj materiał"
                       >
-                        ✕
+                        ✎
                       </span>
-                    )}
+                      {materials.length > 1 && (
+                        <span
+                          className="del"
+                          onClick={() => {
+                            const remaining = materials.filter((item) => item.id !== m.id);
+                            setMaterials(remaining);
+                            if (remaining.length > 0) {
+                              setElements((prev) =>
+                                prev.map((el) => (el.materialId === m.id ? { ...el, materialId: remaining[0].id } : el))
+                              );
+                            }
+                            onInvalidateResults();
+                          }}
+                          title="Usuń materiał"
+                        >
+                          ✕
+                        </span>
+                      )}
+                    </span>
                   </div>
                 ))}
 
@@ -6799,6 +7201,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       borderColor: 'var(--input-border)',
                     }}
                   >
+                    <div style={{ fontWeight: 600, fontSize: '12px', marginBottom: '8px', color: 'var(--text)' }}>
+                      {editingMatId ? 'Edycja materiału' : 'Nowy materiał'}
+                    </div>
                     <div className="row">
                       <label>Nazwa</label>
                       <input
@@ -6832,7 +7237,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       </div>
                     </div>
                     <div className="row">
-                      <label>Wytrzymałość f_d</label>
+                      <label>Wytrzymałość f<sub>d</sub></label>
                       <SmartNumberInput
                         step="10"
                         value={newMatFd}
@@ -6851,16 +7256,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     </div>
                     <div className="btnrow" style={{ marginTop: '8px' }}>
                       <button className="mini on" onClick={handleAddMaterial}>
-                        Dodaj
+                        {editingMatId ? 'Zapisz' : 'Dodaj'}
                       </button>
-                      <button className="mini" onClick={() => setAddMatFormOpen(false)}>
+                      <button
+                        className="mini"
+                        onClick={() => {
+                          if (editingMatId !== null && backupMaterialRef.current) {
+                            const orig = backupMaterialRef.current;
+                            setMaterials((prev) => prev.map((mat) => (mat.id === orig.id ? orig : mat)));
+                          }
+                          setAddMatFormOpen(false);
+                          setEditingMatId(null);
+                          backupMaterialRef.current = null;
+                        }}
+                      >
                         Anuluj
                       </button>
                     </div>
                   </div>
                 ) : (
                   <div className="btnrow">
-                    <button className="mini" onClick={() => setAddMatFormOpen(true)}>
+                    <button
+                      className="mini"
+                      onClick={() => {
+                        setNewMatName(`Materiał ${materials.length + 1}`);
+                        setNewMatE(210);
+                        setNewMatNu(0.3);
+                        setNewMatAlpha(1.2);
+                        setNewMatDensity(7850);
+                        setNewMatFd(235);
+                        setEditingMatId(null);
+                        setAddMatFormOpen(true);
+                      }}
+                    >
                       + Dodaj materiał
                     </button>
                   </div>
@@ -6873,23 +7301,104 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   Przekroje <span className="tag">{sections.length}</span>
                 </h3>
                 {sections.map((s) => (
-                  <div key={s.id} className="listitem">
-                    <span>
-                      {s.name}
+                  <div key={s.id} className="listitem" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ minWidth: 0, flex: 1, paddingRight: '8px' }}>
+                      <strong style={{ color: 'var(--text)' }}>{s.name}</strong>
                       <br />
                       <span className="muted">
                         A={fmtSmart(s.A)} cm², Iy={fmtSmart(s.Iy)} cm⁴, Iz={fmtSmart(s.Iz)} cm⁴
                       </span>
                     </span>
-                    {sections.length > 1 && (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
                       <span
                         className="del"
-                        onClick={() => setSections((prev) => prev.filter((item) => item.id !== s.id))}
-                        title="Usuń przekrój"
+                        style={{ color: 'var(--text-dim)', cursor: 'pointer' }}
+                        onClick={() => {
+                          backupSectionRef.current = { ...s };
+                          setEditingSecId(s.id);
+                          setNewSecName(s.name);
+                          if (s.category === 'katalog' || (s.shape && s.shape.startsWith('cat'))) {
+                            setNewSecCategory('katalog');
+                            let catKey = s.shape ? s.shape.replace('cat', '') : '';
+                            if (!CATALOG_DEFS[catKey]) {
+                              for (const k of CATALOG_ORDER) {
+                                if (s.name && (s.name.startsWith(k + ' ') || s.name === k)) {
+                                  catKey = k;
+                                  break;
+                                }
+                              }
+                            }
+                            if (!CATALOG_DEFS[catKey]) {
+                              catKey = 'IPE';
+                            }
+                            setNewSecCatType(catKey);
+                            let idx = -1;
+                            const def = CATALOG_DEFS[catKey];
+                            if (def) {
+                              // Prioritize finding by actual physical dimensions & area
+                              if (s.h != null && s.b != null) {
+                                idx = def.data.findIndex(
+                                  (item) => Math.abs(item.h - s.h) < 0.05 && Math.abs(item.b - s.b) < 0.05 && (s.A == null || Math.abs(item.A - s.A) < 0.5)
+                                );
+                                if (idx < 0) {
+                                  idx = def.data.findIndex(
+                                    (item) => Math.abs(item.h - s.h) < 0.1 && Math.abs(item.b - s.b) < 0.1
+                                  );
+                                }
+                              }
+                              // Fallback to matching by profile name if dimensions didn't match
+                              if (idx < 0) {
+                                idx = def.data.findIndex((item) => item.name === s.name);
+                              }
+                              setNewSecCatSizeIdx(idx >= 0 ? idx : 0);
+                            } else {
+                              setNewSecCatSizeIdx(0);
+                            }
+                          } else if (s.category === 'ksztalt' || ['rect', 'circ', 'pipe', 'box', 'ibeam', 'tee', 'angle'].includes(s.shape)) {
+                            setNewSecCategory('ksztalt');
+                            setNewSecShape((s.shape as any) || 'rect');
+                            setNewSecB(s.b || 20);
+                            setNewSecH(s.h || 40);
+                            setNewSecD(s.h || 30);
+                            setNewSecT(s.t || 1);
+                            setNewSecTf(s.tf || 1.2);
+                            setNewSecTw(s.tw || 0.8);
+                          } else {
+                            setNewSecCategory('wlasny');
+                            setNewSecA(s.A);
+                            setNewSecIy(s.Iy);
+                            setNewSecIz(s.Iz);
+                            setNewSecIt(s.It || 500);
+                            setNewSecCTopY(s.cTopY ?? (s.h != null ? s.h / 2 : 10));
+                            setNewSecCBotY(s.cBotY ?? (s.h != null ? s.h / 2 : 10));
+                            setNewSecCTopZ(s.cTopZ ?? (s.b != null ? s.b / 2 : 10));
+                            setNewSecCBotZ(s.cBotZ ?? (s.b != null ? s.b / 2 : 10));
+                          }
+                          setAddSecFormOpen(true);
+                        }}
+                        title="Edytuj przekrój"
                       >
-                        ✕
+                        ✎
                       </span>
-                    )}
+                      {sections.length > 1 && (
+                        <span
+                          className="del"
+                          onClick={() => {
+                            const remaining = sections.filter((item) => item.id !== s.id);
+                            setSections(remaining);
+                            if (remaining.length > 0) {
+                              setElements((prev) =>
+                                prev.map((el) => (el.sectionId === s.id ? { ...el, sectionId: remaining[0].id } : el))
+                              );
+                            }
+                            onInvalidateResults();
+                          }}
+                          title="Usuń przekrój"
+                        >
+                          ✕
+                        </span>
+                      )}
+                    </span>
                   </div>
                 ))}
 
@@ -6903,6 +7412,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       padding: '12px',
                     }}
                   >
+                    <div style={{ fontWeight: 600, fontSize: '12px', marginBottom: '8px', color: 'var(--text)' }}>
+                      {editingSecId ? 'Edycja przekroju' : 'Nowy przekrój'}
+                    </div>
                     <div className="row">
                       <label>Nazwa (opcjonalnie)</label>
                       <input
@@ -6924,7 +7436,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           border: '1px solid var(--input-border)',
                           fontWeight: newSecCategory === 'katalog' ? '600' : 'normal',
                         }}
-                        onClick={() => setNewSecCategory('katalog')}
+                        onClick={() => {
+                          setNewSecCategory('katalog');
+                          const def = CATALOG_DEFS[newSecCatType];
+                          const item = def?.data[newSecCatSizeIdx] || def?.data[0];
+                          if (item) setNewSecName(item.name);
+                        }}
                       >
                         Katalog
                       </button>
@@ -6938,7 +7455,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           border: '1px solid var(--input-border)',
                           fontWeight: newSecCategory === 'ksztalt' ? '600' : 'normal',
                         }}
-                        onClick={() => setNewSecCategory('ksztalt')}
+                        onClick={() => {
+                          setNewSecCategory('ksztalt');
+                          const labels: Record<string, string> = {
+                            rect: `Prostokąt ${newSecB}×${newSecH}`,
+                            circ: `Okrągły Ø${newSecD}`,
+                            pipe: `Rura okrągła Ø${newSecD}×${newSecT}`,
+                            box: `Profil skrzynkowy ${newSecB}×${newSecH}×${newSecT}`,
+                            ibeam: `Dwuteownik ${newSecB}×${newSecH}`,
+                            tee: `Teownik ${newSecB}×${newSecH}`,
+                            angle: `Kątownik L ${newSecH}×${newSecH}×${newSecT}`,
+                          };
+                          if (labels[newSecShape]) setNewSecName(labels[newSecShape]);
+                        }}
                       >
                         Kształt
                       </button>
@@ -6952,7 +7481,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           border: '1px solid var(--input-border)',
                           fontWeight: newSecCategory === 'wlasny' ? '600' : 'normal',
                         }}
-                        onClick={() => setNewSecCategory('wlasny')}
+                        onClick={() => {
+                          setNewSecCategory('wlasny');
+                          if (!newSecName || newSecName === 'Nowy przekrój' || newSecName.startsWith('IPE') || newSecName.startsWith('HEA') || newSecName.startsWith('HEB')) {
+                            setNewSecName('Przekrój własny');
+                          }
+                        }}
                       >
                         Własny
                       </button>
@@ -6965,8 +7499,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           <select
                             value={newSecCatType}
                             onChange={(e) => {
-                              setNewSecCatType(e.target.value);
+                              const newType = e.target.value;
+                              setNewSecCatType(newType);
                               setNewSecCatSizeIdx(0);
+                              const def = CATALOG_DEFS[newType];
+                              const item = def?.data[0];
+                              if (item) {
+                                setNewSecName(item.name);
+                              }
                             }}
                           >
                             {CATALOG_ORDER.map((k) => (
@@ -6980,7 +7520,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           <label>Rozmiar</label>
                           <select
                             value={newSecCatSizeIdx}
-                            onChange={(e) => setNewSecCatSizeIdx(parseInt(e.target.value) || 0)}
+                            onChange={(e) => {
+                              const idx = parseInt(e.target.value) || 0;
+                              setNewSecCatSizeIdx(idx);
+                              const def = CATALOG_DEFS[newSecCatType];
+                              const item = def?.data[idx];
+                              if (item) {
+                                setNewSecName(item.name);
+                              }
+                            }}
                           >
                             {CATALOG_DEFS[newSecCatType]?.data.map((item, idx) => (
                               <option key={idx} value={idx}>
@@ -6998,7 +7546,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           <label>Typ kształtu</label>
                           <select
                             value={newSecShape}
-                            onChange={(e) => setNewSecShape(e.target.value as any)}
+                            onChange={(e) => {
+                              const shape = e.target.value as any;
+                              setNewSecShape(shape);
+                              const labels: Record<string, string> = {
+                                rect: `Prostokąt ${newSecB}×${newSecH}`,
+                                circ: `Okrągły Ø${newSecD}`,
+                                pipe: `Rura okrągła Ø${newSecD}×${newSecT}`,
+                                box: `Profil skrzynkowy ${newSecB}×${newSecH}×${newSecT}`,
+                                ibeam: `Dwuteownik ${newSecB}×${newSecH}`,
+                                tee: `Teownik ${newSecB}×${newSecH}`,
+                                angle: `Kątownik L ${newSecH}×${newSecH}×${newSecT}`,
+                              };
+                              if (labels[shape]) {
+                                setNewSecName(labels[shape]);
+                              }
+                            }}
                           >
                             <option value="rect">Prostokątny</option>
                             <option value="circ">Okrągły pełny</option>
@@ -7688,16 +8251,48 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                     <div className="btnrow" style={{ marginTop: '10px' }}>
                       <button className="mini on" onClick={handleAddSection}>
-                        Dodaj
+                        {editingSecId ? 'Zapisz' : 'Dodaj'}
                       </button>
-                      <button className="mini" onClick={() => setAddSecFormOpen(false)}>
+                      <button
+                        className="mini"
+                        onClick={() => {
+                          if (editingSecId !== null && backupSectionRef.current) {
+                            const orig = backupSectionRef.current;
+                            setSections((prev) => prev.map((sec) => (sec.id === orig.id ? orig : sec)));
+                          }
+                          setAddSecFormOpen(false);
+                          setEditingSecId(null);
+                          backupSectionRef.current = null;
+                        }}
+                      >
                         Anuluj
                       </button>
                     </div>
                   </div>
                 ) : (
                   <div className="btnrow">
-                    <button className="mini" onClick={() => setAddSecFormOpen(true)}>
+                    <button
+                      className="mini"
+                      onClick={() => {
+                        setNewSecName('Nowy przekrój');
+                        setNewSecCategory('katalog');
+                        setNewSecCatType('IPE');
+                        setNewSecCatSizeIdx(0);
+                        setNewSecShape('rect');
+                        setNewSecB(20);
+                        setNewSecH(40);
+                        setNewSecD(30);
+                        setNewSecT(1);
+                        setNewSecTf(1.2);
+                        setNewSecTw(0.8);
+                        setNewSecA(80);
+                        setNewSecIy(1000);
+                        setNewSecIz(1000);
+                        setNewSecIt(500);
+                        setEditingSecId(null);
+                        setAddSecFormOpen(true);
+                      }}
+                    >
                       + Dodaj przekrój
                     </button>
                   </div>
@@ -7796,7 +8391,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <div className="row">
                       <label>Profil</label>
                       <select
-                        style={{ flex: 1, minWidth: 0, padding: '2px 4px', fontSize: '11px' }}
                         value={newGroupSectionId ?? ''}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -7814,7 +8408,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <div className="row">
                       <label>Materiał</label>
                       <select
-                        style={{ flex: 1, minWidth: 0, padding: '2px 4px', fontSize: '11px' }}
                         value={newGroupMaterialId ?? ''}
                         onChange={(e) => {
                           const val = e.target.value;
