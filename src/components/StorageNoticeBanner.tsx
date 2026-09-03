@@ -30,6 +30,7 @@ export const StorageNoticeBanner: React.FC = () => {
 
   return (
     <div
+      className="storage-notice-banner"
       style={{
         position: 'fixed',
         bottom: '16px',
@@ -65,15 +66,17 @@ export const StorageNoticeBanner: React.FC = () => {
             transform: translate(-50%, 0);
           }
         }
-        @media (max-width: 520px) {
-          .storage-notice-wrap {
-            flex-direction: column;
-            align-items: flex-start !important;
-            gap: 10px !important;
+        @media (max-width: 600px) {
+          .storage-notice-banner {
+            flex-direction: column !important;
+            align-items: stretch !important;
+            gap: 12px !important;
+            padding: 14px !important;
           }
           .storage-notice-btn {
-            width: 100%;
-            justify-content: center;
+            width: 100% !important;
+            justify-content: center !important;
+            padding: 10px 18px !important;
           }
         }
       `}</style>
@@ -82,7 +85,7 @@ export const StorageNoticeBanner: React.FC = () => {
         className="storage-notice-wrap"
         style={{
           display: 'flex',
-          alignItems: 'center',
+          alignItems: 'flex-start',
           gap: '12px',
           flex: 1,
         }}
@@ -98,6 +101,7 @@ export const StorageNoticeBanner: React.FC = () => {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
+            marginTop: '1px',
           }}
         >
           <svg
