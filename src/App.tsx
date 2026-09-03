@@ -102,12 +102,20 @@ const TOGGLE_ICONS = {
       <path d="M2 9l2-3 2 3" />
     </svg>
   ),
+  hinges: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="12" r="3" />
+      <line x1="2" y1="12" x2="5" y2="12" />
+      <line x1="11" y1="12" x2="22" y2="12" />
+      <circle cx="2" cy="12" r="1" fill="currentColor" />
+    </svg>
+  ),
   hingeLabels: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="6" cy="14" r="3" />
-      <line x1="2" y1="14" x2="3" y2="14" />
-      <line x1="9" y1="14" x2="22" y2="14" />
-      <text x="11" y="9" fontSize="9" fontWeight="800" fill="currentColor" stroke="none" fontFamily="sans-serif">Ry</text>
+      <circle cx="8" cy="12" r="3" />
+      <line x1="2" y1="12" x2="5" y2="12" />
+      <line x1="11" y1="12" x2="22" y2="12" />
+      <circle cx="2" cy="12" r="1" fill="currentColor" />
     </svg>
   ),
   loads: (
@@ -160,6 +168,7 @@ interface UserPreferences {
   showPanels?: boolean;
   showProfileSketches?: boolean;
   showLocalAxes?: boolean;
+  showHinges?: boolean;
   showHingeLabels?: boolean;
   showLoads?: boolean;
   showLoadValues?: boolean;
@@ -203,12 +212,17 @@ function loadUserPreferences(): UserPreferences {
   return {};
 }
 
+let savePrefsTimeout: any = null;
+
 function saveUserPreferences(prefs: UserPreferences) {
-  try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
-  } catch (err) {
-    console.warn('Failed to save user preferences to localStorage', err);
-  }
+  if (savePrefsTimeout) clearTimeout(savePrefsTimeout);
+  savePrefsTimeout = setTimeout(() => {
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    } catch (err) {
+      console.warn('Failed to save user preferences to localStorage', err);
+    }
+  }, 400);
 }
 
 function isTextEditingElement(el: Element | null): boolean {
@@ -1682,7 +1696,7 @@ export default function App() {
   const [showPanels, setShowPanels] = useState<boolean>(initialPrefs.showPanels ?? true);
   const [showLoads, setShowLoads] = useState<boolean>(initialPrefs.showLoads ?? true);
   const [showLoadValues, setShowLoadValues] = useState<boolean>(initialPrefs.showLoadValues ?? true);
-  const [showHingeLabels, setShowHingeLabels] = useState<boolean>(initialPrefs.showHingeLabels ?? true);
+  const [showHinges, setShowHinges] = useState<boolean>(initialPrefs.showHinges ?? initialPrefs.showHingeLabels ?? true);
   const [showDimensions, setShowDimensions] = useState<boolean>(initialPrefs.showDimensions ?? false);
   const [gridPlane, setGridPlane] = useState<'XY' | 'XZ' | 'YZ'>('XY');
   const [gridOffset, setGridOffset] = useState<number>(0);
@@ -1802,11 +1816,13 @@ export default function App() {
     }
   }, [mode, splitFormOpen]);
 
-  // Auto-blur buttons on pointer/touch release so focus state does not remain stuck on overlay switches
+  // Auto-blur action buttons on pointer/touch release so focus state does not remain stuck on overlay switches
   useEffect(() => {
     const handleGlobalPointerUp = (e: PointerEvent | TouchEvent | MouseEvent) => {
       const target = e.target as HTMLElement | null;
-      const btn = target?.closest('button, select, [role="button"]') as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('select, input, textarea, option, optgroup')) return;
+      const btn = target.closest('button, [role="button"]') as HTMLElement | null;
       if (btn) {
         setTimeout(() => {
           try {
@@ -1892,7 +1908,8 @@ export default function App() {
       showPanels,
       showProfileSketches,
       showLocalAxes,
-      showHingeLabels,
+      showHinges,
+      showHingeLabels: showHinges,
       showLoads,
       showLoadValues,
       showDimensions,
@@ -1931,7 +1948,7 @@ export default function App() {
     showPanels,
     showProfileSketches,
     showLocalAxes,
-    showHingeLabels,
+    showHinges,
     showLoads,
     showLoadValues,
     showDimensions,
@@ -3131,7 +3148,8 @@ export default function App() {
       showProfileSketches,
       showLoads,
       showLoadValues,
-      showHingeLabels,
+      showHinges,
+      showHingeLabels: showHinges,
       showDimensions,
       showDeform,
       showMy,
@@ -3141,7 +3159,7 @@ export default function App() {
       showVz,
       showN,
       showStress,
-      showReactions,
+      showReactions: !!solved && showReactions,
       hideLoadsInResults,
       hideSupportsInResults,
       deformScaleMult,
@@ -3289,7 +3307,7 @@ export default function App() {
     showProfileSketches,
     showLoads,
     showLoadValues,
-    showHingeLabels,
+    showHinges,
     showDimensions,
     showDeform,
     showMy,
@@ -3394,7 +3412,8 @@ export default function App() {
       showProfileSketches,
       showLoads,
       showLoadValues,
-      showHingeLabels,
+      showHinges,
+      showHingeLabels: showHinges,
       showDimensions,
       showDeform,
       showMy,
@@ -3404,7 +3423,7 @@ export default function App() {
       showVz,
       showN,
       showStress,
-      showReactions,
+      showReactions: !!solved && showReactions,
       hideLoadsInResults,
       hideSupportsInResults,
       deformScaleMult,
@@ -3500,7 +3519,7 @@ export default function App() {
     showProfileSketches,
     showLoads,
     showLoadValues,
-    showHingeLabels,
+    showHinges,
     showDimensions,
     showDeform,
     showMy,
@@ -3571,6 +3590,7 @@ export default function App() {
             showProfileSketches: true,
             showLoads: true,
             showLoadValues: true,
+            showHinges: true,
             showHingeLabels: true,
             showDimensions: true,
             showDeform: !!solved && showDeform,
@@ -5858,11 +5878,11 @@ export default function App() {
                   {TOGGLE_ICONS.localAxes}
                 </button>
                 <button
-                  className={`zbtn ${showHingeLabels ? 'active' : ''}`}
-                  onClick={() => setShowHingeLabels(!showHingeLabels)}
-                  title="Pokaż opisy przegubów (Ux, Ry...)"
+                  className={`zbtn ${showHinges ? 'active' : ''}`}
+                  onClick={() => setShowHinges(!showHinges)}
+                  title="Pokaż przeguby"
                 >
-                  {TOGGLE_ICONS.hingeLabels}
+                  {TOGGLE_ICONS.hinges}
                 </button>
                 <button
                   className={`zbtn ${showLoads ? 'active' : ''}`}

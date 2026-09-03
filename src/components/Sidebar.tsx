@@ -602,6 +602,72 @@ interface SidebarProps {
   onSelectResultKey?: (key: string) => void;
 }
 
+interface SmoothRangeSliderProps {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  unit?: string;
+  onChange: (v: number) => void;
+  style?: React.CSSProperties;
+}
+
+const SmoothRangeSlider: React.FC<SmoothRangeSliderProps> = ({
+  label,
+  value,
+  min,
+  max,
+  step,
+  unit = '×',
+  onChange,
+  style,
+}) => {
+  const [localVal, setLocalVal] = useState(value);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setLocalVal(value);
+  }, [value]);
+
+  const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    setLocalVal(val);
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+    }
+    rafRef.current = requestAnimationFrame(() => {
+      onChange(val);
+      rafRef.current = null;
+    });
+  };
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+      }
+    };
+  }, []);
+
+  return (
+    <div className="row" style={style}>
+      <label style={{ minWidth: '96px' }}>{label}</label>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={localVal}
+        onChange={handleInput}
+      />
+      <span className="unit" style={{ width: '34px' }}>
+        {localVal.toFixed(1)}{unit}
+      </span>
+    </div>
+  );
+};
+
 export const Sidebar: React.FC<SidebarProps> = ({
   nodes,
   setNodes,
@@ -6411,20 +6477,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           />
                         </div>
                         {showDeform && (
-                          <div className="row">
-                            <label style={{ minWidth: '96px' }}>Skala odkszt.</label>
-                            <input
-                              type="range"
-                              min="0.1"
-                              max="5"
-                              step="0.1"
-                              value={deformScaleMult}
-                              onChange={(e) => setDeformScaleMult(parseFloat(e.target.value))}
-                            />
-                            <span className="unit" style={{ width: '34px' }}>
-                              {deformScaleMult.toFixed(1)}×
-                            </span>
-                          </div>
+                          <SmoothRangeSlider
+                            label="Skala odkszt."
+                            min={0.1}
+                            max={5}
+                            step={0.1}
+                            value={deformScaleMult}
+                            onChange={setDeformScaleMult}
+                          />
                         )}
 
                         <div className={`diagToggle ${showMy ? 'active' : ''}`}>
@@ -6494,20 +6554,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         </div>
 
                         {(showMy || showMz || showMx || showVy || showVz || showN || showStress) && (
-                          <div className="row" style={{ marginTop: '6px' }}>
-                            <label style={{ minWidth: '96px' }}>Skala wykresów</label>
-                            <input
-                              type="range"
-                              min="0.1"
-                              max="5"
-                              step="0.1"
-                              value={diagramScaleMult}
-                              onChange={(e) => setDiagramScaleMult(parseFloat(e.target.value))}
-                            />
-                            <span className="unit" style={{ width: '34px' }}>
-                              {diagramScaleMult.toFixed(1)}×
-                            </span>
-                          </div>
+                          <SmoothRangeSlider
+                            label="Skala wykresów"
+                            min={0.1}
+                            max={5}
+                            step={0.1}
+                            value={diagramScaleMult}
+                            onChange={setDiagramScaleMult}
+                            style={{ marginTop: '6px' }}
+                          />
                         )}
 
                         <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px solid var(--surface-border-soft)' }}>

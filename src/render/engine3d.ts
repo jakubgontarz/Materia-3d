@@ -77,7 +77,14 @@ export class RenderEngine3D {
   public scene: THREE.Scene;
   public threeCamera: THREE.OrthographicCamera;
   public modelGroup: THREE.Group;
+  public baseGroup: THREE.Group;
+  public resultsGroup: THREE.Group;
+  public resultsDeformedGroup: THREE.Group;
+  public resultsDiagramsGroup: THREE.Group;
+  public resultsReactionsGroup: THREE.Group;
   public overlayGroup: THREE.Group;
+  public baseOverlayGroup: THREE.Group;
+  public resultsOverlayGroup: THREE.Group;
 
   // Lighting
   public ambLight: THREE.AmbientLight;
@@ -94,7 +101,25 @@ export class RenderEngine3D {
   constructor() {
     this.scene = new THREE.Scene();
     this.modelGroup = new THREE.Group();
+    this.baseGroup = new THREE.Group();
+    this.resultsGroup = new THREE.Group();
+    this.resultsDeformedGroup = new THREE.Group();
+    this.resultsDiagramsGroup = new THREE.Group();
+    this.resultsReactionsGroup = new THREE.Group();
     this.overlayGroup = new THREE.Group();
+    this.baseOverlayGroup = new THREE.Group();
+    this.resultsOverlayGroup = new THREE.Group();
+
+    this.resultsGroup.add(this.resultsDeformedGroup);
+    this.resultsGroup.add(this.resultsDiagramsGroup);
+    this.resultsOverlayGroup.add(this.resultsReactionsGroup);
+
+    this.modelGroup.add(this.baseGroup);
+    this.modelGroup.add(this.resultsGroup);
+
+    this.overlayGroup.add(this.baseOverlayGroup);
+    this.overlayGroup.add(this.resultsOverlayGroup);
+
     this.scene.add(this.modelGroup);
     this.scene.add(this.overlayGroup);
 
@@ -561,23 +586,80 @@ export class RenderEngine3D {
     }
   }
 
-  public clearModelGroup() {
-    this.clearGroup(this.modelGroup);
-    this.clearGroup(this.overlayGroup);
+  public clearBaseGroup() {
+    this.clearGroup(this.baseGroup);
+    this.clearGroup(this.baseOverlayGroup);
   }
 
-  private clearGroup(group: THREE.Group) {
+  public clearResultsDeformedGroup() {
+    this.clearGroup(this.resultsDeformedGroup);
+  }
+
+  public clearResultsDiagramsGroup() {
+    this.clearGroup(this.resultsDiagramsGroup);
+  }
+
+  public clearResultsReactionsGroup() {
+    this.clearGroup(this.resultsReactionsGroup);
+  }
+
+  public clearResultsGroup() {
+    this.clearResultsDeformedGroup();
+    this.clearResultsDiagramsGroup();
+    this.clearResultsReactionsGroup();
+    // Also clean any stray elements in resultsGroup / resultsOverlayGroup if any
+    const strayResults: THREE.Object3D[] = [];
+    this.resultsGroup.children.forEach((child) => {
+      if (child !== this.resultsDeformedGroup && child !== this.resultsDiagramsGroup) {
+        strayResults.push(child);
+      }
+    });
+    strayResults.forEach((child) => {
+      this.clearGroup(child);
+      this.resultsGroup.remove(child);
+    });
+
+    const strayOverlays: THREE.Object3D[] = [];
+    this.resultsOverlayGroup.children.forEach((child) => {
+      if (child !== this.resultsReactionsGroup) {
+        strayOverlays.push(child);
+      }
+    });
+    strayOverlays.forEach((child) => {
+      this.clearGroup(child);
+      this.resultsOverlayGroup.remove(child);
+    });
+  }
+
+  public clearModelGroup() {
+    this.clearBaseGroup();
+    this.clearResultsGroup();
+    const toRemove: THREE.Object3D[] = [];
+    this.overlayGroup.children.forEach((child) => {
+      if (child !== this.baseOverlayGroup && child !== this.resultsOverlayGroup) {
+        toRemove.push(child);
+      }
+    });
+    toRemove.forEach((child) => {
+      this.clearGroup(child);
+      this.overlayGroup.remove(child);
+    });
+  }
+
+  public clearGroup(group: THREE.Object3D) {
     while (group.children.length > 0) {
       const obj = group.children[0];
       group.remove(obj);
-      if ((obj as any).geometry) (obj as any).geometry.dispose();
-      if ((obj as any).material) {
-        if (Array.isArray((obj as any).material)) {
-          (obj as any).material.forEach((m: any) => m.dispose());
-        } else {
-          (obj as any).material.dispose();
+      obj.traverse((child: any) => {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) {
+          if (Array.isArray(child.material)) {
+            child.material.forEach((m: any) => m.dispose());
+          } else {
+            child.material.dispose();
+          }
         }
-      }
+      });
     }
   }
 

@@ -888,6 +888,8 @@ textarea:disabled {
 select {
   font-family: var(--sans) !important;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .row .unit {

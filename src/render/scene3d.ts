@@ -21,7 +21,8 @@ export interface SceneRenderOptions {
   showLoads: boolean;
   showLoadValues: boolean;
   showMasses?: boolean;
-  showHingeLabels: boolean;
+  showHinges?: boolean;
+  showHingeLabels?: boolean;
   showDimensions: boolean;
   showDeform: boolean;
   showMy: boolean;
@@ -66,10 +67,13 @@ function fmtLoadVal(v: number): string {
   return String(rounded);
 }
 
-// Track previous scene state key to avoid rebuilding 3D GPU geometries on camera orbit / pan / zoom
-let lastGeometryKey = '';
+// Track previous scene state keys to avoid rebuilding 3D GPU geometries on camera orbit / pan / zoom or scale sliders
+let lastBaseGeometryKey = '';
+let lastDeformGeometryKey = '';
+let lastDiagramsGeometryKey = '';
+let lastReactionsGeometryKey = '';
 
-function computeGeometryKey(
+function computeBaseGeometryKey(
   nodes: Node3D[],
   elements: Element3D[],
   sections: Section[],
@@ -78,7 +82,7 @@ function computeGeometryKey(
   options: SceneRenderOptions,
   panels: Panel3D[] = []
 ): string {
-  // Fast signature generation
+  // Fast signature generation for structural base model
   let nSig = `${nodes.length}_`;
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i];
@@ -127,19 +131,60 @@ function computeGeometryKey(
 
   const grpSig = (options.groups || []).map((g) => `${g.id}:${g.color}:${g.name}`).join(';');
 
-  const optSig = `gm:${options.graphicsMode || 'balanced'}_g:${options.showGrid ? 1 : 0}_gp:${options.gridPlane || 'XY'}_go:${options.gridOffset || 0}_a:${options.showAxes ? 1 : 0}_la:${options.showLocalAxes ? 1 : 0}_pan:${options.showPanels !== false ? 1 : 0}_supp:${options.showSupports ? 1 : 0}_prof:${options.showProfileSketches ? 1 : 0}_loads:${options.showLoads ? 1 : 0}_def:${options.showDeform ? 1 : 0}_my:${options.showMy ? 1 : 0}_mz:${options.showMz ? 1 : 0}_mx:${options.showMx ? 1 : 0}_vy:${options.showVy ? 1 : 0}_vz:${options.showVz ? 1 : 0}_n:${options.showN ? 1 : 0}_str:${options.showStress ? 1 : 0}_r:${options.showReactions ? 1 : 0}_hl:${options.hideLoadsInResults ? 1 : 0}_hs:${options.hideSupportsInResults ? 1 : 0}_ds:${options.deformScaleMult}_dgs:${options.diagramScaleMult}_dlm:${options.diagramLabelMode || 'all'}_t:${options.theme}_pw:${options.pureWhiteBg ? 1 : 0}_ac:${options.accentColor}_ma:${options.momentsAsArcs ? 1 : 0}_ark:${options.activeResultKey || ''}_grps:${grpSig}`;
+  const showHingesActive = (options.showHinges !== undefined ? options.showHinges : (options.showHingeLabels ?? true)) ? 1 : 0;
+  const optSig = `gm:${options.graphicsMode || 'balanced'}_g:${options.showGrid ? 1 : 0}_gp:${options.gridPlane || 'XY'}_go:${options.gridOffset || 0}_a:${options.showAxes ? 1 : 0}_la:${options.showLocalAxes ? 1 : 0}_pan:${options.showPanels !== false ? 1 : 0}_supp:${options.showSupports ? 1 : 0}_hng:${showHingesActive}_prof:${options.showProfileSketches ? 1 : 0}_loads:${options.showLoads ? 1 : 0}_hl:${options.hideLoadsInResults ? 1 : 0}_hs:${options.hideSupportsInResults ? 1 : 0}_t:${options.theme}_pw:${options.pureWhiteBg ? 1 : 0}_ac:${options.accentColor}_ma:${options.momentsAsArcs ? 1 : 0}_grps:${grpSig}`;
 
+  const hasResults = !!solved && (options.showDeform || options.showMy || options.showMz || options.showN || options.showReactions);
+  const resSig = `hasRes:${hasResults ? 1 : 0}`;
+
+  return `${nSig}|${eSig}|${secSig}|${matSig}|${pSig}|${clSig}|${optSig}|${resSig}`;
+}
+
+function computeDeformGeometryKey(
+  solved: SolverResult3D | null,
+  options: SceneRenderOptions
+): string {
+  if (!options.showDeform || !solved) return 'off';
   let solvedSig = 'none';
-  if (solved) {
-    if (solved.type === 'linear_static') {
-      const ls = solved as any;
-      solvedSig = `static_${ls.maxDisplacement?.toFixed(6) ?? 0}_${ls.maxMoment?.toFixed(4) ?? 0}_${ls.maxAxial?.toFixed(4) ?? 0}_${ls.maxShear?.toFixed(4) ?? 0}_${Object.keys(ls.displacements || {}).length}`;
-    } else {
-      solvedSig = `${solved.type}_${(solved as any).currentMode || 0}`;
-    }
+  if (solved.type === 'linear_static') {
+    const ls = solved as any;
+    solvedSig = `static_${ls.maxDisplacement?.toFixed(6) ?? 0}`;
+  } else {
+    solvedSig = `${solved.type}_${(solved as any).currentMode || 0}`;
   }
+  return `deform:${solvedSig}_ds:${options.deformScaleMult}`;
+}
 
-  return `${nSig}|${eSig}|${secSig}|${matSig}|${pSig}|${clSig}|${optSig}|${solvedSig}`;
+function computeDiagramsGeometryKey(
+  solved: SolverResult3D | null,
+  options: SceneRenderOptions
+): string {
+  const hasDiag = options.showMy || options.showMz || options.showMx || options.showVy || options.showVz || options.showN || options.showStress;
+  if (!hasDiag || !solved) return 'off';
+  let solvedSig = 'none';
+  if (solved.type === 'linear_static') {
+    const ls = solved as any;
+    solvedSig = `static_${ls.maxMoment?.toFixed(4) ?? 0}_${ls.maxAxial?.toFixed(4) ?? 0}_${ls.maxShear?.toFixed(4) ?? 0}`;
+  } else {
+    solvedSig = `${solved.type}_${(solved as any).currentMode || 0}`;
+  }
+  const diagFlags = `my:${options.showMy ? 1 : 0}_mz:${options.showMz ? 1 : 0}_mx:${options.showMx ? 1 : 0}_vy:${options.showVy ? 1 : 0}_vz:${options.showVz ? 1 : 0}_n:${options.showN ? 1 : 0}_str:${options.showStress ? 1 : 0}`;
+  return `diag:${solvedSig}_${diagFlags}_dgs:${options.diagramScaleMult}_ark:${options.activeResultKey || ''}`;
+}
+
+function computeReactionsGeometryKey(
+  solved: SolverResult3D | null,
+  options: SceneRenderOptions
+): string {
+  if (options.graphicsMode === 'performance' || !options.showReactions || !solved || solved.type !== 'linear_static' || !solved.Rglobal) return 'off';
+  return `react:r_${solved.Rglobal.length}_ma:${options.momentsAsArcs ? 1 : 0}_gm:${options.graphicsMode || 'balanced'}`;
+}
+
+function computeResultsGeometryKey(
+  solved: SolverResult3D | null,
+  options: SceneRenderOptions
+): string {
+  return `${computeDeformGeometryKey(solved, options)}|${computeDiagramsGeometryKey(solved, options)}|${computeReactionsGeometryKey(solved, options)}`;
 }
 
 // Ultra-fast in-place Three.js material & scale updates for selection & hover (0.01ms, never discards geometries)
@@ -497,11 +542,56 @@ export function drawScene3D(
   const isDark = options.theme === 'dark' && !options.pureWhiteBg;
   const customBg = options.pureWhiteBg ? 0xffffff : undefined;
 
-  // 1. Check if 3D structural geometry needs rebuild (only when model structure, sections, materials, loads, panels, or results change)
-  const currentKey = computeGeometryKey(nodes, elements, sections, materials, solved, options, panels);
-  if (currentKey !== lastGeometryKey) {
-    lastGeometryKey = currentKey;
-    rebuild3DModelGroup(engine, nodes, elements, sections, materials, solved, options, isDark, panels);
+  // 1. Check if 3D structural base model or results geometry needs rebuild
+  const currentBaseKey = computeBaseGeometryKey(nodes, elements, sections, materials, solved, options, panels);
+  const currentDeformKey = computeDeformGeometryKey(solved, options);
+  const currentDiagramsKey = computeDiagramsGeometryKey(solved, options);
+  const currentReactionsKey = computeReactionsGeometryKey(solved, options);
+
+  const baseChanged = currentBaseKey !== lastBaseGeometryKey;
+  const deformChanged = currentDeformKey !== lastDeformGeometryKey;
+  const diagramsChanged = currentDiagramsKey !== lastDiagramsGeometryKey;
+  const reactionsChanged = currentReactionsKey !== lastReactionsGeometryKey;
+
+  if (baseChanged) {
+    lastBaseGeometryKey = currentBaseKey;
+    lastDeformGeometryKey = currentDeformKey;
+    lastDiagramsGeometryKey = currentDiagramsKey;
+    lastReactionsGeometryKey = currentReactionsKey;
+    rebuildBase3DModelGroup(engine, nodes, elements, sections, materials, solved, options, isDark, panels);
+    rebuild3DResultsGroup(engine, solved, options, nodes);
+  } else {
+    if (deformChanged) {
+      lastDeformGeometryKey = currentDeformKey;
+      engine.clearResultsDeformedGroup();
+      if (options.showDeform && solved) {
+        build3DDeformedShape(engine, solved, options);
+      }
+    }
+    if (diagramsChanged) {
+      lastDiagramsGeometryKey = currentDiagramsKey;
+      engine.clearResultsDiagramsGroup();
+      if (
+        solved &&
+        (options.showMy || options.showMz || options.showMx || options.showVy || options.showVz || options.showN || options.showStress)
+      ) {
+        build3DDiagrams(engine, solved, options);
+      }
+    }
+    if (reactionsChanged) {
+      lastReactionsGeometryKey = currentReactionsKey;
+      engine.clearResultsReactionsGroup();
+      if (
+        options.graphicsMode !== 'performance' &&
+        options.showReactions &&
+        solved &&
+        solved.type === 'linear_static' &&
+        solved.Rglobal &&
+        nodes.length > 0
+      ) {
+        build3DReactions(engine, solved, options, nodes);
+      }
+    }
   }
 
   // 2. Fast sub-millisecond in-place Three.js highlight and selection update (< 0.05ms)
@@ -592,76 +682,79 @@ export function drawScene3D(
 
     // 3. Hinges as hollow circles (Layer: GEOMETRY, subPriority: 2)
     // Sorted with bars by real 3D depth; drawn cleanly over its own bar end close to the node
-    elements.forEach((el) => {
-      const h = el.hinges || {};
-      const hasStartHinge = h.start_rx || h.start_ry || h.start_rz || h.start_ux || h.start_uy || h.start_uz;
-      const hasEndHinge = h.end_rx || h.end_ry || h.end_rz || h.end_ux || h.end_uy || h.end_uz;
-      if (!hasStartHinge && !hasEndHinge) return;
+    const showHingesPerf = options.showHinges !== undefined ? options.showHinges : (options.showHingeLabels ?? true);
+    if (showHingesPerf) {
+      elements.forEach((el) => {
+        const h = el.hinges || {};
+        const hasStartHinge = h.start_rx || h.start_ry || h.start_rz || h.start_ux || h.start_uy || h.start_uz;
+        const hasEndHinge = h.end_rx || h.end_ry || h.end_rz || h.end_ux || h.end_uy || h.end_uz;
+        if (!hasStartHinge && !hasEndHinge) return;
 
-      const n1 = nodes.find((n) => n.id === el.n1);
-      const n2 = nodes.find((n) => n.id === el.n2);
-      if (!n1 || !n2) return;
+        const n1 = nodes.find((n) => n.id === el.n1);
+        const n2 = nodes.find((n) => n.id === el.n2);
+        if (!n1 || !n2) return;
 
-      const spNode1 = engine.project([n1.x, n1.y, n1.z]);
-      const spNode2 = engine.project([n2.x, n2.y, n2.z]);
-      if (!spNode1.visible && !spNode2.visible) return;
+        const spNode1 = engine.project([n1.x, n1.y, n1.z]);
+        const spNode2 = engine.project([n2.x, n2.y, n2.z]);
+        if (!spNode1.visible && !spNode2.visible) return;
 
-      // Project bar vector onto 2D screen
-      const sdx = spNode2.x - spNode1.x;
-      const sdy = spNode2.y - spNode1.y;
-      const sLen = Math.hypot(sdx, sdy);
-      if (sLen < 1e-4) return;
+        // Project bar vector onto 2D screen
+        const sdx = spNode2.x - spNode1.x;
+        const sdy = spNode2.y - spNode1.y;
+        const sLen = Math.hypot(sdx, sdy);
+        if (sLen < 1e-4) return;
 
-      const sDirX = sdx / sLen;
-      const sDirY = sdy / sLen;
+        const sDirX = sdx / sLen;
+        const sDirY = sdy / sLen;
 
-      // Maximum pixel distance from node center to hinge:
-      // Node radius is ~4.5px-6.5px, so 11px ensures it sits just right next to node without being far away
-      const maxScreenDist = 11;
-      const screenOffset = Math.min(maxScreenDist, sLen * 0.25);
+        // Maximum pixel distance from node center to hinge:
+        // Node radius is ~4.5px-6.5px, so 11px ensures it sits just right next to node without being far away
+        const maxScreenDist = 11;
+        const screenOffset = Math.min(maxScreenDist, sLen * 0.25);
 
-      if (hasStartHinge && spNode1.visible) {
-        const hx = spNode1.x + sDirX * screenOffset;
-        const hy = spNode1.y + sDirY * screenOffset;
-        labelQueue.push({
-          depth: spNode1.depth,
-          layer: RENDER_LAYER.GEOMETRY,
-          subPriority: 2,
-          draw: (ctx) => {
-            ctx.save();
-            ctx.beginPath();
-            ctx.arc(hx, hy, 4.0, 0, Math.PI * 2);
-            ctx.fillStyle = isDark ? '#0e1520' : '#eef2f6';
-            ctx.fill();
-            ctx.lineWidth = 1.6;
-            ctx.strokeStyle = isDark ? '#cbd5e1' : '#0f172a';
-            ctx.stroke();
-            ctx.restore();
-          },
-        });
-      }
+        if (hasStartHinge && spNode1.visible) {
+          const hx = spNode1.x + sDirX * screenOffset;
+          const hy = spNode1.y + sDirY * screenOffset;
+          labelQueue.push({
+            depth: spNode1.depth,
+            layer: RENDER_LAYER.GEOMETRY,
+            subPriority: 2,
+            draw: (ctx) => {
+              ctx.save();
+              ctx.beginPath();
+              ctx.arc(hx, hy, 4.0, 0, Math.PI * 2);
+              ctx.fillStyle = isDark ? '#0e1520' : '#eef2f6';
+              ctx.fill();
+              ctx.lineWidth = 1.6;
+              ctx.strokeStyle = isDark ? '#cbd5e1' : '#0f172a';
+              ctx.stroke();
+              ctx.restore();
+            },
+          });
+        }
 
-      if (hasEndHinge && spNode2.visible) {
-        const hx = spNode2.x - sDirX * screenOffset;
-        const hy = spNode2.y - sDirY * screenOffset;
-        labelQueue.push({
-          depth: spNode2.depth,
-          layer: RENDER_LAYER.GEOMETRY,
-          subPriority: 2,
-          draw: (ctx) => {
-            ctx.save();
-            ctx.beginPath();
-            ctx.arc(hx, hy, 4.0, 0, Math.PI * 2);
-            ctx.fillStyle = isDark ? '#0e1520' : '#eef2f6';
-            ctx.fill();
-            ctx.lineWidth = 1.6;
-            ctx.strokeStyle = isDark ? '#cbd5e1' : '#0f172a';
-            ctx.stroke();
-            ctx.restore();
-          },
-        });
-      }
-    });
+        if (hasEndHinge && spNode2.visible) {
+          const hx = spNode2.x - sDirX * screenOffset;
+          const hy = spNode2.y - sDirY * screenOffset;
+          labelQueue.push({
+            depth: spNode2.depth,
+            layer: RENDER_LAYER.GEOMETRY,
+            subPriority: 2,
+            draw: (ctx) => {
+              ctx.save();
+              ctx.beginPath();
+              ctx.arc(hx, hy, 4.0, 0, Math.PI * 2);
+              ctx.fillStyle = isDark ? '#0e1520' : '#eef2f6';
+              ctx.fill();
+              ctx.lineWidth = 1.6;
+              ctx.strokeStyle = isDark ? '#cbd5e1' : '#0f172a';
+              ctx.stroke();
+              ctx.restore();
+            },
+          });
+        }
+      });
+    }
 
     // 4. Loads & Reactions rendered above geometry (Layer: LOADS_AND_AXES)
     const hasResults = !!solved && (options.showDeform || options.showMy || options.showMz || options.showN || options.showReactions);
@@ -1074,7 +1167,8 @@ export function drawScene3D(
   }
 
   // Draw member end hinge / release labels (Robot style)
-  if (options.showHingeLabels) {
+  const showHingesLabels = options.showHinges !== undefined ? options.showHinges : (options.showHingeLabels ?? true);
+  if (showHingesLabels) {
     collectHingeLabels2DOverlay(labelQueue, engine, nodes, elements, isDark);
   }
 
@@ -1476,7 +1570,154 @@ export function drawScene3D(
   }
 }
 
-function rebuild3DModelGroup(
+function build3DReactions(
+  engine: RenderEngine3D,
+  solved: SolverResult3D,
+  options: SceneRenderOptions,
+  nodes: Node3D[]
+) {
+  if (solved.type !== 'linear_static' || !solved.Rglobal) return;
+  const Rglobal = solved.Rglobal;
+  nodes.forEach((n, idx) => {
+    if (!n.support) return;
+    const Rx = Rglobal[6 * idx + 0] || 0;
+    const Ry = Rglobal[6 * idx + 1] || 0;
+    const Rz = Rglobal[6 * idx + 2] || 0;
+    const Mx = Rglobal[6 * idx + 3] || 0;
+    const My = Rglobal[6 * idx + 4] || 0;
+    const Mz = Rglobal[6 * idx + 5] || 0;
+
+    const gapF = 0.30;
+    const lenF = 0.70;
+    const colorF = 0xd97706; // amber-600
+
+    const gapM = options.momentsAsArcs ? gapF : (gapF + lenF + 0.12);
+    const lenM = 0.65;
+    const colorM = 0x9333ea; // purple-600
+
+    let rotMatrix: THREE.Matrix4 | null = null;
+    if (n.support && (n.support.rotX || n.support.rotY || n.support.rotZ)) {
+      rotMatrix = new THREE.Matrix4();
+      const rx = (n.support.rotX || 0) * Math.PI / 180;
+      const ry = (n.support.rotY || 0) * Math.PI / 180;
+      const rz = (n.support.rotZ || 0) * Math.PI / 180;
+      rotMatrix.makeRotationFromEuler(new THREE.Euler(rx, ry, rz, 'XYZ'));
+    }
+
+    const transformVectorAndOrigin = (
+      dirLocal: THREE.Vector3,
+      offsetLocal: THREE.Vector3
+    ) => {
+      const dir = dirLocal.clone();
+      const origin = new THREE.Vector3(n.x, n.y, n.z).add(offsetLocal);
+      if (rotMatrix) {
+        dir.applyMatrix4(rotMatrix);
+        const offsetRotated = offsetLocal.clone().applyMatrix4(rotMatrix);
+        origin.copy(new THREE.Vector3(n.x, n.y, n.z).add(offsetRotated));
+      }
+      return { dir, origin };
+    };
+
+    // Force reactions (offset from node)
+    if (Math.abs(Rx) > 1e-4) {
+      const sign = Math.sign(Rx);
+      const { dir, origin } = transformVectorAndOrigin(
+        new THREE.Vector3(sign, 0, 0),
+        new THREE.Vector3(-sign * (gapF + lenF), 0, 0)
+      );
+      buildSingleArrow(engine, origin, dir, lenF, colorF, 0.22, 0.11, engine.resultsReactionsGroup);
+    }
+    if (Math.abs(Ry) > 1e-4) {
+      const sign = Math.sign(Ry);
+      const { dir, origin } = transformVectorAndOrigin(
+        new THREE.Vector3(0, sign, 0),
+        new THREE.Vector3(0, -sign * (gapF + lenF), 0)
+      );
+      buildSingleArrow(engine, origin, dir, lenF, colorF, 0.22, 0.11, engine.resultsReactionsGroup);
+    }
+    if (Math.abs(Rz) > 1e-4) {
+      const sign = Math.sign(Rz);
+      const { dir, origin } = transformVectorAndOrigin(
+        new THREE.Vector3(0, 0, sign),
+        new THREE.Vector3(0, 0, -sign * (gapF + lenF))
+      );
+      buildSingleArrow(engine, origin, dir, lenF, colorF, 0.22, 0.11, engine.resultsReactionsGroup);
+    }
+
+    // Moment reactions (behind force reactions, double-headed or arcs)
+    if (Math.abs(Mx) > 1e-4) {
+      const sign = Math.sign(Mx);
+      if (options.momentsAsArcs) {
+        const dirLocal = new THREE.Vector3(sign, 0, 0);
+        const { dir } = transformVectorAndOrigin(dirLocal, new THREE.Vector3(0, 0, 0));
+        buildMomentArc(engine, new THREE.Vector3(n.x, n.y, n.z), dir, 0.48, colorM, 0.18, 0.09, engine.resultsReactionsGroup);
+      } else {
+        const { dir, origin } = transformVectorAndOrigin(
+          new THREE.Vector3(sign, 0, 0),
+          new THREE.Vector3(-sign * (gapM + lenM), 0, 0)
+        );
+        buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09, engine.resultsReactionsGroup);
+      }
+    }
+    if (Math.abs(My) > 1e-4) {
+      const sign = Math.sign(My);
+      if (options.momentsAsArcs) {
+        const dirLocal = new THREE.Vector3(0, sign, 0);
+        const { dir } = transformVectorAndOrigin(dirLocal, new THREE.Vector3(0, 0, 0));
+        buildMomentArc(engine, new THREE.Vector3(n.x, n.y, n.z), dir, 0.48, colorM, 0.18, 0.09, engine.resultsReactionsGroup);
+      } else {
+        const { dir, origin } = transformVectorAndOrigin(
+          new THREE.Vector3(0, sign, 0),
+          new THREE.Vector3(0, -sign * (gapM + lenM), 0)
+        );
+        buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09, engine.resultsReactionsGroup);
+      }
+    }
+    if (Math.abs(Mz) > 1e-4) {
+      const sign = Math.sign(Mz);
+      if (options.momentsAsArcs) {
+        const dirLocal = new THREE.Vector3(0, 0, sign);
+        const { dir } = transformVectorAndOrigin(dirLocal, new THREE.Vector3(0, 0, 0));
+        buildMomentArc(engine, new THREE.Vector3(n.x, n.y, n.z), dir, 0.48, colorM, 0.18, 0.09, engine.resultsReactionsGroup);
+      } else {
+        const { dir, origin } = transformVectorAndOrigin(
+          new THREE.Vector3(0, 0, sign),
+          new THREE.Vector3(0, 0, -sign * (gapM + lenM))
+        );
+        buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09, engine.resultsReactionsGroup);
+      }
+    }
+  });
+}
+
+function rebuild3DResultsGroup(
+  engine: RenderEngine3D,
+  solved: SolverResult3D | null,
+  options: SceneRenderOptions,
+  nodes: Node3D[] = []
+) {
+  engine.clearResultsGroup();
+
+  // Deformed Shape
+  if (options.showDeform && solved) {
+    build3DDeformedShape(engine, solved, options);
+  }
+
+  // Internal Force Diagrams
+  if (
+    solved &&
+    (options.showMy || options.showMz || options.showMx || options.showVy || options.showVz || options.showN || options.showStress)
+  ) {
+    build3DDiagrams(engine, solved, options);
+  }
+
+  // Reactions (WebGL 3D objects in Balanced & Quality modes)
+  if (options.graphicsMode !== 'performance' && options.showReactions && solved && solved.type === 'linear_static' && solved.Rglobal && nodes.length > 0) {
+    build3DReactions(engine, solved, options, nodes);
+  }
+}
+
+function rebuildBase3DModelGroup(
   engine: RenderEngine3D,
   nodes: Node3D[],
   elements: Element3D[],
@@ -1490,8 +1731,8 @@ function rebuild3DModelGroup(
   // Update lighting & tone mapping for current graphics mode
   engine.setGraphicsMode(options.graphicsMode || 'balanced');
 
-  // Clear previous Three.js 3D model geometry
-  engine.clearModelGroup();
+  // Clear previous base Three.js 3D model geometry
+  engine.clearBaseGroup();
 
   // Grid
   build3DGrid(engine, nodes, isDark, options.showGrid, options.gridPlane || 'XY', options.gridOffset || 0);
@@ -1508,19 +1749,6 @@ function rebuild3DModelGroup(
       build3DSinglePanel(engine, p, nodes, options, isDark);
       build3DPanelLoadTransferDirections(engine, p, nodes, isDark);
     });
-  }
-
-  // Deformed Shape
-  if (options.showDeform && solved) {
-    build3DDeformedShape(engine, solved, options);
-  }
-
-  // Internal Force Diagrams
-  if (
-    solved &&
-    (options.showMy || options.showMz || options.showMx || options.showVy || options.showVz || options.showN || options.showStress)
-  ) {
-    build3DDiagrams(engine, solved, options);
   }
 
   // Elements (Bars)
@@ -1657,121 +1885,6 @@ function rebuild3DModelGroup(
     build3DSingleNode(engine, n, options);
   });
 
-  // Reactions (WebGL 3D objects in Balanced & Quality modes)
-  if (options.graphicsMode !== 'performance' && options.showReactions && solved && solved.type === 'linear_static' && solved.Rglobal) {
-    const Rglobal = solved.Rglobal;
-    nodes.forEach((n, idx) => {
-      if (!n.support) return;
-      const Rx = Rglobal[6 * idx + 0] || 0;
-      const Ry = Rglobal[6 * idx + 1] || 0;
-      const Rz = Rglobal[6 * idx + 2] || 0;
-      const Mx = Rglobal[6 * idx + 3] || 0;
-      const My = Rglobal[6 * idx + 4] || 0;
-      const Mz = Rglobal[6 * idx + 5] || 0;
-
-      const gapF = 0.30;
-      const lenF = 0.70;
-      const colorF = 0xd97706; // amber-600
-
-      const gapM = options.momentsAsArcs ? gapF : (gapF + lenF + 0.12);
-      const lenM = 0.65;
-      const colorM = 0x9333ea; // purple-600
-
-      let rotMatrix: THREE.Matrix4 | null = null;
-      if (n.support && (n.support.rotX || n.support.rotY || n.support.rotZ)) {
-        rotMatrix = new THREE.Matrix4();
-        const rx = (n.support.rotX || 0) * Math.PI / 180;
-        const ry = (n.support.rotY || 0) * Math.PI / 180;
-        const rz = (n.support.rotZ || 0) * Math.PI / 180;
-        rotMatrix.makeRotationFromEuler(new THREE.Euler(rx, ry, rz, 'XYZ'));
-      }
-
-      const transformVectorAndOrigin = (
-        dirLocal: THREE.Vector3,
-        offsetLocal: THREE.Vector3
-      ) => {
-        const dir = dirLocal.clone();
-        const origin = new THREE.Vector3(n.x, n.y, n.z).add(offsetLocal);
-        if (rotMatrix) {
-          dir.applyMatrix4(rotMatrix);
-          const offsetRotated = offsetLocal.clone().applyMatrix4(rotMatrix);
-          origin.copy(new THREE.Vector3(n.x, n.y, n.z).add(offsetRotated));
-        }
-        return { dir, origin };
-      };
-
-      // Force reactions (offset from node)
-      if (Math.abs(Rx) > 1e-4) {
-        const sign = Math.sign(Rx);
-        const { dir, origin } = transformVectorAndOrigin(
-          new THREE.Vector3(sign, 0, 0),
-          new THREE.Vector3(-sign * (gapF + lenF), 0, 0)
-        );
-        buildSingleArrow(engine, origin, dir, lenF, colorF, 0.22, 0.11);
-      }
-      if (Math.abs(Ry) > 1e-4) {
-        const sign = Math.sign(Ry);
-        const { dir, origin } = transformVectorAndOrigin(
-          new THREE.Vector3(0, sign, 0),
-          new THREE.Vector3(0, -sign * (gapF + lenF), 0)
-        );
-        buildSingleArrow(engine, origin, dir, lenF, colorF, 0.22, 0.11);
-      }
-      if (Math.abs(Rz) > 1e-4) {
-        const sign = Math.sign(Rz);
-        const { dir, origin } = transformVectorAndOrigin(
-          new THREE.Vector3(0, 0, sign),
-          new THREE.Vector3(0, 0, -sign * (gapF + lenF))
-        );
-        buildSingleArrow(engine, origin, dir, lenF, colorF, 0.22, 0.11);
-      }
-
-      // Moment reactions (behind force reactions, double-headed or arcs)
-      if (Math.abs(Mx) > 1e-4) {
-        const sign = Math.sign(Mx);
-        if (options.momentsAsArcs) {
-          const dirLocal = new THREE.Vector3(sign, 0, 0);
-          const { dir } = transformVectorAndOrigin(dirLocal, new THREE.Vector3(0, 0, 0));
-          buildMomentArc(engine, new THREE.Vector3(n.x, n.y, n.z), dir, 0.48, colorM, 0.18, 0.09);
-        } else {
-          const { dir, origin } = transformVectorAndOrigin(
-            new THREE.Vector3(sign, 0, 0),
-            new THREE.Vector3(-sign * (gapM + lenM), 0, 0)
-          );
-          buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09);
-        }
-      }
-      if (Math.abs(My) > 1e-4) {
-        const sign = Math.sign(My);
-        if (options.momentsAsArcs) {
-          const dirLocal = new THREE.Vector3(0, sign, 0);
-          const { dir } = transformVectorAndOrigin(dirLocal, new THREE.Vector3(0, 0, 0));
-          buildMomentArc(engine, new THREE.Vector3(n.x, n.y, n.z), dir, 0.48, colorM, 0.18, 0.09);
-        } else {
-          const { dir, origin } = transformVectorAndOrigin(
-            new THREE.Vector3(0, sign, 0),
-            new THREE.Vector3(0, -sign * (gapM + lenM), 0)
-          );
-          buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09);
-        }
-      }
-      if (Math.abs(Mz) > 1e-4) {
-        const sign = Math.sign(Mz);
-        if (options.momentsAsArcs) {
-          const dirLocal = new THREE.Vector3(0, 0, sign);
-          const { dir } = transformVectorAndOrigin(dirLocal, new THREE.Vector3(0, 0, 0));
-          buildMomentArc(engine, new THREE.Vector3(n.x, n.y, n.z), dir, 0.48, colorM, 0.18, 0.09);
-        } else {
-          const { dir, origin } = transformVectorAndOrigin(
-            new THREE.Vector3(0, 0, sign),
-            new THREE.Vector3(0, 0, -sign * (gapM + lenM))
-          );
-          buildDoubleHeadedArrow(engine, origin, dir, lenM, colorM, 0.18, 0.09);
-        }
-      }
-    });
-  }
-
   // Local Axes Triads
   if (options.showLocalAxes) {
     elements.forEach((el) => {
@@ -1828,7 +1941,7 @@ function build3DConstructionLines(
     line.computeLineDistances();
     line.userData = { type: 'construction_line', id: cl.id };
     makeOnTop(line, 4);
-    engine.modelGroup.add(line);
+    engine.baseGroup.add(line);
   });
 }
 
@@ -1849,9 +1962,9 @@ function build3DPanelLocalAxes(engine: RenderEngine3D, panel: Panel3D, nodes: No
   makeLocalAxisOnTop(arrowY);
   makeLocalAxisOnTop(arrowZ);
 
-  engine.overlayGroup.add(arrowX);
-  engine.overlayGroup.add(arrowY);
-  engine.overlayGroup.add(arrowZ);
+  engine.baseOverlayGroup.add(arrowX);
+  engine.baseOverlayGroup.add(arrowY);
+  engine.baseOverlayGroup.add(arrowZ);
 }
 
 function build3DPanelLoadTransferDirections(
@@ -1903,7 +2016,7 @@ function build3DPanelLoadTransferDirections(
     const lineGeom = new THREE.BufferGeometry().setFromPoints([p1, p2]);
     const line = new THREE.Line(lineGeom, lineMat);
     makeOnTop(line, 1);
-    engine.overlayGroup.add(line);
+    engine.baseOverlayGroup.add(line);
 
     const arrHead1 = new THREE.ArrowHelper(
       new THREE.Vector3(...vDir),
@@ -1923,8 +2036,8 @@ function build3DPanelLoadTransferDirections(
     );
     makeOnTop(arrHead1, 1);
     makeOnTop(arrHead2, 1);
-    engine.overlayGroup.add(arrHead1);
-    engine.overlayGroup.add(arrHead2);
+    engine.baseOverlayGroup.add(arrHead1);
+    engine.baseOverlayGroup.add(arrHead2);
   };
 
   if (dir === 'one_way_x' || dir === 'two_way') {
@@ -1985,7 +2098,7 @@ function build3DPanelPressureLoad(
     0.08
   );
   makeOnTop(centerArrow, 1);
-  engine.overlayGroup.add(centerArrow);
+  engine.baseOverlayGroup.add(centerArrow);
 
   const N = corners.length;
   for (let i = 0; i < N; i++) {
@@ -2018,14 +2131,14 @@ function build3DPanelPressureLoad(
         0.06
       );
       makeOnTop(arrow, 1);
-      engine.overlayGroup.add(arrow);
+      engine.baseOverlayGroup.add(arrow);
     }
 
     const lineGeom = new THREE.BufferGeometry().setFromPoints(tailPoints);
     const lineMat = new THREE.LineBasicMaterial({ color: colorHex, linewidth: 2, depthTest: true, depthWrite: true });
     const line = new THREE.Line(lineGeom, lineMat);
     makeOnTop(line, 1);
-    engine.overlayGroup.add(line);
+    engine.baseOverlayGroup.add(line);
   }
 }
 
@@ -2064,7 +2177,7 @@ function build3DSinglePanel(
 
     const mesh = new THREE.Mesh(geom, fillMat);
     mesh.userData = { type: 'panel', id: panel.id, defaultColorHex: colorHex };
-    engine.modelGroup.add(mesh);
+    engine.baseGroup.add(mesh);
 
     const borderPoints = [
       new THREE.Vector3(c1[0], c1[1], c1[2]),
@@ -2079,7 +2192,7 @@ function build3DSinglePanel(
     });
     const line = new THREE.Line(lineGeom, lineMat);
     line.userData = { type: 'panel_edge', id: panel.id };
-    engine.modelGroup.add(line);
+    engine.baseGroup.add(line);
   } else if (corners.length === 4) {
     const [c1, c2, c3, c4] = corners;
     const positions = new Float32Array([
@@ -2096,7 +2209,7 @@ function build3DSinglePanel(
 
     const mesh = new THREE.Mesh(geom, fillMat);
     mesh.userData = { type: 'panel', id: panel.id, defaultColorHex: colorHex };
-    engine.modelGroup.add(mesh);
+    engine.baseGroup.add(mesh);
 
     const borderPoints = [
       new THREE.Vector3(c1[0], c1[1], c1[2]),
@@ -2112,7 +2225,7 @@ function build3DSinglePanel(
     });
     const line = new THREE.Line(lineGeom, lineMat);
     line.userData = { type: 'panel_edge', id: panel.id };
-    engine.modelGroup.add(line);
+    engine.baseGroup.add(line);
   }
 }
 
@@ -2227,7 +2340,7 @@ function build3DGrid(
   });
 
   const gridLines = new THREE.LineSegments(geom, mat);
-  engine.modelGroup.add(gridLines);
+  engine.baseGroup.add(gridLines);
 }
 
 function build3DOriginTriad(engine: RenderEngine3D) {
@@ -2237,19 +2350,19 @@ function build3DOriginTriad(engine: RenderEngine3D) {
   const dirX = new THREE.Vector3(1, 0, 0);
   const arrowX = new THREE.ArrowHelper(dirX, new THREE.Vector3(0, 0, 0), len, 0xef4444, 0.25, 0.12);
   makeOnTop(arrowX, 1);
-  engine.overlayGroup.add(arrowX);
+  engine.baseOverlayGroup.add(arrowX);
 
   // Y axis (Green)
   const dirY = new THREE.Vector3(0, 1, 0);
   const arrowY = new THREE.ArrowHelper(dirY, new THREE.Vector3(0, 0, 0), len, 0x22c55e, 0.25, 0.12);
   makeOnTop(arrowY, 1);
-  engine.overlayGroup.add(arrowY);
+  engine.baseOverlayGroup.add(arrowY);
 
   // Z axis (Blue)
   const dirZ = new THREE.Vector3(0, 0, 1);
   const arrowZ = new THREE.ArrowHelper(dirZ, new THREE.Vector3(0, 0, 0), len, 0x3b82f6, 0.25, 0.12);
   makeOnTop(arrowZ, 1);
-  engine.overlayGroup.add(arrowZ);
+  engine.baseOverlayGroup.add(arrowZ);
 }
 
 function createProfileShape2D(sec: Section): THREE.Shape {
@@ -2524,7 +2637,7 @@ function build3DSingleElement(
     );
     mesh.userData = { type: 'element', id: el.id, isEdge: false, groupId: el.groupId };
 
-    engine.modelGroup.add(mesh);
+    engine.baseGroup.add(mesh);
 
     // Profile edge outlines
     const edgeGeom = new THREE.EdgesGeometry(geom);
@@ -2537,7 +2650,7 @@ function build3DSingleElement(
     edgeMesh.matrixAutoUpdate = false;
     edgeMesh.matrix.copy(mesh.matrix);
     edgeMesh.userData = { type: 'element', id: el.id, isEdge: true, groupId: el.groupId };
-    engine.modelGroup.add(edgeMesh);
+    engine.baseGroup.add(edgeMesh);
   } else if (isPerformance) {
     // In Performance mode: bars without profiles are drawn as crisp 2D screen lines in overlayCtx (Layer 1, Priority -100).
     // We add a lightweight anchor object in modelGroup so picking & traverse still know the element exists.
@@ -2545,7 +2658,7 @@ function build3DSingleElement(
     const lineMat = new THREE.LineBasicMaterial({ visible: false });
     const lineMesh = new THREE.Line(lineGeom, lineMat);
     lineMesh.userData = { type: 'element', id: el.id, isEdge: false, groupId: el.groupId };
-    engine.modelGroup.add(lineMesh);
+    engine.baseGroup.add(lineMesh);
   } else {
     // Render element as 3D Cylinder / Solid Bar fallback (Balanced / Quality)
     const radius = 0.05;
@@ -2570,11 +2683,12 @@ function build3DSingleElement(
     mesh.setRotationFromMatrix(orientation);
     mesh.userData = { type: 'element', id: el.id, isEdge: false, groupId: el.groupId };
 
-    engine.modelGroup.add(mesh);
+    engine.baseGroup.add(mesh);
   }
 
   // End hinges / releases in 3D (in Performance mode, these are drawn as 2D hollow circles)
-  if (!isPerformance) {
+  const showHinges3D = options.showHinges !== undefined ? options.showHinges : (options.showHingeLabels ?? true);
+  if (!isPerformance && showHinges3D) {
     const h = el.hinges || {};
     const hasStartHinge = h.start_rx || h.start_ry || h.start_rz || h.start_ux || h.start_uy || h.start_uz;
     const hasEndHinge = h.end_rx || h.end_ry || h.end_rz || h.end_ux || h.end_uy || h.end_uz;
@@ -2588,7 +2702,7 @@ function build3DSingleElement(
       const hPos = start.clone().add(dir.multiplyScalar(offsetDist3D));
       const hMesh = new THREE.Mesh(hingeGeom, hingeMat);
       hMesh.position.copy(hPos);
-      engine.modelGroup.add(hMesh);
+      engine.baseGroup.add(hMesh);
     }
 
     if (hasEndHinge) {
@@ -2596,7 +2710,7 @@ function build3DSingleElement(
       const hPos = end.clone().sub(dir.multiplyScalar(offsetDist3D));
       const hMesh = new THREE.Mesh(hingeGeom, hingeMat);
       hMesh.position.copy(hPos);
-      engine.modelGroup.add(hMesh);
+      engine.baseGroup.add(hMesh);
     }
   }
 }
@@ -2608,7 +2722,7 @@ function build3DSingleNode(engine: RenderEngine3D, n: Node3D, options: SceneRend
     const obj = new THREE.Object3D();
     obj.position.set(n.x, n.y, n.z);
     obj.userData = { type: 'node', id: n.id };
-    engine.modelGroup.add(obj);
+    engine.baseGroup.add(obj);
     return;
   }
 
@@ -2633,7 +2747,7 @@ function build3DSingleNode(engine: RenderEngine3D, n: Node3D, options: SceneRend
   mesh.userData = { type: 'node', id: n.id };
   const s = isSelected ? 1.45 : isHover ? 1.25 : 1.0;
   mesh.scale.set(s, s, s);
-  engine.modelGroup.add(mesh);
+  engine.baseGroup.add(mesh);
 }
 
 // Helper: Create a 3D circle line in a given plane (yz, xz, or xy)
@@ -2695,7 +2809,7 @@ function buildFixedSupport(engine: RenderEngine3D, n: Node3D, isDark: boolean) {
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3));
   const mat = new THREE.LineBasicMaterial({ color: edgeColor });
-  engine.modelGroup.add(new THREE.LineSegments(geom, mat));
+  engine.baseGroup.add(new THREE.LineSegments(geom, mat));
 
   // Subtle semi-transparent foundation top plate
   const plateGeom = new THREE.PlaneGeometry(W, W);
@@ -2708,7 +2822,7 @@ function buildFixedSupport(engine: RenderEngine3D, n: Node3D, isDark: boolean) {
   });
   const plate = new THREE.Mesh(plateGeom, plateMat);
   plate.position.set(n.x, n.y, zTop - 0.001);
-  engine.modelGroup.add(plate);
+  engine.baseGroup.add(plate);
 }
 
 function buildPinnedPyramidSupport(engine: RenderEngine3D, n: Node3D, isDark: boolean) {
@@ -2742,7 +2856,7 @@ function buildPinnedPyramidSupport(engine: RenderEngine3D, n: Node3D, isDark: bo
   const wireGeom = new THREE.BufferGeometry();
   wireGeom.setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3));
   const wireMat = new THREE.LineBasicMaterial({ color: edgeColor });
-  engine.modelGroup.add(new THREE.LineSegments(wireGeom, wireMat));
+  engine.baseGroup.add(new THREE.LineSegments(wireGeom, wireMat));
 
   // 2. Crisp flat triangular faces (semi-transparent fill)
   const facePos: number[] = [
@@ -2765,14 +2879,14 @@ function buildPinnedPyramidSupport(engine: RenderEngine3D, n: Node3D, isDark: bo
     side: THREE.DoubleSide,
     depthWrite: false,
   });
-  engine.modelGroup.add(new THREE.Mesh(triGeom, triMat));
+  engine.baseGroup.add(new THREE.Mesh(triGeom, triMat));
 
   // 3. Small hinge circle at apex in X-Z and Y-Z
   const circleGeom1 = createCircleGeometry(n.x, n.y, n.z, 0.04, 'xz', 24);
   const circleGeom2 = createCircleGeometry(n.x, n.y, n.z, 0.04, 'yz', 24);
   const circleMat = new THREE.LineBasicMaterial({ color: edgeColor });
-  engine.modelGroup.add(new THREE.LineLoop(circleGeom1, circleMat));
-  engine.modelGroup.add(new THREE.LineLoop(circleGeom2, circleMat));
+  engine.baseGroup.add(new THREE.LineLoop(circleGeom1, circleMat));
+  engine.baseGroup.add(new THREE.LineLoop(circleGeom2, circleMat));
 }
 
 function buildLinearStrutRestraint(
@@ -2804,11 +2918,11 @@ function buildLinearStrutRestraint(
 
     // Top hinge circle at (n.x, n.y, n.z)
     const c1 = createCircleGeometry(n.x, n.y, n.z, rCircle, 'xz', 24);
-    engine.modelGroup.add(new THREE.LineLoop(c1, new THREE.LineBasicMaterial({ color: axisColor })));
+    engine.baseGroup.add(new THREE.LineLoop(c1, new THREE.LineBasicMaterial({ color: axisColor })));
 
     // Bottom hinge circle at (n.x, n.y, zBase + rCircle)
     const c2 = createCircleGeometry(n.x, n.y, zBase + rCircle, rCircle, 'xz', 24);
-    engine.modelGroup.add(new THREE.LineLoop(c2, new THREE.LineBasicMaterial({ color: axisColor })));
+    engine.baseGroup.add(new THREE.LineLoop(c2, new THREE.LineBasicMaterial({ color: axisColor })));
 
     // Strut connecting line
     const zTop = n.z - rCircle;
@@ -2843,11 +2957,11 @@ function buildLinearStrutRestraint(
 
     // First hinge circle at (n.x, n.y, n.z)
     const c1 = createCircleGeometry(n.x, n.y, n.z, rCircle, 'xz', 24);
-    engine.modelGroup.add(new THREE.LineLoop(c1, new THREE.LineBasicMaterial({ color: axisColor })));
+    engine.baseGroup.add(new THREE.LineLoop(c1, new THREE.LineBasicMaterial({ color: axisColor })));
 
     // Second hinge circle at (xBase + rCircle, n.y, n.z)
     const c2 = createCircleGeometry(xBase + rCircle, n.y, n.z, rCircle, 'xz', 24);
-    engine.modelGroup.add(new THREE.LineLoop(c2, new THREE.LineBasicMaterial({ color: axisColor })));
+    engine.baseGroup.add(new THREE.LineLoop(c2, new THREE.LineBasicMaterial({ color: axisColor })));
 
     const xRight = n.x - rCircle;
     const xLeft = xBase + 2 * rCircle;
@@ -2881,11 +2995,11 @@ function buildLinearStrutRestraint(
 
     // First hinge circle at (n.x, n.y, n.z)
     const c1 = createCircleGeometry(n.x, n.y, n.z, rCircle, 'yz', 24);
-    engine.modelGroup.add(new THREE.LineLoop(c1, new THREE.LineBasicMaterial({ color: axisColor })));
+    engine.baseGroup.add(new THREE.LineLoop(c1, new THREE.LineBasicMaterial({ color: axisColor })));
 
     // Second hinge circle at (n.x, yBase + rCircle, n.z)
     const c2 = createCircleGeometry(n.x, yBase + rCircle, n.z, rCircle, 'yz', 24);
-    engine.modelGroup.add(new THREE.LineLoop(c2, new THREE.LineBasicMaterial({ color: axisColor })));
+    engine.baseGroup.add(new THREE.LineLoop(c2, new THREE.LineBasicMaterial({ color: axisColor })));
 
     const yNear = n.y - rCircle;
     const yFar = yBase + 2 * rCircle;
@@ -2918,7 +3032,7 @@ function buildLinearStrutRestraint(
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3));
   const mat = new THREE.LineBasicMaterial({ color: axisColor });
-  engine.modelGroup.add(new THREE.LineSegments(geom, mat));
+  engine.baseGroup.add(new THREE.LineSegments(geom, mat));
 }
 
 function buildRotationalRingRestraint(
@@ -2942,7 +3056,7 @@ function buildRotationalRingRestraint(
   const plane = axis === 'x' ? 'yz' : axis === 'y' ? 'xz' : 'xy';
   const circleGeom = createCircleGeometry(n.x, n.y, n.z, radius, plane, 36);
   const circleMat = new THREE.LineBasicMaterial({ color: axisColor });
-  engine.modelGroup.add(new THREE.LineLoop(circleGeom, circleMat));
+  engine.baseGroup.add(new THREE.LineLoop(circleGeom, circleMat));
 
   // Small anchor bracket / cross tick on the circle
   const tickPos: number[] = [];
@@ -2978,7 +3092,7 @@ function buildRotationalRingRestraint(
 
   const tickGeom = new THREE.BufferGeometry();
   tickGeom.setAttribute('position', new THREE.Float32BufferAttribute(tickPos, 3));
-  engine.modelGroup.add(new THREE.LineSegments(tickGeom, circleMat));
+  engine.baseGroup.add(new THREE.LineSegments(tickGeom, circleMat));
 }
 
 function build3DSingleSupport(engine: RenderEngine3D, n: Node3D, isDark: boolean) {
@@ -2988,7 +3102,7 @@ function build3DSingleSupport(engine: RenderEngine3D, n: Node3D, isDark: boolean
   const supportGroup = new THREE.Group();
   const mockEngine = {
     ...engine,
-    modelGroup: supportGroup,
+    baseGroup: supportGroup,
   } as any;
 
   const isFixed =
@@ -3062,7 +3176,7 @@ function build3DSingleSupport(engine: RenderEngine3D, n: Node3D, isDark: boolean
     supportGroup.rotation.set(rx, ry, rz, 'XYZ');
   }
 
-  engine.modelGroup.add(supportGroup);
+  engine.baseGroup.add(supportGroup);
 }
 
 const tempVec = new THREE.Vector3();
@@ -3095,11 +3209,13 @@ function buildSingleArrow(
   length: number,
   color: number,
   headLength = 0.22,
-  headWidth = 0.11
+  headWidth = 0.11,
+  targetGroup?: THREE.Group
 ) {
   const arrow = new THREE.ArrowHelper(dir.clone().normalize(), origin, length, color, headLength, headWidth);
   makeOnTop(arrow, 1);
-  engine.overlayGroup.add(arrow);
+  const group = targetGroup || engine.baseOverlayGroup;
+  group.add(arrow);
 }
 
 function buildMomentArc(
@@ -3109,7 +3225,8 @@ function buildMomentArc(
   radius: number,
   color: number,
   headLength = 0.16,
-  headWidth = 0.08
+  headWidth = 0.08,
+  targetGroup?: THREE.Group
 ) {
   const normAxis = axisDir.clone().normalize();
   if (normAxis.lengthSq() < 1e-6) return;
@@ -3122,7 +3239,7 @@ function buildMomentArc(
   const tangent2 = new THREE.Vector3().crossVectors(normAxis, tangent1).normalize();
 
   const points: THREE.Vector3[] = [];
-  const steps = 32;
+  const steps = 36;
   const thetaStart = -0.75 * Math.PI;
   const thetaEnd = 0.75 * Math.PI;
 
@@ -3134,13 +3251,13 @@ function buildMomentArc(
     points.push(p);
   }
 
-  // Tube mesh for clear 3D visibility and depth
-  const curve = new THREE.CatmullRomCurve3(points);
-  const tubeGeom = new THREE.TubeGeometry(curve, 28, 0.016, 8, false);
-  const tubeMat = new THREE.MeshBasicMaterial({ color, depthTest: true, depthWrite: true });
-  const arcMesh = new THREE.Mesh(tubeGeom, tubeMat);
-  makeOnTop(arcMesh, 1);
-  engine.overlayGroup.add(arcMesh);
+  // Plain line for the moment arc - consistent with other forces
+  const lineGeom = new THREE.BufferGeometry().setFromPoints(points);
+  const lineMat = new THREE.LineBasicMaterial({ color, depthTest: true, depthWrite: true });
+  const arcLine = new THREE.Line(lineGeom, lineMat);
+  makeOnTop(arcLine, 1);
+  const group = targetGroup || engine.baseOverlayGroup;
+  group.add(arcLine);
 
   // Arrowhead cone at end
   const endPoint = center.clone()
@@ -3152,7 +3269,7 @@ function buildMomentArc(
     .addScaledVector(tangent2, Math.cos(thetaEnd))
     .normalize();
 
-  const coneGeom = new THREE.ConeGeometry(headWidth, headLength, 16);
+  const coneGeom = new THREE.ConeGeometry(headWidth / 2, headLength, 12);
   coneGeom.translate(0, -headLength / 2, 0);
   const coneMat = new THREE.MeshBasicMaterial({ color, depthTest: true, depthWrite: true });
   const head = new THREE.Mesh(coneGeom, coneMat);
@@ -3162,7 +3279,7 @@ function buildMomentArc(
   q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangentDir);
   head.quaternion.copy(q);
   makeOnTop(head, 1);
-  engine.overlayGroup.add(head);
+  group.add(head);
 }
 
 function buildDoubleHeadedArrow(
@@ -3172,7 +3289,8 @@ function buildDoubleHeadedArrow(
   length: number,
   color: number,
   headLength = 0.16,
-  headWidth = 0.08
+  headWidth = 0.08,
+  targetGroup?: THREE.Group
 ) {
   const normDir = dir.clone().normalize();
   const endPoint = origin.clone().addScaledVector(normDir, length);
@@ -3182,7 +3300,8 @@ function buildDoubleHeadedArrow(
   const lineMat = new THREE.LineBasicMaterial({ color, depthTest: true, depthWrite: true });
   const line = new THREE.Line(lineGeom, lineMat);
   line.renderOrder = 1;
-  engine.overlayGroup.add(line);
+  const group = targetGroup || engine.baseOverlayGroup;
+  group.add(line);
 
   // Two Cones along direction
   const coneGeom = new THREE.ConeGeometry(headWidth / 2, headLength, 12);
@@ -3197,14 +3316,14 @@ function buildDoubleHeadedArrow(
   head1.position.copy(endPoint);
   head1.quaternion.copy(quaternion);
   head1.renderOrder = 1;
-  engine.overlayGroup.add(head1);
+  group.add(head1);
 
   // Head 2 (behind head 1)
   const head2 = new THREE.Mesh(coneGeom, coneMat);
   head2.position.copy(endPoint.clone().addScaledVector(normDir, -headLength * 0.85));
   head2.quaternion.copy(quaternion);
   head2.renderOrder = 1;
-  engine.overlayGroup.add(head2);
+  group.add(head2);
 }
 
 function build3DNodalMass(_engine: RenderEngine3D, _n: Node3D, _isDark: boolean) {
@@ -3264,7 +3383,7 @@ function build3DDistributedLoad(engine: RenderEngine3D, el: Element3D, n1: Node3
       const origin = memberPt.clone().addScaledVector(actualDir, -arrowLen);
       const arrow = new THREE.ArrowHelper(actualDir, origin, arrowLen, comp.color, 0.18, 0.09);
       makeOnTop(arrow, 1);
-      engine.overlayGroup.add(arrow);
+      engine.baseOverlayGroup.add(arrow);
       topPts.push(origin);
     }
 
@@ -3274,7 +3393,7 @@ function build3DDistributedLoad(engine: RenderEngine3D, el: Element3D, n1: Node3
       const line = new THREE.Line(geom, mat);
       line.renderOrder = 1;
       line.computeLineDistances();
-      engine.overlayGroup.add(line);
+      engine.baseOverlayGroup.add(line);
     }
   });
 }
@@ -3321,7 +3440,7 @@ function build3DThermalLoad(engine: RenderEngine3D, el: Element3D, n1: Node3D, n
       const origin = pt.clone().addScaledVector(arrowDir, -arrowLen * 0.5);
       const arrow = new THREE.ArrowHelper(arrowDir, origin, arrowLen, color, arrowHeadLen, arrowHeadWidth);
       makeOnTop(arrow, 1);
-      engine.overlayGroup.add(arrow);
+      engine.baseOverlayGroup.add(arrow);
     });
 
     // Thermal indicator dashed line along member
@@ -3338,7 +3457,7 @@ function build3DThermalLoad(engine: RenderEngine3D, el: Element3D, n1: Node3D, n
     const line = new THREE.Line(geom, lineMat);
     line.renderOrder = 1;
     line.computeLineDistances();
-    engine.overlayGroup.add(line);
+    engine.baseOverlayGroup.add(line);
   }
 
   // 2. Transverse gradient in local y (deltaTy):
@@ -3357,14 +3476,14 @@ function build3DThermalLoad(engine: RenderEngine3D, el: Element3D, n1: Node3D, n
       const warmDir = dirY.clone().multiplyScalar(sign);
       const warmArrow = new THREE.ArrowHelper(warmDir, warmOrigin, arrowLen, warmColor, arrowHeadLen, arrowHeadWidth);
       makeOnTop(warmArrow, 1);
-      engine.overlayGroup.add(warmArrow);
+      engine.baseOverlayGroup.add(warmArrow);
 
       // Cool side (-y if sign > 0)
       const coolOrigin = pt.clone().addScaledVector(dirY, -sign * 0.04);
       const coolDir = dirY.clone().multiplyScalar(-sign);
       const coolArrow = new THREE.ArrowHelper(coolDir, coolOrigin, arrowLen, coolColor, arrowHeadLen, arrowHeadWidth);
       makeOnTop(coolArrow, 1);
-      engine.overlayGroup.add(coolArrow);
+      engine.baseOverlayGroup.add(coolArrow);
     });
   }
 
@@ -3384,16 +3503,18 @@ function build3DThermalLoad(engine: RenderEngine3D, el: Element3D, n1: Node3D, n
       const warmDir = dirZ.clone().multiplyScalar(sign);
       const warmArrow = new THREE.ArrowHelper(warmDir, warmOrigin, arrowLen, warmColor, arrowHeadLen, arrowHeadWidth);
       makeOnTop(warmArrow, 1);
-      engine.overlayGroup.add(warmArrow);
+      engine.baseOverlayGroup.add(warmArrow);
 
       // Cool side (-z if sign > 0)
       const coolOrigin = pt.clone().addScaledVector(dirZ, -sign * 0.04);
       const coolDir = dirZ.clone().multiplyScalar(-sign);
       const coolArrow = new THREE.ArrowHelper(coolDir, coolOrigin, arrowLen, coolColor, arrowHeadLen, arrowHeadWidth);
       makeOnTop(coolArrow, 1);
-      engine.overlayGroup.add(coolArrow);
+      engine.baseOverlayGroup.add(coolArrow);
     });
   }
+
+  // Local axes triad on element
 }
 
 function build3DLocalAxes(engine: RenderEngine3D, el: Element3D, n1: Node3D, n2: Node3D, _sec?: Section) {
@@ -3411,9 +3532,9 @@ function build3DLocalAxes(engine: RenderEngine3D, el: Element3D, n1: Node3D, n2:
   makeLocalAxisOnTop(arrowX);
   makeLocalAxisOnTop(arrowY);
   makeLocalAxisOnTop(arrowZ);
-  engine.overlayGroup.add(arrowX);
-  engine.overlayGroup.add(arrowY);
-  engine.overlayGroup.add(arrowZ);
+  engine.baseOverlayGroup.add(arrowX);
+  engine.baseOverlayGroup.add(arrowY);
+  engine.baseOverlayGroup.add(arrowZ);
 }
 
 function build3DProbeMarker(engine: RenderEngine3D, n1: Node3D, n2: Node3D, t: number) {
@@ -3425,14 +3546,14 @@ function build3DProbeMarker(engine: RenderEngine3D, n1: Node3D, n2: Node3D, t: n
   const mat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, depthTest: true, depthWrite: true });
   const mesh = new THREE.Mesh(geom, mat);
   mesh.position.set(px, py, pz);
-  engine.overlayGroup.add(mesh);
+  engine.resultsOverlayGroup.add(mesh);
 }
 
-function build3DDeformedShape(engine: RenderEngine3D, solved: SolverResult3D, options: SceneRenderOptions) {
-  const resultsList = (solved.type === 'linear_static' ? solved.results : (solved as any).modes?.[(solved as any).currentMode || 0]?.results) as any[];
-  if (!resultsList || resultsList.length === 0) return;
+const structSizeCache = new WeakMap<object, number>();
+function computeStructureSize(solved: SolverResult3D, resultsList: any[]): number {
+  const cached = structSizeCache.get(solved as any);
+  if (cached !== undefined) return cached;
 
-  let maxDispVal = 0;
   let minX = Infinity, maxX = -Infinity;
   let minY = Infinity, maxY = -Infinity;
   let minZ = Infinity, maxZ = -Infinity;
@@ -3443,10 +3564,6 @@ function build3DDeformedShape(engine: RenderEngine3D, solved: SolverResult3D, op
       minY = Math.min(minY, n.y); maxY = Math.max(maxY, n.y);
       minZ = Math.min(minZ, n.z); maxZ = Math.max(maxZ, n.z);
     });
-    sample.pts.forEach((pt: any) => {
-      const mag = Math.hypot(pt.Ux_global, pt.Uy_global, pt.Uz_global);
-      if (mag > maxDispVal) maxDispVal = mag;
-    });
   });
 
   const bboxDiag = Math.hypot(
@@ -3454,7 +3571,33 @@ function build3DDeformedShape(engine: RenderEngine3D, solved: SolverResult3D, op
     isFinite(maxY - minY) ? maxY - minY : 0,
     isFinite(maxZ - minZ) ? maxZ - minZ : 0
   );
-  const structSize = Math.max(bboxDiag, 3.0);
+  const size = Math.max(bboxDiag, 3.0);
+  structSizeCache.set(solved as any, size);
+  return size;
+}
+
+const maxDispCache = new WeakMap<object, number>();
+function computeMaxDispVal(solved: SolverResult3D, resultsList: any[]): number {
+  const cached = maxDispCache.get(solved as any);
+  if (cached !== undefined) return cached;
+
+  let maxDispVal = 0;
+  resultsList.forEach((sample) => {
+    sample.pts?.forEach((pt: any) => {
+      const mag = Math.hypot(pt.Ux_global || 0, pt.Uy_global || 0, pt.Uz_global || 0);
+      if (mag > maxDispVal) maxDispVal = mag;
+    });
+  });
+  maxDispCache.set(solved as any, maxDispVal);
+  return maxDispVal;
+}
+
+function build3DDeformedShape(engine: RenderEngine3D, solved: SolverResult3D, options: SceneRenderOptions) {
+  const resultsList = (solved.type === 'linear_static' ? solved.results : (solved as any).modes?.[(solved as any).currentMode || 0]?.results) as any[];
+  if (!resultsList || resultsList.length === 0) return;
+
+  const maxDispVal = computeMaxDispVal(solved, resultsList);
+  const structSize = computeStructureSize(solved, resultsList);
   const targetOffset = 0.12 * structSize;
   const autoScale = maxDispVal > 1e-12 ? targetOffset / maxDispVal : 1.0;
   const mult = options.deformScaleMult * autoScale;
@@ -3481,7 +3624,7 @@ function build3DDeformedShape(engine: RenderEngine3D, solved: SolverResult3D, op
 
     const geom = new THREE.BufferGeometry().setFromPoints(pts);
     const line = new THREE.Line(geom, mat);
-    engine.modelGroup.add(line);
+    engine.resultsDeformedGroup.add(line);
   });
 }
 
@@ -3522,35 +3665,24 @@ function getActiveDiagramConfigs(options: SceneRenderOptions): ActiveDiagramConf
   return list;
 }
 
-function computeStructureSize(resultsList: any[]): number {
-  let minX = Infinity, maxX = -Infinity;
-  let minY = Infinity, maxY = -Infinity;
-  let minZ = Infinity, maxZ = -Infinity;
-
-  resultsList.forEach((sample) => {
-    [sample.n1, sample.n2].forEach((n: any) => {
-      minX = Math.min(minX, n.x); maxX = Math.max(maxX, n.x);
-      minY = Math.min(minY, n.y); maxY = Math.max(maxY, n.y);
-      minZ = Math.min(minZ, n.z); maxZ = Math.max(maxZ, n.z);
+const diagMaxCache = new WeakMap<object, Map<string, number>>();
+function computeDiagramScaleMult(solved: SolverResult3D, resultsList: any[], cfg: ActiveDiagramConfig, structSize: number, userMult: number): number {
+  let map = diagMaxCache.get(solved as any);
+  if (!map) {
+    map = new Map<string, number>();
+    diagMaxCache.set(solved as any, map);
+  }
+  let maxVal = map.get(cfg.key);
+  if (maxVal === undefined) {
+    maxVal = 0;
+    resultsList.forEach((sample) => {
+      sample.pts?.forEach((pt: any) => {
+        const v = Math.abs(pt[cfg.key] as number);
+        if (v > maxVal!) maxVal = v;
+      });
     });
-  });
-
-  const bboxDiag = Math.hypot(
-    isFinite(maxX - minX) ? maxX - minX : 0,
-    isFinite(maxY - minY) ? maxY - minY : 0,
-    isFinite(maxZ - minZ) ? maxZ - minZ : 0
-  );
-  return Math.max(bboxDiag, 3.0);
-}
-
-function computeDiagramScaleMult(resultsList: any[], cfg: ActiveDiagramConfig, structSize: number, userMult: number): number {
-  let maxVal = 0;
-  resultsList.forEach((sample) => {
-    sample.pts.forEach((pt: any) => {
-      const v = Math.abs(pt[cfg.key] as number);
-      if (v > maxVal) maxVal = v;
-    });
-  });
+    map.set(cfg.key, maxVal);
+  }
   const targetOffset = 0.10 * structSize;
   const autoScale = maxVal > 1e-9 ? targetOffset / maxVal : 1.0;
   return userMult * autoScale;
@@ -3563,10 +3695,10 @@ function build3DDiagrams(engine: RenderEngine3D, solved: SolverResult3D, options
   const activeConfigs = getActiveDiagramConfigs(options);
   if (activeConfigs.length === 0) return;
 
-  const structSize = computeStructureSize(resultsList);
+  const structSize = computeStructureSize(solved, resultsList);
 
   activeConfigs.forEach((cfg) => {
-    const mult = computeDiagramScaleMult(resultsList, cfg, structSize, options.diagramScaleMult);
+    const mult = computeDiagramScaleMult(solved, resultsList, cfg, structSize, options.diagramScaleMult);
 
     const fillMat = new THREE.MeshBasicMaterial({
       color: cfg.hexColor,
@@ -3626,13 +3758,13 @@ function build3DDiagrams(engine: RenderEngine3D, solved: SolverResult3D, options
         const geom = new THREE.BufferGeometry();
         geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
         const mesh = new THREE.Mesh(geom, fillMat);
-        engine.modelGroup.add(mesh);
+        engine.resultsDiagramsGroup.add(mesh);
       }
 
       if (outlinePts.length > 0) {
         const lineGeom = new THREE.BufferGeometry().setFromPoints(outlinePts);
         const line = new THREE.Line(lineGeom, lineMat);
-        engine.modelGroup.add(line);
+        engine.resultsDiagramsGroup.add(line);
       }
     });
   });
@@ -3905,29 +4037,8 @@ function collectDeformValues2DOverlay(
   const resultsList = (solved.type === 'linear_static' ? solved.results : (solved as any).modes?.[(solved as any).currentMode || 0]?.results) as any[];
   if (!resultsList || resultsList.length === 0) return;
 
-  let maxDispVal = 0;
-  let minX = Infinity, maxX = -Infinity;
-  let minY = Infinity, maxY = -Infinity;
-  let minZ = Infinity, maxZ = -Infinity;
-
-  resultsList.forEach((sample) => {
-    [sample.n1, sample.n2].forEach((n: any) => {
-      minX = Math.min(minX, n.x); maxX = Math.max(maxX, n.x);
-      minY = Math.min(minY, n.y); maxY = Math.max(maxY, n.y);
-      minZ = Math.min(minZ, n.z); maxZ = Math.max(maxZ, n.z);
-    });
-    sample.pts?.forEach((pt: any) => {
-      const mag = Math.hypot(pt.Ux_global || 0, pt.Uy_global || 0, pt.Uz_global || 0);
-      if (mag > maxDispVal) maxDispVal = mag;
-    });
-  });
-
-  const bboxDiag = Math.hypot(
-    isFinite(maxX - minX) ? maxX - minX : 0,
-    isFinite(maxY - minY) ? maxY - minY : 0,
-    isFinite(maxZ - minZ) ? maxZ - minZ : 0
-  );
-  const structSize = Math.max(bboxDiag, 3.0);
+  const maxDispVal = computeMaxDispVal(solved, resultsList);
+  const structSize = computeStructureSize(solved, resultsList);
   const targetOffset = 0.12 * structSize;
   const autoScale = maxDispVal > 1e-12 ? targetOffset / maxDispVal : 1.0;
   const mult = options.deformScaleMult * autoScale;
@@ -4071,10 +4182,10 @@ function collectDiagramValues2DOverlay(
   const activeConfigs = getActiveDiagramConfigs(options);
   if (activeConfigs.length === 0) return;
 
-  const structSize = computeStructureSize(resultsList);
+  const structSize = computeStructureSize(solved, resultsList);
 
   activeConfigs.forEach((cfg) => {
-    const mult = computeDiagramScaleMult(resultsList, cfg, structSize, options.diagramScaleMult);
+    const mult = computeDiagramScaleMult(solved, resultsList, cfg, structSize, options.diagramScaleMult);
 
     if (options.diagramLabelMode === 'minmax') {
       let globalMaxVal = -Infinity;
