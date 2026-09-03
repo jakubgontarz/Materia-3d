@@ -187,6 +187,8 @@ html, body {
   line-height: 1.1;
   white-space: nowrap;
   transition: background 0.12s;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .tb-btn svg {
@@ -197,18 +199,29 @@ html, body {
   stroke-width: 1.7;
 }
 
-.tb-btn:hover {
-  background: #31415780;
+.tb-btn:focus {
+  outline: none;
+}
+
+.tb-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+@media (hover: hover) {
+  .tb-btn:hover {
+    background: #31415780;
+  }
 }
 
 .tb-btn.active {
-  background: var(--accent);
-  border-color: var(--accent-dark);
-  color: #fff;
+  background: var(--accent) !important;
+  border-color: var(--accent-dark) !important;
+  color: #fff !important;
 }
 
 .tb-btn.active svg {
-  stroke: #fff;
+  stroke: #fff !important;
 }
 
 .tb-btn:disabled {
@@ -220,8 +233,10 @@ html, body {
   background: var(--accent);
 }
 
-.tb-btn.primary:hover {
-  background: var(--accent-dark);
+@media (hover: hover) {
+  .tb-btn.primary:hover {
+    background: var(--accent-dark);
+  }
 }
 
 .tb-sep {
@@ -370,18 +385,31 @@ html, body {
   box-shadow: 0 1px 2px rgba(0,0,0,0.08);
   transition: all 0.12s ease;
   user-select: none;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.qbtn:hover {
-  background: var(--surface);
-  color: var(--text);
-  border-color: var(--input-border);
+.qbtn:focus {
+  outline: none;
+}
+
+.qbtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (hover: hover) {
+  .qbtn:hover {
+    background: var(--surface);
+    color: var(--text);
+    border-color: var(--input-border);
+  }
 }
 
 .qbtn.active {
-  background: var(--accent);
-  border-color: var(--accent-dark);
-  color: #ffffff;
+  background: var(--accent) !important;
+  border-color: var(--accent-dark) !important;
+  color: #ffffff !important;
   font-weight: 600;
 }
 
@@ -432,6 +460,8 @@ html, body {
   justify-content: center;
   transition: background 0.12s, color 0.12s, border-color 0.12s;
   opacity: 1;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .zbtn svg {
@@ -442,36 +472,53 @@ html, body {
   stroke-width: 2;
 }
 
-.zbtn:hover {
-  background: #eef2ff;
-  color: var(--accent-dark);
-  border-color: var(--accent);
-  opacity: 1 !important;
+.zbtn:focus {
+  outline: none;
 }
 
-html[data-theme="dark"] .zbtn:hover {
-  background: #243447;
-  color: #93c5fd;
-  border-color: var(--accent);
-  opacity: 1 !important;
+.zbtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (hover: hover) {
+  .zbtn:hover {
+    background: #eef2ff;
+    color: var(--accent-dark);
+    border-color: var(--accent);
+    opacity: 1 !important;
+  }
+
+  html[data-theme="dark"] .zbtn:hover {
+    background: #243447;
+    color: #93c5fd;
+    border-color: var(--accent);
+    opacity: 1 !important;
+  }
+
+  .zbtn.active:hover {
+    background: var(--accent-dark);
+    border-color: var(--accent-dark);
+    color: #ffffff;
+    opacity: 1 !important;
+  }
 }
 
 .zbtn.active {
-  background: var(--accent);
-  border-color: var(--accent-dark);
-  color: #fff;
+  background: var(--accent) !important;
+  border-color: var(--accent-dark) !important;
+  color: #fff !important;
   opacity: 1;
 }
 
 .zbtn.active svg {
-  stroke: #fff;
+  stroke: #fff !important;
 }
 
-.zbtn.active:hover {
-  background: var(--accent-dark);
-  border-color: var(--accent-dark);
-  color: #ffffff;
-  opacity: 1 !important;
+.zbtn:not(.active) {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--sidebar-border);
 }
 
 .zselect {
@@ -489,13 +536,23 @@ html[data-theme="dark"] .zbtn:hover {
   outline: none;
   transition: background 0.12s, border-color 0.12s;
   opacity: 1;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.zselect:hover,
 .zselect:focus {
-  background: var(--surface);
-  border-color: var(--accent);
-  opacity: 1 !important;
+  outline: none;
+}
+
+.zselect:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+@media (hover: hover) {
+  .zselect:hover {
+    background: var(--surface);
+    border-color: var(--accent);
+    opacity: 1 !important;
+  }
 }
 
 /* ---------- Sidebar ---------- */

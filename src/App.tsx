@@ -1802,6 +1802,27 @@ export default function App() {
     }
   }, [mode, splitFormOpen]);
 
+  // Auto-blur buttons on pointer/touch release so focus state does not remain stuck on overlay switches
+  useEffect(() => {
+    const handleGlobalPointerUp = (e: PointerEvent | TouchEvent | MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      const btn = target?.closest('button, select, [role="button"]') as HTMLElement | null;
+      if (btn) {
+        setTimeout(() => {
+          try {
+            btn.blur();
+          } catch {}
+        }, 50);
+      }
+    };
+    window.addEventListener('pointerup', handleGlobalPointerUp, { passive: true });
+    window.addEventListener('touchend', handleGlobalPointerUp, { passive: true });
+    return () => {
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+      window.removeEventListener('touchend', handleGlobalPointerUp);
+    };
+  }, []);
+
   useEffect(() => {
     if (selectedNodeIds.length === 0 && selectedElemIds.length === 0 && selectedPanelIds.length === 0) {
       if (activeTransformMode !== 'none') setActiveTransformMode('none');
