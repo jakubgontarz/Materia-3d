@@ -336,7 +336,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Sparkles style={{ width: '17px', height: '17px', color: 'var(--accent)' }} />
             <h2 style={{ margin: 0, fontSize: '14.5px', fontWeight: 600 }}>
-              Kreator modeli i zaawansowanych konstrukcji 3D
+              Kreator modeli
             </h2>
           </div>
           <button
@@ -492,10 +492,6 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                   marginBottom: '12px',
                 }}
               >
-                <div style={{ fontWeight: 600, color: 'var(--text)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Warehouse style={{ width: '16px', height: '16px', color: 'var(--accent)' }} />
-                  Zaawansowane parametry hali przemysłowej
-                </div>
                 <div style={{ display: 'flex', gap: '4px' }}>
                   <button
                     type="button"
